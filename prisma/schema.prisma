@@ -1,17 +1,18 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// This is your Prisma schema file for PostgreSQL (Railway)
+// Production-ready schema with chat history, leads, and analytics
 
 generator client {
   provider = "prisma-client-js"
 }
 
-// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
-// enough when changing adapters.
-// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
+
+// ============================================
+// SHOPIFY SESSION MANAGEMENT
+// ============================================
 
 model Session {
   id            String    @id
@@ -29,7 +30,238 @@ model Session {
   locale        String?
   collaborator  Boolean?  @default(false)
   emailVerified Boolean?  @default(false)
+
+  @@index([shop])
 }
+
+// ============================================
+// CHAT & CONVERSATION MANAGEMENT
+// ============================================
+
+model Conversation {
+  id              String    @id
+  
+  // Link to visitor/lead if available
+  visitorId       String?
+  visitor         Visitor?  @relation(fields: [visitorId], references: [id])
+  
+  // Shop information
+  shopDomain      String?
+  shopId          String?
+  
+  // Metadata
+  title           String?   @default("Chat")
+  status          ConversationStatus @default(ACTIVE)
+  
+  // Analytics
+  messageCount    Int       @default(0)
+  toolCallCount   Int       @default(0)
+  
+  // Timestamps
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  endedAt         DateTime?
+  
+  // Relations
+  messages        Message[]
+  analytics       ChatAnalytics[]
+
+  @@index([visitorId])
+  @@index([shopDomain])
+  @@index([createdAt])
+  @@index([status])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  
+  // Message content
+  role           String       // "user" or "assistant"
+  content        String       // JSON string or plain text
+  contentType    ContentType  @default(TEXT)
+  
+  // Metadata for analytics
+  toolName       String?      // If this was a tool call
+  tokenCount     Int?         // Approximate token count
+  responseTimeMs Int?         // How long it took to generate
+  
+  // Timestamps
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId])
+  @@index([createdAt])
+  @@index([role])
+}
+
+enum ConversationStatus {
+  ACTIVE
+  ENDED
+  ARCHIVED
+}
+
+enum ContentType {
+  TEXT
+  JSON
+  TOOL_CALL
+  TOOL_RESULT
+  ERROR
+}
+
+// ============================================
+// VISITOR & LEAD MANAGEMENT
+// ============================================
+
+model Visitor {
+  id              String    @id @default(cuid())
+  
+  // Identification
+  fingerprintId   String?   @unique  // Browser fingerprint
+  sessionId       String?             // Session identifier
+  
+  // Contact info (from email popup)
+  email           String?
+  emailVerified   Boolean   @default(false)
+  emailCapturedAt DateTime?
+  
+  // Shop context
+  shopDomain      String?
+  
+  // Device & location info
+  userAgent       String?
+  ipAddress       String?
+  country         String?
+  city            String?
+  timezone        String?
+  
+  // Behavior tracking
+  firstSeenAt     DateTime  @default(now())
+  lastSeenAt      DateTime  @default(now())
+  visitCount      Int       @default(1)
+  pageViews       Int       @default(0)
+  
+  // Engagement
+  totalChats      Int       @default(0)
+  totalMessages   Int       @default(0)
+  
+  // Lead status
+  leadStatus      LeadStatus @default(VISITOR)
+  leadScore       Int        @default(0)
+  
+  // UTM tracking
+  utmSource       String?
+  utmMedium       String?
+  utmCampaign     String?
+  utmTerm         String?
+  utmContent      String?
+  
+  // Relations
+  conversations   Conversation[]
+  
+  // Timestamps
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([email])
+  @@index([shopDomain])
+  @@index([leadStatus])
+  @@index([createdAt])
+}
+
+enum LeadStatus {
+  VISITOR         // Just browsing
+  ENGAGED         // Started a conversation
+  LEAD            // Provided email
+  QUALIFIED       // High engagement score
+  CONVERTED       // Made a purchase
+}
+
+// ============================================
+// LEADS TABLE (Email Captures)
+// ============================================
+
+model Lead {
+  id              String    @id @default(cuid())
+  
+  // Contact information
+  email           String
+  
+  // Shop context
+  shopDomain      String
+  shopId          String?
+  
+  // Capture context
+  conversationId  String?   // Which conversation they were in
+  captureSource   String    @default("chat_popup")  // Where email was captured
+  capturedPage    String?   // URL where captured
+  
+  // Status
+  status          LeadEmailStatus @default(NEW)
+  
+  // Marketing consent
+  marketingConsent Boolean  @default(false)
+  
+  // Timestamps
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([email, shopDomain])
+  @@index([shopDomain])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum LeadEmailStatus {
+  NEW
+  CONTACTED
+  SUBSCRIBED
+  UNSUBSCRIBED
+}
+
+// ============================================
+// ANALYTICS
+// ============================================
+
+model ChatAnalytics {
+  id              String       @id @default(cuid())
+  conversationId  String
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  
+  // Event tracking
+  eventType       AnalyticsEventType
+  eventData       Json?
+  
+  // Context
+  shopDomain      String?
+  userAgent       String?
+  
+  // Timestamps
+  createdAt       DateTime     @default(now())
+
+  @@index([conversationId])
+  @@index([eventType])
+  @@index([createdAt])
+}
+
+enum AnalyticsEventType {
+  CHAT_STARTED
+  CHAT_ENDED
+  MESSAGE_SENT
+  MESSAGE_RECEIVED
+  TOOL_CALLED
+  PRODUCT_VIEWED
+  PRODUCT_ADDED_TO_CART
+  CHECKOUT_INITIATED
+  AUTH_REQUIRED
+  AUTH_COMPLETED
+  ERROR_OCCURRED
+  EMAIL_CAPTURED
+}
+
+// ============================================
+// AUTHENTICATION (OAuth Flow)
+// ============================================
 
 model CustomerToken {
   id              String    @id
@@ -51,24 +283,7 @@ model CodeVerifier {
   expiresAt       DateTime
 
   @@index([state])
-}
-
-model Conversation {
-  id        String    @id
-  messages  Message[]
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-}
-
-model Message {
-  id             String       @id @default(cuid())
-  conversationId String
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  role           String       // "user" or "assistant"
-  content        String
-  createdAt      DateTime     @default(now())
-
-  @@index([conversationId])
+  @@index([expiresAt])
 }
 
 model CustomerAccountUrls {

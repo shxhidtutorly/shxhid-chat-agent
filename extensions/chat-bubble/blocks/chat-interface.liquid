@@ -1,42 +1,1343 @@
 {{ 'chat.css' | asset_url | stylesheet_tag }}
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
+<style>
+  /* ============================================
+     ADDITIONAL STYLES FOR NEW FEATURES
+     ============================================ */
+  
+  /* HIDE LEGACY CHAT BUBBLE COMPLETELY */
+  .shop-ai-chat-bubble {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+
+  /* Text Shimmer Animation for "AI Thinking" */
+  @keyframes shimmerText {
+    0% {
+      background-position: 100% center;
+    }
+    100% {
+      background-position: 0% center;
+    }
+  }
+
+  .shop-ai-thinking-placeholder {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    background: var(--surface-elevated, #fafafa);
+    border: 1px solid var(--border-light, #f3f4f6);
+    border-radius: 20px;
+    border-bottom-left-radius: 6px;
+    animation: messageSlideIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    max-width: 280px;
+    align-self: flex-start;
+  }
+
+  .shop-ai-thinking-icon {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  /* Spinner for thinking icon */
+  .shop-ai-spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid #e5e7eb;
+    border-top-color: #1a1a1a;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .shop-ai-thinking-text {
+    font-size: 14px;
+    font-weight: 500;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      transparent calc(50% - 50px),
+      #1a1a1a calc(50%),
+      transparent calc(50% + 50px),
+      transparent 100%
+    ), linear-gradient(#9ca3af, #9ca3af);
+    background-size: 250% 100%, auto;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    animation: shimmerText 2s linear infinite;
+  }
+
+  /* Hide tool-use messages completely */
+  .shop-ai-message.tool-use {
+    display: none !important;
+  }
+
+  /* Markdown formatting in assistant messages */
+  .shop-ai-message.assistant .shop-ai-message-bubble {
+    padding: 0;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+  }
+
+  .shop-ai-message.assistant .shop-ai-message-content {
+    padding: 14px 18px;
+    background: var(--surface-elevated, #fafafa);
+    border: 1px solid var(--border-light, #f3f4f6);
+    border-radius: 20px;
+    border-bottom-left-radius: 6px;
+    font-size: 14.5px;
+    line-height: 1.6;
+    color: #1a1a1a;
+  }
+
+  .shop-ai-message.assistant .shop-ai-message-content p {
+    margin: 0 0 12px 0;
+  }
+
+  .shop-ai-message.assistant .shop-ai-message-content p:last-child {
+    margin-bottom: 0;
+  }
+
+  .shop-ai-message.assistant .shop-ai-message-content strong,
+  .shop-ai-message.assistant .shop-ai-message-content b {
+    font-weight: 600;
+    color: #1a1a1a;
+  }
+
+  .shop-ai-message.assistant .shop-ai-message-content ul,
+  .shop-ai-message.assistant .shop-ai-message-content ol {
+    margin: 12px 0;
+    padding-left: 20px;
+  }
+
+  .shop-ai-message.assistant .shop-ai-message-content li {
+    margin-bottom: 8px;
+    line-height: 1.5;
+  }
+
+  .shop-ai-message.assistant .shop-ai-message-content li:last-child {
+    margin-bottom: 0;
+  }
+
+  .shop-ai-message.assistant .shop-ai-message-content code {
+    background: rgba(0, 0, 0, 0.06);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 13px;
+  }
+
+  .shop-ai-message.assistant .shop-ai-message-content a {
+    color: #1a1a1a;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  /* Modern Input Box Styles */
+  .shop-ai-chat-input {
+    border-top: 1px solid var(--border-light, #f3f4f6);
+    padding: 16px 20px 20px;
+    background: var(--surface-color, #ffffff);
+  }
+
+  .shop-ai-input-container {
+    position: relative;
+    width: 100%;
+  }
+
+  .shop-ai-textarea-wrapper {
+    position: relative;
+    background: rgba(0, 0, 0, 0.04);
+    border-radius: 28px;
+    transition: all 0.2s ease;
+  }
+
+  .shop-ai-textarea-wrapper:focus-within {
+    background: #ffffff;
+    box-shadow: 0 0 0 2px #1a1a1a;
+  }
+
+  .shop-ai-textarea {
+    width: 100%;
+    min-height: 56px;
+    max-height: 150px;
+    padding: 16px 56px 16px 22px;
+    border: none;
+    background: transparent;
+    font-size: 15px;
+    font-family: inherit;
+    line-height: 1.4;
+    resize: none;
+    outline: none;
+    color: #1a1a1a;
+  }
+
+  .shop-ai-textarea::placeholder {
+    color: rgba(0, 0, 0, 0.5);
+  }
+
+  .shop-ai-textarea:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .shop-ai-submit-btn {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.06);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    color: #1a1a1a;
+  }
+
+  .shop-ai-submit-btn:hover:not(:disabled) {
+    background: #1a1a1a;
+    color: white;
+  }
+
+  .shop-ai-submit-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .shop-ai-submit-btn svg {
+    width: 18px;
+    height: 18px;
+    transition: opacity 0.2s;
+  }
+
+  .shop-ai-submit-btn.has-text svg {
+    opacity: 1;
+  }
+
+  .shop-ai-submit-btn:not(.has-text) svg {
+    opacity: 0.4;
+  }
+
+  /* Loading spinner in submit button */
+  .shop-ai-submit-spinner {
+    width: 16px;
+    height: 16px;
+    background: #1a1a1a;
+    border-radius: 3px;
+    animation: spinSquare 2.5s linear infinite;
+  }
+
+  @keyframes spinSquare {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+
+  /* Input status text */
+  .shop-ai-input-status {
+    padding: 8px 22px 0;
+    font-size: 12px;
+    color: rgba(0, 0, 0, 0.5);
+    height: 20px;
+    text-align: left;
+  }
+
+  /* Override old input styles */
+  .shop-ai-chat-input .shop-ai-input-wrapper {
+    display: none !important;
+  }
+
+  /* ============================================
+     EMAIL CAPTURE POPUP STYLES
+     ============================================ */
+  
+  .shop-ai-email-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(255, 255, 255, 0.98);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.3s ease;
+  }
+
+  .shop-ai-email-overlay.active {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .shop-ai-email-popup {
+    width: 100%;
+    max-width: 320px;
+    padding: 32px 24px;
+    text-align: center;
+    animation: popupSlideUp 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  @keyframes popupSlideUp {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .shop-ai-email-icon {
+    width: 64px;
+    height: 64px;
+    margin: 0 auto 20px;
+    background: linear-gradient(135deg, #1a1a1a 0%, #3d3d3d 100%);
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+
+  .shop-ai-email-icon svg {
+    width: 32px;
+    height: 32px;
+    color: white;
+  }
+
+  .shop-ai-email-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: #1a1a1a;
+    margin: 0 0 8px 0;
+    line-height: 1.3;
+  }
+
+  .shop-ai-email-subtitle {
+    font-size: 14px;
+    color: #6b7280;
+    margin: 0 0 24px 0;
+    line-height: 1.5;
+  }
+
+  .shop-ai-email-input-wrapper {
+    position: relative;
+    margin-bottom: 16px;
+  }
+
+  .shop-ai-email-input {
+    width: 100%;
+    padding: 14px 18px;
+    border: 2px solid #e5e7eb;
+    border-radius: 12px;
+    font-size: 15px;
+    font-family: inherit;
+    outline: none;
+    transition: all 0.2s ease;
+    background: #fafafa;
+  }
+
+  .shop-ai-email-input:focus {
+    border-color: #1a1a1a;
+    background: white;
+  }
+
+  .shop-ai-email-input::placeholder {
+    color: #9ca3af;
+  }
+
+  .shop-ai-email-submit {
+    width: 100%;
+    padding: 14px 24px;
+    background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin-bottom: 12px;
+  }
+
+  .shop-ai-email-submit:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  }
+
+  .shop-ai-email-submit:active {
+    transform: translateY(0);
+  }
+
+  .shop-ai-email-submit:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .shop-ai-email-skip {
+    background: none;
+    border: none;
+    color: #6b7280;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 8px 16px;
+    transition: color 0.2s ease;
+    font-family: inherit;
+  }
+
+  .shop-ai-email-skip:hover {
+    color: #1a1a1a;
+  }
+
+  .shop-ai-email-error {
+    color: #ef4444;
+    font-size: 13px;
+    margin-top: 8px;
+    display: none;
+  }
+
+  .shop-ai-email-error.visible {
+    display: block;
+  }
+
+  .shop-ai-email-success {
+    color: #22c55e;
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  /* Close button on popup */
+  .shop-ai-email-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
+    background: rgba(0, 0, 0, 0.05);
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+  }
+
+  .shop-ai-email-close:hover {
+    background: rgba(0, 0, 0, 0.1);
+  }
+
+  .shop-ai-email-close svg {
+    width: 16px;
+    height: 16px;
+    color: #6b7280;
+  }
+</style>
+
 <div class="shop-ai-chat-container">
-  <div class="shop-ai-chat-bubble" style="background-color: {{ block.settings.chat_bubble_color }}">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-    </svg>
+  
+  <!-- Floating Buttons Group -->
+  <div class="shop-ai-floating-group" id="shop-ai-floating-group">
+    <button class="shop-ai-secondary-btn visible" data-action="open-chat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+      </svg>
+      <span>Chat with our AI</span>
+    </button>
+    
+    <button class="shop-ai-secondary-btn visible" data-action="open-chat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/>
+        <line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+      <span>Help me choose</span>
+    </button>
+    
+    <button class="shop-ai-primary-btn visible" data-action="open-chat">
+      <span class="shop-ai-sparkle-icon">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path class="shop-ai-sparkle-main" d="M12 2L13.5 8.5L20 10L13.5 11.5L12 18L10.5 11.5L4 10L10.5 8.5L12 2Z" fill="currentColor"/>
+          <path class="shop-ai-sparkle-small-1" d="M19 14L19.5 16.5L22 17L19.5 17.5L19 20L18.5 17.5L16 17L18.5 16.5L19 14Z" fill="currentColor"/>
+          <path class="shop-ai-sparkle-small-2" d="M5 14L5.5 16.5L8 17L5.5 17.5L5 20L4.5 17.5L2 17L4.5 16.5L5 14Z" fill="currentColor"/>
+        </svg>
+      </span>
+      <span>Ask our AI</span>
+    </button>
   </div>
 
-  <div class="shop-ai-chat-window">
+  <!-- Chat Window -->
+  <div class="shop-ai-chat-window" id="shop-ai-chat-window">
+    
+    <!-- Header with Menu -->
     <div class="shop-ai-chat-header">
-      <div>{{ 'chat.title' | t }}</div>
-      <button class="shop-ai-chat-close">✕</button>
+      <div class="shop-ai-header-left">
+        <div class="shop-ai-avatar">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L13.5 8.5L20 10L13.5 11.5L12 18L10.5 11.5L4 10L10.5 8.5L12 2Z" fill="currentColor"/>
+          </svg>
+        </div>
+        <div class="shop-ai-header-info">
+          <h3>{{ block.settings.chat_title }}</h3>
+          <p>
+            <span class="shop-ai-status-dot"></span>
+            Online now
+          </p>
+        </div>
+      </div>
+      
+      <div class="shop-ai-header-actions">
+        <button class="shop-ai-header-btn shop-ai-menu-btn" id="shop-ai-menu-btn" aria-label="Menu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="1.5"/>
+            <circle cx="12" cy="5" r="1.5"/>
+            <circle cx="12" cy="19" r="1.5"/>
+          </svg>
+        </button>
+        
+        <button class="shop-ai-chat-close" id="shop-ai-close-btn" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+        
+        <!-- Dropdown Menu -->
+        <div class="shop-ai-dropdown-menu" id="shop-ai-dropdown-menu">
+          <button class="shop-ai-menu-item" data-action="new-chat">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+              <line x1="12" y1="8" x2="12" y2="14"/>
+              <line x1="9" y1="11" x2="15" y2="11"/>
+            </svg>
+            <span>Start a new chat</span>
+          </button>
+          <button class="shop-ai-menu-item" data-action="show-history">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12,6 12,12 16,14"/>
+            </svg>
+            <span>View recent chats</span>
+          </button>
+          <div class="shop-ai-menu-divider"></div>
+          <button class="shop-ai-menu-item danger" data-action="end-chat">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="15" y1="9" x2="9" y2="15"/>
+              <line x1="9" y1="9" x2="15" y2="15"/>
+            </svg>
+            <span>End chat</span>
+          </button>
+        </div>
+      </div>
     </div>
 
-    <div class="shop-ai-chat-messages">
-      <!-- Messages will be added here by JavaScript -->
+    <!-- Email Capture Overlay -->
+    <div class="shop-ai-email-overlay" id="shop-ai-email-overlay">
+      <div class="shop-ai-email-popup">
+        <div class="shop-ai-email-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+            <polyline points="22,6 12,13 2,6"/>
+          </svg>
+        </div>
+        <h3 class="shop-ai-email-title">Stay in the loop!</h3>
+        <p class="shop-ai-email-subtitle">Enter your email for exclusive offers and updates.</p>
+        <div class="shop-ai-email-input-wrapper">
+          <input 
+            type="email" 
+            class="shop-ai-email-input" 
+            id="shop-ai-email-input"
+            placeholder="Enter your email..."
+            autocomplete="email"
+          />
+          <p class="shop-ai-email-error" id="shop-ai-email-error">Please enter a valid email</p>
+        </div>
+        <button class="shop-ai-email-submit" id="shop-ai-email-submit">Continue</button>
+        <button class="shop-ai-email-skip" id="shop-ai-email-skip">Skip for now</button>
+      </div>
     </div>
 
+    <!-- Messages Container -->
+    <div class="shop-ai-chat-messages" id="shop-ai-messages">
+      <!-- Messages rendered by JavaScript -->
+    </div>
+
+    <!-- Modern Input Area -->
     <div class="shop-ai-chat-input">
-      <input type="text" placeholder="{{ 'chat.inputPlaceholder' | t }}">
-      <button class="shop-ai-chat-send">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="22" y1="2" x2="11" y2="13"></line>
-          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-        </svg>
-      </button>
+      <div class="shop-ai-input-container">
+        <div class="shop-ai-textarea-wrapper">
+          <textarea 
+            class="shop-ai-textarea" 
+            id="shop-ai-input" 
+            placeholder="{{ block.settings.input_placeholder }}"
+            rows="1"
+            autocomplete="off"
+          ></textarea>
+          <button class="shop-ai-submit-btn" id="shop-ai-send-btn" aria-label="Send">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 2L11 13"/>
+              <path d="M22 2L15 22L11 13L2 9L22 2Z"/>
+            </svg>
+          </button>
+        </div>
+        <div class="shop-ai-input-status" id="shop-ai-input-status">Ready to help!</div>
+      </div>
     </div>
+
+    <!-- History Panel -->
+    <div class="shop-ai-history-panel" id="shop-ai-history-panel">
+      <div class="shop-ai-history-header">
+        <button class="shop-ai-back-btn" id="shop-ai-back-btn" aria-label="Back">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15,18 9,12 15,6"/>
+          </svg>
+        </button>
+        <h3>Recent Chats</h3>
+      </div>
+      <div class="shop-ai-history-list" id="shop-ai-history-list"></div>
+    </div>
+
   </div>
 </div>
 
 <script src="{{ 'chat.js' | asset_url }}" defer></script>
+
 <script>
   window.shopChatConfig = {
+    apiUrl: '{{ shop.url }}/apps/shop-chat/chat',
+    leadsUrl: '{{ shop.url }}/apps/shop-chat/leads',
     promptType: {{ block.settings.system_prompt | json }},
     welcomeMessage: {{ block.settings.welcome_message | json }}
   };
   window.shopId = {{ shop.id }};
+  window.shopDomain = {{ shop.domain | json }};
+
+  // ============================================
+  // ENHANCED UI - TOOL PLACEHOLDERS, MARKDOWN & EMAIL CAPTURE
+  // ============================================
+  (function() {
+    'use strict';
+
+    // ============================================
+    // CONFIGURATION
+    // ============================================
+    
+    var TOOL_MESSAGES = {
+      'search_shop_catalog': 'Searching products...',
+      'search_shop_policies': 'Looking up policies...',
+      'search_shop_policies_and_faqs': 'Checking store info...',
+      'get_cart': 'Checking your cart...',
+      'update_cart': 'Updating your cart...',
+      'add_to_cart': 'Adding to cart...',
+      'remove_from_cart': 'Removing item...',
+      'create_cart': 'Creating your cart...',
+      'get_order_status': 'Checking order status...',
+      'get_most_recent_order_status': 'Finding your order...',
+      'initiate_return': 'Processing return request...',
+      'default': 'AI is thinking...'
+    };
+
+    var STORAGE_KEYS = {
+      conversationId: 'shopAiConversationId',
+      visitorId: 'shopAiVisitorId',
+      emailCaptured: 'shopAiEmailCaptured',
+      chatHistory: 'shopAiChatHistory',
+      emailPopupShown: 'shopAiEmailPopupShown'
+    };
+
+    // ============================================
+    // STATE
+    // ============================================
+    
+    var state = {
+      isOpen: false,
+      isMenuOpen: false,
+      isHistoryOpen: false,
+      isSubmitting: false,
+      chatHistory: [],
+      emailCaptured: false,
+      visitorId: null
+    };
+
+    // ============================================
+    // DOM ELEMENTS
+    // ============================================
+    
+    document.addEventListener('DOMContentLoaded', function() {
+      var floatingGroup = document.getElementById('shop-ai-floating-group');
+      var chatWindow = document.getElementById('shop-ai-chat-window');
+      var closeBtn = document.getElementById('shop-ai-close-btn');
+      var menuBtn = document.getElementById('shop-ai-menu-btn');
+      var dropdownMenu = document.getElementById('shop-ai-dropdown-menu');
+      var historyPanel = document.getElementById('shop-ai-history-panel');
+      var historyList = document.getElementById('shop-ai-history-list');
+      var backBtn = document.getElementById('shop-ai-back-btn');
+      var textarea = document.getElementById('shop-ai-input');
+      var submitBtn = document.getElementById('shop-ai-send-btn');
+      var statusText = document.getElementById('shop-ai-input-status');
+      var messagesContainer = document.getElementById('shop-ai-messages');
+      
+      // Email popup elements
+      var emailOverlay = document.getElementById('shop-ai-email-overlay');
+      var emailInput = document.getElementById('shop-ai-email-input');
+      var emailSubmit = document.getElementById('shop-ai-email-submit');
+      var emailSkip = document.getElementById('shop-ai-email-skip');
+      var emailError = document.getElementById('shop-ai-email-error');
+
+      // Initialize visitor ID
+      state.visitorId = localStorage.getItem(STORAGE_KEYS.visitorId);
+      if (!state.visitorId) {
+        state.visitorId = 'v_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        localStorage.setItem(STORAGE_KEYS.visitorId, state.visitorId);
+      }
+
+      // Check if email was already captured
+      state.emailCaptured = localStorage.getItem(STORAGE_KEYS.emailCaptured) === 'true';
+
+      // Load chat history
+      try {
+        var saved = localStorage.getItem(STORAGE_KEYS.chatHistory);
+        if (saved) state.chatHistory = JSON.parse(saved);
+      } catch (e) {
+        state.chatHistory = [];
+      }
+
+      // ============================================
+      // MARKDOWN PARSER - FIXED VERSION
+      // ============================================
+      
+      function parseMarkdown(text) {
+        if (!text) return '';
+        
+        var html = text
+          // Escape HTML first
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          // Code blocks
+          .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+          // Inline code
+          .replace(/`([^`]+)`/g, '<code>$1</code>')
+          // Bold
+          .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+          .replace(/__(.+?)__/g, '<strong>$1</strong>')
+          // Italic
+          .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
+          .replace(/_([^_\n]+)_/g, '<em>$1</em>')
+          // Links - handle auth links specially
+          .replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(match, text, url) {
+            if (url.includes('shopify.com/authentication') || url.includes('oauth/authorize')) {
+              window.shopAuthUrl = url;
+              return '<a href="#auth" class="shop-auth-trigger">' + text + '</a>';
+            }
+            if (url.includes('/cart') || url.includes('checkout')) {
+              return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">click here to proceed to checkout</a>';
+            }
+            return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + text + '</a>';
+          })
+          // Headers
+          .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+          .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+          .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+          // Lists
+          .replace(/^[\s]*[-*]\s+(.+)$/gm, '<li>$1</li>')
+          .replace(/^[\s]*\d+\.\s+(.+)$/gm, '<li>$1</li>')
+          // Paragraphs
+          .replace(/\n\n+/g, '</p><p>')
+          .replace(/\n/g, '<br>');
+
+        // Wrap list items
+        html = html.replace(/(<li>[\s\S]*?<\/li>)+/g, '<ul>$&</ul>');
+        
+        // Wrap in paragraph if needed
+        if (!html.match(/^<(p|h[1-6]|ul|ol|pre)/)) {
+          html = '<p>' + html + '</p>';
+        }
+
+        // Clean up
+        html = html.replace(/<p><\/p>/g, '');
+        html = html.replace(/<p><br>/g, '<p>');
+        html = html.replace(/<br><\/p>/g, '</p>');
+        
+        return html;
+      }
+
+      // ============================================
+      // MESSAGE CONTENT PARSER - HANDLES JSON
+      // ============================================
+      
+      function parseMessageContent(content) {
+        if (!content) return '';
+        
+        // If already a string, return as-is
+        if (typeof content === 'string') {
+          // Try to parse if it looks like JSON
+          if (content.startsWith('[') || content.startsWith('{')) {
+            try {
+              var parsed = JSON.parse(content);
+              return extractTextFromContent(parsed);
+            } catch (e) {
+              return content;
+            }
+          }
+          return content;
+        }
+        
+        return extractTextFromContent(content);
+      }
+
+      function extractTextFromContent(content) {
+        // Handle array of content blocks
+        if (Array.isArray(content)) {
+          return content
+            .filter(function(block) { return block.type === 'text'; })
+            .map(function(block) { return block.text; })
+            .join('\n\n');
+        }
+        
+        // Handle single content block
+        if (content && content.type === 'text') {
+          return content.text;
+        }
+        
+        // Handle object with text property
+        if (content && content.text) {
+          return content.text;
+        }
+        
+        // Fallback to string conversion
+        return String(content);
+      }
+
+      // ============================================
+      // UI FUNCTIONS
+      // ============================================
+
+      function scrollToBottom() {
+        if (messagesContainer) {
+          messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+      }
+
+      function autoResize(el) {
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 150) + 'px';
+      }
+
+      function getTimeAgo(ts) {
+        var diff = Date.now() - ts;
+        var mins = Math.floor(diff / 60000);
+        var hours = Math.floor(mins / 60);
+        var days = Math.floor(hours / 24);
+        if (mins < 1) return 'Just now';
+        if (mins < 60) return mins + ' min ago';
+        if (hours < 24) return hours + 'h ago';
+        return days + 'd ago';
+      }
+
+      function saveHistory() {
+        try {
+          localStorage.setItem(STORAGE_KEYS.chatHistory, JSON.stringify(state.chatHistory));
+        } catch (e) {}
+      }
+
+      function showThinking(toolName) {
+        hideThinking();
+        var msg = TOOL_MESSAGES[toolName] || TOOL_MESSAGES['default'];
+        var el = document.createElement('div');
+        el.className = 'shop-ai-thinking-placeholder';
+        el.id = 'shop-ai-thinking';
+        el.innerHTML = '<div class="shop-ai-thinking-icon"><div class="shop-ai-spinner"></div></div>' +
+                       '<span class="shop-ai-thinking-text">' + msg + '</span>';
+        messagesContainer.appendChild(el);
+        scrollToBottom();
+      }
+
+      function updateThinking(toolName) {
+        var el = document.getElementById('shop-ai-thinking');
+        if (el) {
+          var msg = TOOL_MESSAGES[toolName] || TOOL_MESSAGES['default'];
+          var textEl = el.querySelector('.shop-ai-thinking-text');
+          if (textEl) textEl.textContent = msg;
+        } else {
+          showThinking(toolName);
+        }
+      }
+
+      function hideThinking() {
+        var el = document.getElementById('shop-ai-thinking');
+        if (el) el.remove();
+      }
+
+      function addMessage(text, role) {
+        // Parse content if needed
+        var parsedText = parseMessageContent(text);
+        
+        var msgEl = document.createElement('div');
+        msgEl.className = 'shop-ai-message ' + role;
+        
+        if (role === 'assistant') {
+          var formattedHtml = parseMarkdown(parsedText);
+          msgEl.innerHTML = '<div class="shop-ai-message-content">' + formattedHtml + '</div>';
+        } else {
+          msgEl.textContent = parsedText;
+        }
+        
+        messagesContainer.appendChild(msgEl);
+        scrollToBottom();
+        return msgEl;
+      }
+
+      // ============================================
+      // EMAIL CAPTURE FUNCTIONS
+      // ============================================
+
+      function shouldShowEmailPopup() {
+        // Don't show if email already captured
+        if (state.emailCaptured) return false;
+        
+        // Don't show if popup was shown this session and skipped
+        if (sessionStorage.getItem(STORAGE_KEYS.emailPopupShown) === 'true') return false;
+        
+        return true;
+      }
+
+      function showEmailPopup() {
+        if (emailOverlay) {
+          emailOverlay.classList.add('active');
+          sessionStorage.setItem(STORAGE_KEYS.emailPopupShown, 'true');
+          
+          // Track popup shown
+          if (window.posthog) {
+            window.posthog.capture('Email Popup Shown', { visitorId: state.visitorId });
+          }
+        }
+      }
+
+      function hideEmailPopup() {
+        if (emailOverlay) {
+          emailOverlay.classList.remove('active');
+        }
+      }
+
+      function validateEmail(email) {
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+      }
+
+      async function submitEmail() {
+        var email = emailInput.value.trim();
+        
+        if (!validateEmail(email)) {
+          emailError.classList.add('visible');
+          return;
+        }
+        
+        emailError.classList.remove('visible');
+        emailSubmit.disabled = true;
+        emailSubmit.textContent = 'Saving...';
+        
+        try {
+          var leadsUrl = window.shopChatConfig.leadsUrl || '/apps/shop-chat/leads';
+          var response = await fetch(leadsUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Shopify-Shop-Id': window.shopId
+            },
+            body: JSON.stringify({
+              email: email,
+              conversationId: sessionStorage.getItem(STORAGE_KEYS.conversationId),
+              visitorId: state.visitorId,
+              captureSource: 'chat_popup',
+              capturedPage: window.location.href
+            })
+          });
+          
+          if (response.ok) {
+            state.emailCaptured = true;
+            localStorage.setItem(STORAGE_KEYS.emailCaptured, 'true');
+            
+            // Track success
+            if (window.posthog) {
+              window.posthog.capture('Email Captured', { email: email, visitorId: state.visitorId });
+            }
+            
+            emailSubmit.textContent = '✓ Thanks!';
+            setTimeout(hideEmailPopup, 1000);
+          } else {
+            throw new Error('Failed to save');
+          }
+        } catch (error) {
+          console.error('Email capture error:', error);
+          emailSubmit.textContent = 'Continue';
+          emailSubmit.disabled = false;
+          emailError.textContent = 'Something went wrong. Try again.';
+          emailError.classList.add('visible');
+        }
+      }
+
+      function skipEmail() {
+        hideEmailPopup();
+        
+        // Track skip
+        if (window.posthog) {
+          window.posthog.capture('Email Popup Dismissed', { visitorId: state.visitorId });
+        }
+      }
+
+      // ============================================
+      // CHAT FUNCTIONS
+      // ============================================
+
+      function openChat() {
+        state.isOpen = true;
+        if (floatingGroup) floatingGroup.classList.add('hidden');
+        if (chatWindow) chatWindow.classList.add('active');
+        document.body.classList.add('shop-ai-chat-open');
+
+        // Check if this is first time opening chat
+        var conversationId = sessionStorage.getItem(STORAGE_KEYS.conversationId);
+        
+        if (!conversationId) {
+          // New chat session - show email popup after welcome
+          setTimeout(function() {
+            if (shouldShowEmailPopup()) {
+              showEmailPopup();
+            }
+          }, 1500);
+          
+          // Show welcome message
+          if (messagesContainer && messagesContainer.children.length === 0) {
+            var welcomeMsg = window.shopChatConfig.welcomeMessage || '👋 Hi! How can I help you today?';
+            addMessage(welcomeMsg, 'assistant');
+          }
+        } else {
+          // Existing conversation - load history
+          loadChatHistory(conversationId);
+        }
+      }
+
+      function closeChat() {
+        state.isOpen = false;
+        state.isMenuOpen = false;
+        state.isHistoryOpen = false;
+        if (dropdownMenu) dropdownMenu.classList.remove('active');
+        if (historyPanel) historyPanel.classList.remove('active');
+        if (chatWindow) chatWindow.classList.add('closing');
+        document.body.classList.remove('shop-ai-chat-open');
+        setTimeout(function() {
+          if (chatWindow) chatWindow.classList.remove('active', 'closing');
+          if (floatingGroup) {
+            floatingGroup.classList.remove('hidden');
+            animateButtons();
+          }
+        }, 250);
+      }
+
+      function animateButtons() {
+        if (!floatingGroup) return;
+        var btns = floatingGroup.querySelectorAll('.shop-ai-secondary-btn, .shop-ai-primary-btn');
+        btns.forEach(function(btn, i) {
+          btn.classList.remove('visible');
+          setTimeout(function() { btn.classList.add('visible'); }, i * 50);
+        });
+      }
+
+      function toggleMenu() {
+        state.isMenuOpen = !state.isMenuOpen;
+        if (dropdownMenu) dropdownMenu.classList.toggle('active', state.isMenuOpen);
+      }
+
+      function closeMenu() {
+        state.isMenuOpen = false;
+        if (dropdownMenu) dropdownMenu.classList.remove('active');
+      }
+
+      function showHistoryPanel() {
+        closeMenu();
+        state.isHistoryOpen = true;
+        renderHistory();
+        if (historyPanel) historyPanel.classList.add('active');
+      }
+
+      function hideHistoryPanel() {
+        state.isHistoryOpen = false;
+        if (historyPanel) historyPanel.classList.remove('active');
+      }
+
+      function renderHistory() {
+        if (!historyList) return;
+        if (!state.chatHistory.length) {
+          historyList.innerHTML = '<div class="shop-ai-empty-history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg><p>No chat history</p></div>';
+          return;
+        }
+        historyList.innerHTML = state.chatHistory.map(function(c) {
+          return '<button class="shop-ai-history-item" data-id="' + c.id + '"><span class="shop-ai-history-title">' + c.title + '</span><span class="shop-ai-history-preview">' + c.preview + '</span><span class="shop-ai-history-date">' + getTimeAgo(c.timestamp) + '</span></button>';
+        }).join('');
+      }
+
+      function saveCurrentChat() {
+        if (!messagesContainer) return;
+        var msgs = messagesContainer.querySelectorAll('.shop-ai-message');
+        if (msgs.length <= 1) return;
+        var userMsgs = messagesContainer.querySelectorAll('.shop-ai-message.user');
+        var lastUser = userMsgs[userMsgs.length - 1];
+        var preview = lastUser ? lastUser.textContent.slice(0, 35) + '...' : 'Chat';
+        state.chatHistory.unshift({
+          id: Date.now().toString(),
+          title: 'Chat',
+          preview: preview,
+          conversationId: sessionStorage.getItem(STORAGE_KEYS.conversationId),
+          html: messagesContainer.innerHTML,
+          timestamp: Date.now()
+        });
+        if (state.chatHistory.length > 15) state.chatHistory = state.chatHistory.slice(0, 15);
+        saveHistory();
+      }
+
+      function startNewChat() {
+        closeMenu();
+        saveCurrentChat();
+        sessionStorage.removeItem(STORAGE_KEYS.conversationId);
+        if (messagesContainer) {
+          messagesContainer.innerHTML = '';
+          var welcomeMsg = window.shopChatConfig.welcomeMessage || '👋 Starting fresh! How can I help?';
+          addMessage(welcomeMsg, 'assistant');
+        }
+      }
+
+      function endCurrentChat() {
+        closeMenu();
+        saveCurrentChat();
+        addMessage('Chat ended. Thanks for chatting! 👋', 'assistant');
+      }
+
+      async function loadChatHistory(conversationId) {
+        try {
+          showThinking('default');
+          
+          var apiUrl = window.shopChatConfig.apiUrl || '/apps/shop-chat/chat';
+          var response = await fetch(apiUrl + '?history=true&conversation_id=' + encodeURIComponent(conversationId));
+          
+          hideThinking();
+          
+          if (!response.ok) throw new Error('Failed to load history');
+          
+          var data = await response.json();
+          
+          if (data.messages && data.messages.length > 0) {
+            // Clear and rebuild messages
+            messagesContainer.innerHTML = '';
+            
+            data.messages.forEach(function(msg) {
+              addMessage(msg.content, msg.role);
+            });
+          } else {
+            // No history, show welcome
+            var welcomeMsg = window.shopChatConfig.welcomeMessage || '👋 Hi! How can I help you today?';
+            addMessage(welcomeMsg, 'assistant');
+          }
+        } catch (error) {
+          console.error('Error loading history:', error);
+          hideThinking();
+          
+          // Clear and show welcome on error
+          sessionStorage.removeItem(STORAGE_KEYS.conversationId);
+          var welcomeMsg = window.shopChatConfig.welcomeMessage || '👋 Hi! How can I help you today?';
+          addMessage(welcomeMsg, 'assistant');
+        }
+      }
+
+      function updateSubmitBtn() {
+        if (!submitBtn || !textarea) return;
+        var hasText = textarea.value.trim().length > 0;
+        submitBtn.classList.toggle('has-text', hasText);
+        
+        if (state.isSubmitting) {
+          submitBtn.innerHTML = '<div class="shop-ai-submit-spinner"></div>';
+          submitBtn.disabled = true;
+          if (statusText) statusText.textContent = 'AI is thinking...';
+        } else {
+          submitBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>';
+          submitBtn.disabled = false;
+          if (statusText) statusText.textContent = hasText ? 'Press Enter to send' : 'Ready to help!';
+        }
+      }
+
+      // ============================================
+      // EVENT BINDINGS
+      // ============================================
+
+      if (floatingGroup) {
+        floatingGroup.addEventListener('click', function(e) {
+          if (e.target.closest('.shop-ai-secondary-btn, .shop-ai-primary-btn')) openChat();
+        });
+      }
+
+      if (menuBtn) menuBtn.addEventListener('click', function(e) { e.stopPropagation(); toggleMenu(); });
+      if (closeBtn) closeBtn.addEventListener('click', closeChat);
+      if (backBtn) backBtn.addEventListener('click', hideHistoryPanel);
+
+      // Email popup handlers
+      if (emailSubmit) emailSubmit.addEventListener('click', submitEmail);
+      if (emailSkip) emailSkip.addEventListener('click', skipEmail);
+      if (emailInput) {
+        emailInput.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            submitEmail();
+          }
+        });
+        emailInput.addEventListener('input', function() {
+          emailError.classList.remove('visible');
+        });
+      }
+
+      if (dropdownMenu) {
+        dropdownMenu.addEventListener('click', function(e) {
+          var item = e.target.closest('.shop-ai-menu-item');
+          if (!item) return;
+          var action = item.dataset.action;
+          if (action === 'new-chat') startNewChat();
+          else if (action === 'show-history') showHistoryPanel();
+          else if (action === 'end-chat') endCurrentChat();
+        });
+      }
+
+      if (historyList) {
+        historyList.addEventListener('click', function(e) {
+          var item = e.target.closest('.shop-ai-history-item');
+          if (!item) return;
+          var id = item.dataset.id;
+          var chat = state.chatHistory.find(function(c) { return c.id === id; });
+          if (chat) {
+            if (chat.conversationId) {
+              sessionStorage.setItem(STORAGE_KEYS.conversationId, chat.conversationId);
+            }
+            if (chat.html && messagesContainer) {
+              messagesContainer.innerHTML = chat.html;
+              scrollToBottom();
+            }
+          }
+          hideHistoryPanel();
+        });
+      }
+
+      if (textarea) {
+        textarea.addEventListener('input', function() {
+          autoResize(textarea);
+          updateSubmitBtn();
+        });
+        textarea.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            if (!state.isSubmitting && textarea.value.trim()) {
+              document.dispatchEvent(new CustomEvent('shop-ai-submit', { detail: { message: textarea.value.trim() } }));
+            }
+          }
+        });
+      }
+
+      if (submitBtn) {
+        submitBtn.addEventListener('click', function() {
+          if (!state.isSubmitting && textarea && textarea.value.trim()) {
+            document.dispatchEvent(new CustomEvent('shop-ai-submit', { detail: { message: textarea.value.trim() } }));
+          }
+        });
+      }
+
+      document.addEventListener('click', function(e) {
+        if (state.isMenuOpen && !dropdownMenu.contains(e.target) && !menuBtn.contains(e.target)) closeMenu();
+      });
+
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+          if (emailOverlay && emailOverlay.classList.contains('active')) {
+            hideEmailPopup();
+          } else if (state.isHistoryOpen) hideHistoryPanel();
+          else if (state.isMenuOpen) closeMenu();
+          else if (state.isOpen) closeChat();
+        }
+      });
+
+      // Auth link handler
+      document.addEventListener('click', function(e) {
+        if (e.target && e.target.classList.contains('shop-auth-trigger')) {
+          e.preventDefault();
+          if (window.shopAuthUrl) {
+            window.open(window.shopAuthUrl, 'ShopifyAuth', 'width=600,height=700');
+          }
+        }
+      });
+
+      // Initialize
+      animateButtons();
+      updateSubmitBtn();
+
+      // Public API
+      window.ShopAIChat = {
+        open: openChat,
+        close: closeChat,
+        showThinking: showThinking,
+        updateThinking: updateThinking,
+        hideThinking: hideThinking,
+        parseMarkdown: parseMarkdown,
+        parseMessageContent: parseMessageContent,
+        addMessage: addMessage,
+        scrollToBottom: scrollToBottom,
+        setSubmitting: function(val) {
+          state.isSubmitting = val;
+          updateSubmitBtn();
+        },
+        clearInput: function() {
+          if (textarea) {
+            textarea.value = '';
+            autoResize(textarea);
+            updateSubmitBtn();
+          }
+        },
+        getInput: function() { return textarea; },
+        getVisitorId: function() { return state.visitorId; },
+        showEmailPopup: showEmailPopup,
+        hideEmailPopup: hideEmailPopup
+      };
+
+      // Listen for tool calls
+      document.addEventListener('shop-ai-tool-call', function(e) {
+        showThinking(e.detail && e.detail.tool);
+      });
+
+      document.addEventListener('shop-ai-tool-complete', function(e) {
+        hideThinking();
+      });
+
+      document.addEventListener('shop-ai-streaming-start', function() {
+        hideThinking();
+      });
+    });
+  })();
 </script>
 
 {% schema %}
@@ -45,16 +1346,28 @@
   "target": "body",
   "settings": [
     {
+      "type": "text",
+      "id": "chat_title",
+      "label": "Chat Title",
+      "default": "AI Assistant"
+    },
+    {
       "type": "color",
       "id": "chat_bubble_color",
-      "label": "Chat Bubble Color",
-      "default": "#5046e4"
+      "label": "Accent Color",
+      "default": "#1a1a1a"
     },
     {
       "type": "text",
       "id": "welcome_message",
       "label": "Welcome Message",
       "default": "👋 Hi there! How can I help you today?"
+    },
+    {
+      "type": "text",
+      "id": "input_placeholder",
+      "label": "Input Placeholder",
+      "default": "Ask me anything!"
     },
     {
       "type": "select",

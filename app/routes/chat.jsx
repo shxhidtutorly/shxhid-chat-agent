@@ -1,17 +1,26 @@
 /**
  * Chat API Route
  * Handles chat interactions with Claude API and tools
+ * Production-ready with PostgreSQL, PostHog, and lead tracking
  */
 import MCPClient from "../mcp-client";
-import { saveMessage, getConversationHistory, storeCustomerAccountUrls, getCustomerAccountUrls as getCustomerAccountUrlsFromDb } from "../db.server";
+import { 
+  saveMessage, 
+  getConversationHistory, 
+  storeCustomerAccountUrls, 
+  getCustomerAccountUrls as getCustomerAccountUrlsFromDb,
+  createOrUpdateConversation,
+  trackAnalyticsEvent,
+  endConversation
+} from "../db.server";
+import { ChatEvents } from "../services/posthog.server";
 import AppConfig from "../services/config.server";
 import { createSseStream } from "../services/streaming.server";
 import { createClaudeService } from "../services/claude.server";
 import { createToolService } from "../services/tool.server";
 
-
 /**
- * Rract Router loader function for handling GET requests
+ * React Router loader function for handling GET requests
  */
 export async function loader({ request }) {
   // Handle OPTIONS requests (CORS preflight)
@@ -35,7 +44,10 @@ export async function loader({ request }) {
   }
 
   // API-only: reject all other requests
-  return new Response(JSON.stringify({ error: AppConfig.errorMessages.apiUnsupported }), { status: 400, headers: getCorsHeaders(request) });
+  return new Response(JSON.stringify({ error: AppConfig.errorMessages.apiUnsupported }), { 
+    status: 400, 
+    headers: getCorsHeaders(request) 
+  });
 }
 
 /**
@@ -52,9 +64,49 @@ export async function action({ request }) {
  * @returns {Response} JSON response with chat history
  */
 async function handleHistoryRequest(request, conversationId) {
-  const messages = await getConversationHistory(conversationId);
+  try {
+    const messages = await getConversationHistory(conversationId);
+    
+    // Parse and clean messages for frontend
+    const cleanedMessages = messages.map(msg => {
+      let parsedContent = msg.content;
+      
+      // Try to parse JSON content
+      try {
+        const parsed = JSON.parse(msg.content);
+        // If it's an array of content blocks, extract text
+        if (Array.isArray(parsed)) {
+          const textBlocks = parsed
+            .filter(block => block.type === 'text')
+            .map(block => block.text)
+            .join('\n\n');
+          parsedContent = textBlocks || msg.content;
+        } else if (parsed.text) {
+          parsedContent = parsed.text;
+        }
+      } catch (e) {
+        // Content is already plain text
+        parsedContent = msg.content;
+      }
 
-  return new Response(JSON.stringify({ messages }), { headers: getCorsHeaders(request) });
+      return {
+        id: msg.id,
+        role: msg.role,
+        content: parsedContent,
+        contentType: msg.contentType,
+        createdAt: msg.createdAt
+      };
+    });
+
+    return new Response(JSON.stringify({ messages: cleanedMessages }), { 
+      headers: getCorsHeaders(request) 
+    });
+  } catch (error) {
+    console.error('Error fetching history:', error);
+    return new Response(JSON.stringify({ messages: [], error: 'Failed to fetch history' }), { 
+      headers: getCorsHeaders(request) 
+    });
+  }
 }
 
 /**
@@ -67,6 +119,8 @@ async function handleChatRequest(request) {
     // Get message data from request body
     const body = await request.json();
     const userMessage = body.message;
+    const visitorId = body.visitor_id;
+    const fingerprintId = body.fingerprint_id;
 
     // Validate required message
     if (!userMessage) {
@@ -80,6 +134,18 @@ async function handleChatRequest(request) {
     const conversationId = body.conversation_id || Date.now().toString();
     const promptType = body.prompt_type || AppConfig.api.defaultPromptType;
 
+    // Get shop info
+    const shopId = request.headers.get("X-Shopify-Shop-Id");
+    const shopDomain = request.headers.get("Origin");
+
+    // Track analytics
+    const trackingId = visitorId || fingerprintId || conversationId;
+    ChatEvents.messageSent(trackingId, {
+      conversationId,
+      shopDomain,
+      messageLength: userMessage.length,
+    });
+
     // Create a stream for the response
     const responseStream = createSseStream(async (stream) => {
       await handleChatSession({
@@ -87,7 +153,11 @@ async function handleChatRequest(request) {
         userMessage,
         conversationId,
         promptType,
-        stream
+        stream,
+        visitorId,
+        fingerprintId,
+        shopId,
+        shopDomain
       });
     });
 
@@ -105,27 +175,25 @@ async function handleChatRequest(request) {
 
 /**
  * Handle a complete chat session
- * @param {Object} params - Session parameters
- * @param {Request} params.request - The request object
- * @param {string} params.userMessage - The user's message
- * @param {string} params.conversationId - The conversation ID
- * @param {string} params.promptType - The prompt type
- * @param {Object} params.stream - Stream manager for sending responses
  */
 async function handleChatSession({
   request,
   userMessage,
   conversationId,
   promptType,
-  stream
+  stream,
+  visitorId,
+  fingerprintId,
+  shopId,
+  shopDomain
 }) {
+  const startTime = Date.now();
+  
   // Initialize services
   const claudeService = createClaudeService();
   const toolService = createToolService();
 
-  // Initialize MCP client
-  const shopId = request.headers.get("X-Shopify-Shop-Id");
-  const shopDomain = request.headers.get("Origin");
+  // Get customer account URLs
   const { mcpApiUrl } = await getCustomerAccountUrls(shopDomain, conversationId);
 
   const mcpClient = new MCPClient(
@@ -145,9 +213,7 @@ async function handleChatSession({
     try {
       storefrontMcpTools = await mcpClient.connectToStorefrontServer();
       customerMcpTools = await mcpClient.connectToCustomerServer();
-
-      console.log(`Connected to MCP with ${storefrontMcpTools.length} tools`);
-      console.log(`Connected to customer MCP with ${customerMcpTools.length} tools`);
+      console.log(`Connected to MCP with ${storefrontMcpTools.length + customerMcpTools.length} tools`);
     } catch (error) {
       console.warn('Failed to connect to MCP servers, continuing without tools:', error.message);
     }
@@ -157,7 +223,10 @@ async function handleChatSession({
     let productsToDisplay = [];
 
     // Save user message to the database
-    await saveMessage(conversationId, 'user', userMessage);
+    await saveMessage(conversationId, 'user', userMessage, {
+      shopDomain: shopDomain ? new URL(shopDomain).hostname : null,
+      visitorId,
+    });
 
     // Fetch all messages from the database for this conversation
     const dbMessages = await getConversationHistory(conversationId);
@@ -178,6 +247,7 @@ async function handleChatSession({
 
     // Execute the conversation stream
     let finalMessage = { role: 'user', content: userMessage };
+    let fullResponseText = '';
 
     while (finalMessage.stop_reason !== "end_turn") {
       finalMessage = await claudeService.streamConversation(
@@ -189,6 +259,7 @@ async function handleChatSession({
         {
           // Handle text chunks
           onText: (textDelta) => {
+            fullResponseText += textDelta;
             stream.sendMessage({
               type: 'chunk',
               chunk: textDelta
@@ -196,18 +267,43 @@ async function handleChatSession({
           },
 
           // Handle complete messages
-          onMessage: (message) => {
+          onMessage: async (message) => {
             conversationHistory.push({
               role: message.role,
               content: message.content
             });
 
-            saveMessage(conversationId, message.role, JSON.stringify(message.content))
-              .catch((error) => {
-                console.error("Error saving message to database:", error);
-              });
+            // Extract text from content blocks for storage
+            let textContent = '';
+            if (Array.isArray(message.content)) {
+              textContent = message.content
+                .filter(block => block.type === 'text')
+                .map(block => block.text)
+                .join('\n\n');
+            } else {
+              textContent = message.content;
+            }
 
-            // Send a completion message
+            // Save to database
+            const responseTime = Date.now() - startTime;
+            await saveMessage(conversationId, message.role, textContent, {
+              contentType: 'TEXT',
+              responseTimeMs: responseTime,
+              shopDomain: shopDomain ? new URL(shopDomain).hostname : null,
+              visitorId,
+            }).catch((error) => {
+              console.error("Error saving message to database:", error);
+            });
+
+            // Track analytics
+            const trackingId = visitorId || fingerprintId || conversationId;
+            ChatEvents.messageReceived(trackingId, {
+              conversationId,
+              responseTimeMs: responseTime,
+              contentLength: textContent.length,
+            });
+
+            // Send completion message
             stream.sendMessage({ type: 'message_complete' });
           },
 
@@ -221,7 +317,16 @@ async function handleChatSession({
 
             stream.sendMessage({
               type: 'tool_use',
-              tool_use_message: toolUseMessage
+              tool_use_message: toolUseMessage,
+              tool_name: toolName
+            });
+
+            // Track tool call
+            const trackingId = visitorId || fingerprintId || conversationId;
+            ChatEvents.toolCalled(trackingId, {
+              conversationId,
+              toolName,
+              toolArgs,
             });
 
             // Call the tool
@@ -274,18 +379,33 @@ async function handleChatSession({
         type: 'product_results',
         products: productsToDisplay
       });
+
+      // Track product views
+      const trackingId = visitorId || fingerprintId || conversationId;
+      productsToDisplay.forEach(product => {
+        ChatEvents.productViewed(trackingId, {
+          conversationId,
+          productId: product.id,
+          productTitle: product.title,
+        });
+      });
     }
   } catch (error) {
-    // The streaming handler takes care of error handling
+    console.error('Error in chat session:', error);
+    
+    // Track error
+    const trackingId = visitorId || fingerprintId || conversationId;
+    ChatEvents.errorOccurred(trackingId, {
+      conversationId,
+      error: error.message,
+    });
+
     throw error;
   }
 }
 
 /**
  * Get the customer MCP API URL for a shop
- * @param {string} shopDomain - The shop domain
- * @param {string} conversationId - The conversation ID
- * @returns {string} The customer MCP API URL
  */
 async function getCustomerAccountUrls(shopDomain, conversationId) {
   try {
@@ -296,6 +416,8 @@ async function getCustomerAccountUrls(shopDomain, conversationId) {
     if (existingUrls) return existingUrls;
 
     // If not, query for it from the Shopify API
+    if (!shopDomain) return { mcpApiUrl: null };
+    
     const { hostname } = new URL(shopDomain);
 
     const urls = await Promise.all([
@@ -321,32 +443,29 @@ async function getCustomerAccountUrls(shopDomain, conversationId) {
     return urls;
   } catch (error) {
     console.error("Error getting customer MCP API URL:", error);
-    return null;
+    return { mcpApiUrl: null };
   }
 }
 
 /**
  * Gets CORS headers for the response
- * @param {Request} request - The request object
- * @returns {Object} CORS headers object
  */
 function getCorsHeaders(request) {
   const origin = request.headers.get("Origin") || "*";
   const requestHeaders = request.headers.get("Access-Control-Request-Headers") || "Content-Type, Accept";
 
   return {
+    "Content-Type": "application/json",
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": requestHeaders,
     "Access-Control-Allow-Credentials": "true",
-    "Access-Control-Max-Age": "86400" // 24 hours
+    "Access-Control-Max-Age": "86400"
   };
 }
 
 /**
  * Get SSE headers for the response
- * @param {Request} request - The request object
- * @returns {Object} SSE headers object
  */
 function getSseHeaders(request) {
   const origin = request.headers.get("Origin") || "*";
@@ -358,6 +477,6 @@ function getSseHeaders(request) {
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET,OPTIONS,POST",
-    "Access-Control-Allow-Headers": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version"
+    "Access-Control-Allow-Headers": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, X-Shopify-Shop-Id"
   };
 }

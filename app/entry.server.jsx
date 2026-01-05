@@ -13,6 +13,24 @@ export default async function handleRequest(
   responseHeaders,
   reactRouterContext,
 ) {
+  // Quick healthcheck: respond immediately for /health to satisfy Railway
+  try {
+    const reqUrl = new URL(request.url);
+    if (reqUrl.pathname === "/health") {
+      // minimal, fast response
+      return new Response("ok", {
+        status: 200,
+        headers: {
+          "Content-Type": "text/plain",
+        },
+      });
+    }
+  } catch (err) {
+    // If URL parsing fails for some reason, continue to normal rendering path
+    console.warn("healthcheck URL parse warning:", err?.message || err);
+  }
+
+  // Normal rendering code follows
   addDocumentResponseHeaders(request, responseHeaders);
   const userAgent = request.headers.get("user-agent");
   const callbackName = isbot(userAgent ?? "") ? "onAllReady" : "onShellReady";
@@ -44,8 +62,7 @@ export default async function handleRequest(
       },
     );
 
-    // Automatically timeout the React renderer after 6 seconds, which ensures
-    // React has enough time to flush down the rejected boundary contents
+    // Automatically timeout the React renderer after 6 seconds
     setTimeout(abort, streamTimeout + 1000);
   });
 }

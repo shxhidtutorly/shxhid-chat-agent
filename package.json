@@ -8,8 +8,8 @@
  "scripts": {
   "dev": "shopify app dev",
   "build": "prisma generate && react-router build",
-  "start": "node server.cjs",
-  "docker-start": "node server.cjs",
+  "start": "react-router-serve ./build/server/index.js",
+  "docker-start": "react-router-serve ./build/server/index.js",
   "prepare": "prisma generate",
   "lint": "eslint --ignore-path .gitignore --cache --cache-location ./node_modules/.cache/eslint .",
   "db:push": "prisma db push",

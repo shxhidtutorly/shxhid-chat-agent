@@ -5,19 +5,20 @@
   "engines": {
     "node": ">=18"
   },
-  "scripts": {
-    "dev": "shopify app dev",
-    "build": "prisma generate && react-router build",
-    "start": "node server.cjs",
-    "docker-start": "node server.cjs",
-    "prepare": "prisma generate",
-    "lint": "eslint --ignore-path .gitignore --cache --cache-location ./node_modules/.cache/eslint .",
-    "db:push": "prisma db push",
-    "db:migrate": "prisma migrate deploy",
-    "db:migrate:dev": "prisma migrate dev",
-    "db:studio": "prisma studio",
-    "db:seed": "node prisma/seed.js"
-  },
+ "scripts": {
+  "dev": "shopify app dev",
+  "build": "prisma generate && react-router build",
+  "start": "node server.cjs",
+  "docker-start": "node server.cjs",
+  "prepare": "prisma generate",
+  "lint": "eslint --ignore-path .gitignore --cache --cache-location ./node_modules/.cache/eslint .",
+  "db:push": "prisma db push",
+  "db:migrate": "prisma migrate deploy",
+  "db:migrate:dev": "prisma migrate dev",
+  "db:studio": "prisma studio",
+  "db:seed": "node prisma/seed.js",
+  "postinstall": "prisma generate"
+},
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40.0",
     "@prisma/client": "^6.19.1",

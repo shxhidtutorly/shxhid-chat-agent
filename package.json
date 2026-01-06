@@ -3,22 +3,22 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
- "scripts": {
-  "dev": "shopify app dev",
-  "build": "prisma generate && react-router build",
-  "start": "react-router-serve ./build/server/index.js",
-  "docker-start": "react-router-serve ./build/server/index.js",
-  "prepare": "prisma generate",
-  "lint": "eslint --ignore-path .gitignore --cache --cache-location ./node_modules/.cache/eslint .",
-  "db:push": "prisma db push",
-  "db:migrate": "prisma migrate deploy",
-  "db:migrate:dev": "prisma migrate dev",
-  "db:studio": "prisma studio",
-  "db:seed": "node prisma/seed.js",
-  "postinstall": "prisma generate"
-},
+  "scripts": {
+    "dev": "shopify app dev",
+    "build": "prisma generate && react-router build",
+    "start": "react-router-serve ./build/server/index.js",
+    "docker-start": "react-router-serve ./build/server/index.js",
+    "prepare": "prisma generate",
+    "lint": "eslint --ignore-path .gitignore --cache --cache-location ./node_modules/.cache/eslint .",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "db:seed": "node prisma/seed.js",
+    "postinstall": "prisma generate"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40.0",
     "@prisma/client": "^6.19.1",
@@ -40,7 +40,7 @@
     "vite-tsconfig-paths": "^5.0.1"
   },
   "devDependencies": {
-    "@types/node": "^18.16.18",
+    "@types/node": "^20.11.0",
     "@types/react": "^18.2.31",
     "@types/uuid": "^9.0.0",
     "eslint": "^8.38.0",

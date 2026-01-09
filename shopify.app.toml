@@ -1,9 +1,8 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "YOUR_CLIENT_ID"
-name = "shop-chat-agent"
-handle = "shop-chat-agent"
-application_url = "https://shop-chat-agent.com"
+client_id = "606557c20ad788f2ea86d0dea1f1a577"
+name = "updated-shxhid-agent"
+application_url = "https://shxhid-chat-agent-production.up.railway.app"
 embedded = true
 
 [build]

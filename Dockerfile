@@ -1,31 +1,35 @@
 FROM node:20-alpine
 
-# Required for Prisma + Shopify crypto
+# Install OpenSSL (required for Prisma)
 RUN apk add --no-cache openssl
 
 WORKDIR /app
 
-ENV NODE_ENV=production
-
-EXPOSE 3000
-
-# 1. Copy package files first (Docker cache optimization)
+# Copy package files
 COPY package.json package-lock.json* ./
 
-# 2. 🔑 Copy Prisma schema BEFORE npm install
+# Copy Prisma schema BEFORE installing dependencies
 COPY prisma ./prisma
 
-# 3. Install dependencies (postinstall -> prisma generate will now work)
+# Install production dependencies
+# This will run postinstall hook which runs prisma generate
 RUN npm ci --omit=dev && npm cache clean --force
 
-# 4. Remove Shopify CLI (not needed in production)
-RUN npm remove @shopify/cli
+# Remove Shopify CLI (not needed in production)
+RUN npm remove @shopify/cli || true
 
-# 5. Copy the rest of the application
+# Copy rest of application
 COPY . .
 
-# 6. Build the app
+# Build the application
 RUN npm run build
 
-# 7. Start the app
-CMD ["npm", "run", "docker-start"]
+# Expose port (Railway uses PORT env variable, default 8080)
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:8080/', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"
+
+# Start command: Run migrations then start server
+CMD npx prisma migrate deploy && npm run docker-start

@@ -17,10 +17,14 @@ class MCPClient {
     this.tools = [];
     this.customerTools = [];
     this.storefrontTools = [];
-    // TODO: Make this dynamic, for that first we need to allow access of mcp tools on password proteted demo stores.
-    this.storefrontMcpEndpoint = `${hostUrl}/api/mcp`;
+    
+    // FIX: Ensure hostUrl has protocol
+    const normalizedHostUrl = hostUrl.startsWith('http') ? hostUrl : `https://${hostUrl}`;
+    
+    // TODO: Make this dynamic, for that first we need to allow access of mcp tools on password protected demo stores.
+    this.storefrontMcpEndpoint = `${normalizedHostUrl}/api/mcp`;
 
-    const accountHostUrl = hostUrl.replace(/(\.myshopify\.com)$/, '.account$1');
+    const accountHostUrl = normalizedHostUrl.replace(/(\.myshopify\.com)$/, '.account$1');
     this.customerMcpEndpoint = customerMcpEndpoint || `${accountHostUrl}/customer/api/mcp`;
     this.customerAccessToken = "";
     this.conversationId = conversationId;

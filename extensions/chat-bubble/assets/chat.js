@@ -1477,7 +1477,7 @@
             prompt_type: promptType
           });
 
-          const streamUrl = window.shopChatConfig?.apiUrl || 'https://localhost:3458/chat';
+          const streamUrl = window.shopChatConfig?.apiUrl || 'https://shxhid-chat-agent-production.up.railway.app/chat';
           const shopId = window.shopId || window.shopChatConfig?.shopId;
 
           const response = await fetch(streamUrl, {
@@ -1672,7 +1672,7 @@
           `;
           messagesContainer.appendChild(loadingEl);
 
-          const historyUrl = window.shopChatConfig?.apiUrl || 'https://localhost:3458/chat';
+          const historyUrl = window.shopChatConfig?.apiUrl || 'https://shxhid-chat-agent-production.up.railway.app/chat';
           
           const response = await fetch(`${historyUrl}?history=true&conversation_id=${encodeURIComponent(conversationId)}`, {
             method: 'GET',
@@ -1780,7 +1780,7 @@
           attempts++;
 
           try {
-            const baseUrl = window.shopChatConfig?.apiUrl || 'https://localhost:3458';
+            const baseUrl = window.shopChatConfig?.apiUrl || 'https://shxhid-chat-agent-production.up.railway.app';
             const response = await fetch(
               `${baseUrl}/auth/token-status?conversation_id=${encodeURIComponent(conversationId)}`
             );

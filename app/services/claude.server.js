@@ -1,150 +1,161 @@
-/**
- * Claude Service
- * app/services/claude.server.js
- *
- * Manages interactions with the Claude / Anthropic API
- * Hardened for production use with Shopify Storefront MCP
- */
-
-import { Anthropic } from "@anthropic-ai/sdk";
-import AppConfig from "./config.server";
-import systemPrompts from "../prompts/prompts.json";
+// app/services/claude.server.js
+import Anthropic from "@anthropic-ai/sdk";
 
 /**
- * Creates a Claude service instance
- * @param {string} apiKey - Claude / Anthropic API key
+ * Create Claude service instance
  */
-export function createClaudeService(
-  apiKey = process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY
-) {
+export function createClaudeService() {
+  // CRITICAL: Check API key exists
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  
   if (!apiKey) {
-    throw new Error(
-      "Missing API key: set CLAUDE_API_KEY or ANTHROPIC_API_KEY in environment variables."
-    );
+    console.error("❌ ANTHROPIC_API_KEY not found in environment variables!");
+    throw new Error("ANTHROPIC_API_KEY is not configured");
   }
 
-  /**
-   * Anthropic client
-   * Use direct API unless Shopify proxy is explicitly required
-   */
-  const anthropic = new Anthropic({
-    apiKey,
-    baseUrl: process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com"
+  console.log("✅ Claude API Key found:", apiKey.substring(0, 10) + "...");
+
+  const client = new Anthropic({
+    apiKey: apiKey,
   });
 
-  /**
-   * Safely resolve system prompt
-   */
-  const getSystemPrompt = (promptType) => {
-    // Support both shapes:
-    // { systemPrompts: {...} } OR { ... }
-    const promptsRoot =
-      systemPrompts && systemPrompts.systemPrompts
-        ? systemPrompts.systemPrompts
-        : systemPrompts || {};
-
-    const defaultKey = AppConfig?.api?.defaultPromptType;
-    const requestedKey = promptType || defaultKey;
-
-    const isValid = (p) =>
-      p && typeof p.content === "string" && p.content.trim().length > 0;
-
-    // 1. Requested prompt
-    if (requestedKey && isValid(promptsRoot[requestedKey])) {
-      return promptsRoot[requestedKey].content;
-    }
-
-    // 2. Default prompt
-    if (defaultKey && isValid(promptsRoot[defaultKey])) {
-      console.warn(
-        `[Claude] Prompt "${requestedKey}" not found. Falling back to default "${defaultKey}".`
-      );
-      return promptsRoot[defaultKey].content;
-    }
-
-    // 3. First valid prompt
-    const firstValidKey = Object.keys(promptsRoot).find((k) =>
-      isValid(promptsRoot[k])
-    );
-
-    if (firstValidKey) {
-      console.warn(
-        `[Claude] Prompt "${requestedKey}" not found. Falling back to "${firstValidKey}".`
-      );
-      return promptsRoot[firstValidKey].content;
-    }
-
-    // 4. Hard fallback (never crashes)
-    console.error(
-      "[Claude] No valid system prompts found. Using emergency fallback."
-    );
-
-    return `
-You are a professional B2B e-commerce assistant for an industrial automation store.
-Answer clearly, accurately, and concisely.
-Help users find products, SKUs, compatibility, pricing, availability, and checkout steps.
-If a question is unclear, ask one clarifying question before proceeding.
-`;
-  };
-
-  /**
-   * Streams a conversation with Claude
-   */
-  const streamConversation = async (
-    { messages, promptType = AppConfig.api.defaultPromptType, tools },
-    streamHandlers = {}
-  ) => {
-    const systemInstruction = getSystemPrompt(promptType);
-
-    let stream;
-    try {
-      stream = await anthropic.messages.stream({
-        model: AppConfig.api.defaultModel,
-        max_tokens: AppConfig.api.maxTokens,
-        system: systemInstruction,
-        messages,
-        tools: tools && tools.length > 0 ? tools : undefined
-      });
-    } catch (err) {
-      console.error("[Claude] Failed to start stream:", err);
-      throw err;
-    }
-
-    if (streamHandlers.onText) {
-      stream.on("text", streamHandlers.onText);
-    }
-
-    if (streamHandlers.onMessage) {
-      stream.on("message", streamHandlers.onMessage);
-    }
-
-    if (streamHandlers.onContentBlock) {
-      stream.on("contentBlock", streamHandlers.onContentBlock);
-    }
-
-    const finalMessage = await stream.finalMessage();
-
-    if (
-      streamHandlers.onToolUse &&
-      finalMessage &&
-      Array.isArray(finalMessage.content)
-    ) {
-      for (const block of finalMessage.content) {
-        if (block.type === "tool_use") {
-          await streamHandlers.onToolUse(block);
-        }
-      }
-    }
-
-    return finalMessage;
-  };
-
   return {
-    streamConversation,
-    getSystemPrompt
+    /**
+     * Stream a conversation with Claude
+     */
+    async streamConversation(config, callbacks) {
+      const { messages, promptType = "standardAssistant", tools = [] } = config;
+      const { onText, onMessage, onToolUse, onContentBlock } = callbacks;
+
+      try {
+        // Build system prompt
+        const systemPrompt = getSystemPrompt(promptType);
+
+        // Prepare API call parameters
+        const apiParams = {
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 4096,
+          system: systemPrompt,
+          messages: messages,
+          stream: true,
+        };
+
+        // Add tools if available
+        if (tools && tools.length > 0) {
+          apiParams.tools = tools;
+        }
+
+        console.log("🤖 Calling Claude API...");
+
+        // Create stream
+        const stream = await client.messages.stream(apiParams);
+
+        let currentMessage = {
+          role: "assistant",
+          content: [],
+          stop_reason: null,
+        };
+
+        // Handle stream events
+        stream.on("text", (textDelta) => {
+          if (onText) onText(textDelta);
+        });
+
+        stream.on("message_start", () => {
+          console.log("📨 Message started");
+        });
+
+        stream.on("content_block_start", (event) => {
+          console.log("🔷 Content block started:", event.content_block.type);
+        });
+
+        stream.on("content_block_delta", (event) => {
+          if (event.delta.type === "text_delta") {
+            if (onText) onText(event.delta.text);
+          }
+        });
+
+        stream.on("content_block_stop", (event) => {
+          if (onContentBlock) onContentBlock(event.content_block);
+        });
+
+        stream.on("message_delta", (event) => {
+          if (event.delta.stop_reason) {
+            currentMessage.stop_reason = event.delta.stop_reason;
+          }
+        });
+
+        stream.on("message_stop", () => {
+          console.log("✅ Message completed");
+        });
+
+        // Wait for stream to complete
+        const finalMessage = await stream.finalMessage();
+
+        // Process final message
+        currentMessage.content = finalMessage.content;
+        currentMessage.stop_reason = finalMessage.stop_reason;
+
+        // Handle tool uses
+        const toolUses = finalMessage.content.filter((c) => c.type === "tool_use");
+        
+        for (const toolUse of toolUses) {
+          if (onToolUse) {
+            await onToolUse(toolUse);
+          }
+        }
+
+        // Call onMessage callback
+        if (onMessage) {
+          await onMessage(currentMessage);
+        }
+
+        return currentMessage;
+
+      } catch (error) {
+        console.error("❌ Claude API Error:", error);
+        
+        // Check if it's an API key error
+        if (error.message?.includes("api_key") || error.status === 401) {
+          throw new Error("Invalid Anthropic API key. Please check your ANTHROPIC_API_KEY environment variable.");
+        }
+        
+        throw error;
+      }
+    },
   };
 }
 
-export default {
-  createClaudeService
-};
+/**
+ * Get system prompt based on type
+ */
+function getSystemPrompt(promptType) {
+  const prompts = {
+    standardAssistant: `You are a helpful AI shopping assistant for a Shopify store. You help customers:
+- Find products they're looking for
+- Answer questions about products, shipping, and policies
+- Add items to their cart
+- Track their orders
+- Process returns and exchanges
+
+Be friendly, concise, and helpful. Always prioritize the customer's needs.`,
+
+    productExpert: `You are a product expert for this Shopify store. You have deep knowledge about all products and can:
+- Recommend products based on customer needs
+- Compare different products
+- Explain product features and benefits
+- Suggest complementary items
+
+Be enthusiastic but honest about products.`,
+
+    supportAgent: `You are a customer support agent. Your role is to:
+- Resolve customer issues quickly
+- Answer questions about orders, shipping, and returns
+- Handle complaints professionally
+- Escalate complex issues when needed
+
+Be patient, empathetic, and solution-focused.`,
+  };
+
+  return prompts[promptType] || prompts.standardAssistant;
+}

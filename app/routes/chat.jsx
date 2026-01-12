@@ -1,6 +1,7 @@
 // app/routes/chat.jsx
 /**
  * Chat API Route - FIXED VERSION
+ * Fixes: P2025 (Visitor ID) & invalid_request_error (Tool Use Order/Data Loss)
  */
 
 export async function loader({ request }) {
@@ -59,15 +60,10 @@ async function handleHistoryRequest(request, conversationId) {
       let parsedContent = msg.content;
       try {
         const parsed = JSON.parse(msg.content);
+        // If the content is an array (likely rich content with tools), keep it as JSON
         if (Array.isArray(parsed)) {
-          const textBlocks = parsed
-            .filter((block) => block.type === "text")
-            .map((block) => block.text)
-            .join("\n\n");
-          parsedContent = textBlocks || msg.content;
-        } else if (parsed.text) {
-          parsedContent = parsed.text;
-        }
+          parsedContent = parsed;
+        } 
       } catch (e) {
         parsedContent = msg.content;
       }
@@ -129,7 +125,6 @@ async function handleChatRequest(request) {
       getConversationHistory,
       storeCustomerAccountUrls,
       getCustomerAccountUrls: getCustomerAccountUrlsFromDb,
-      createOrUpdateConversation,
       trackAnalyticsEvent,
     } = dbMod;
 
@@ -269,13 +264,13 @@ async function handleChatSession({
 
     // Save user message
     try {
+      // Pass visitorId to ensure Visitor record is created/linked
       await saveMessage(conversationId, "user", userMessage, {
         shopDomain,
-        visitorId,
+        visitorId, 
       });
     } catch (dbError) {
       console.error("Failed to save user message:", dbError);
-      // Continue anyway - don't break chat flow
     }
 
     // Get conversation history
@@ -294,6 +289,10 @@ async function handleChatSession({
     let finalMessage = { role: "user", content: userMessage };
     let fullResponseText = "";
 
+    // IMPORTANT: Buffer tool results to save them AFTER the assistant message
+    // This prevents the "unexpected tool_result" error by ensuring correct order
+    let toolResultsBuffer = [];
+
     while (finalMessage.stop_reason !== "end_turn") {
       finalMessage = await claudeService.streamConversation(
         {
@@ -307,50 +306,10 @@ async function handleChatSession({
             stream.sendMessage({ type: "chunk", chunk: textDelta });
           },
 
-          onMessage: async (message) => {
-            conversationHistory.push({ role: message.role, content: message.content });
-
-            // Extract text
-            let textContent = "";
-            if (Array.isArray(message.content)) {
-              textContent = message.content
-                .filter((b) => b.type === "text")
-                .map((b) => b.text)
-                .join("\n\n");
-            } else {
-              textContent = message.content;
-            }
-
-            const responseTime = Date.now() - startTime;
-
-            // Save message (non-blocking)
-            saveMessage(conversationId, message.role, textContent, {
-              contentType: "TEXT",
-              responseTimeMs: responseTime,
-              shopDomain,
-              visitorId,
-            }).catch((err) => console.error("Error saving assistant message:", err));
-
-            // Track analytics (non-blocking)
-            const trackingId = visitorId || fingerprintId || conversationId;
-            try {
-              ChatEvents.messageReceived(trackingId, {
-                conversationId,
-                responseTimeMs: responseTime,
-                contentLength: textContent.length,
-              });
-            } catch (e) {
-              console.warn("Analytics failed:", e);
-            }
-
-            stream.sendMessage({ type: "message_complete" });
-          },
-
           onToolUse: async (content) => {
             const toolName = content.name;
             const toolArgs = content.input;
-            const toolUseId = content.id;
-
+            
             stream.sendMessage({
               type: "tool_use",
               tool_use_message: `Calling tool: ${toolName}`,
@@ -368,29 +327,102 @@ async function handleChatSession({
               console.warn("Analytics failed:", e);
             }
 
+            // Call the tool
             const toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
 
+            // Handle errors or success for the UI stream
             if (toolUseResponse.error) {
-              await toolService.handleToolError(
-                toolUseResponse,
-                toolName,
-                toolUseId,
-                conversationHistory,
-                stream.sendMessage,
-                conversationId
-              );
+                // We use the service just for formatting logic/logging if needed, 
+                // but we will handle the SAVING manually below to preserve order.
+                if(toolUseResponse.error.type === 'auth_required') {
+                    stream.sendMessage({ type: 'auth_required' });
+                }
             } else {
-              await toolService.handleToolSuccess(
-                toolUseResponse,
-                toolName,
-                toolUseId,
-                conversationHistory,
-                [],
-                conversationId
-              );
+                 // Check if this is a product search result to help the UI
+                if (toolName === "search_shop_catalog" && toolService.processProductSearchResult) {
+                    toolService.processProductSearchResult(toolUseResponse);
+                }
             }
 
+            // Prepare the tool result message
+            const resultContent = toolUseResponse.error ? (toolUseResponse.error.data || "Error") : toolUseResponse.content;
+            
+            const toolResultMessage = {
+              role: 'user',
+              content: [{
+                type: "tool_result",
+                tool_use_id: content.id,
+                content: resultContent
+              }]
+            };
+
+            // Add to buffer - DO NOT SAVE TO DB YET
+            toolResultsBuffer.push(toolResultMessage);
+
             stream.sendMessage({ type: "new_message" });
+          },
+
+          onMessage: async (message) => {
+            // 1. Update in-memory history
+            conversationHistory.push({ role: message.role, content: message.content });
+
+            const responseTime = Date.now() - startTime;
+            
+            // 2. Determine content to save
+            // FIX: If message contains tool_use, we MUST save the full JSON structure
+            let contentToSave = message.content;
+            let contentType = "TEXT";
+
+            if (Array.isArray(message.content)) {
+                // If it contains tools, save as JSON
+                if (message.content.some(b => b.type === 'tool_use')) {
+                    contentToSave = JSON.stringify(message.content);
+                    contentType = "JSON";
+                } else {
+                     // Otherwise just extract text to keep DB clean
+                    contentToSave = message.content
+                        .filter((b) => b.type === "text")
+                        .map((b) => b.text)
+                        .join("\n\n");
+                }
+            }
+
+            // 3. Save Assistant Message FIRST
+            await saveMessage(conversationId, message.role, contentToSave, {
+              contentType,
+              responseTimeMs: responseTime,
+              shopDomain,
+              visitorId,
+            }).catch((err) => console.error("Error saving assistant message:", err));
+
+            // 4. Save Buffered Tool Results SECOND
+            // This guarantees the DB has Assistant(Request) -> User(Result)
+            if (toolResultsBuffer.length > 0) {
+                for (const resMsg of toolResultsBuffer) {
+                    conversationHistory.push(resMsg); // Update memory
+                    
+                    await saveMessage(conversationId, 'user', JSON.stringify(resMsg.content), {
+                        contentType: "JSON",
+                        shopDomain,
+                        visitorId
+                    }).catch(err => console.error("Error saving tool result:", err));
+                }
+                toolResultsBuffer = []; // Clear buffer
+            }
+
+            // Track analytics
+            const trackingId = visitorId || fingerprintId || conversationId;
+            try {
+              ChatEvents.messageReceived(trackingId, {
+                conversationId,
+                responseTimeMs: responseTime,
+                contentLength: fullResponseText.length,
+              });
+            } catch (e) {
+              console.warn("Analytics failed:", e);
+            }
+
+            stream.sendMessage({ type: "message_complete" });
           },
 
           onContentBlock: (contentBlock) => {

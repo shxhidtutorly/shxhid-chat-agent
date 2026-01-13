@@ -205,7 +205,7 @@ async function handleChatRequest(request) {
 }
 
 /* ------------------------
-  Core chat session
+  Core chat session - FIXED VERSION WITH PRODUCT DISPLAY
   ------------------------ */
 async function handleChatSession({
   request,
@@ -267,10 +267,9 @@ async function handleChatSession({
 
     // Save user message
     try {
-      // Pass visitorId to ensure Visitor record is created/linked
       await saveMessage(conversationId, "user", userMessage, {
         shopDomain,
-        visitorId, 
+        visitorId,
       });
     } catch (dbError) {
       console.error("Failed to save user message:", dbError);
@@ -292,10 +291,6 @@ async function handleChatSession({
     let finalMessage = { role: "user", content: userMessage };
     let fullResponseText = "";
 
-    // IMPORTANT: Buffer tool results to save them AFTER the assistant message
-    // This prevents the "unexpected tool_result" error by ensuring correct order
-    let toolResultsBuffer = [];
-
     while (finalMessage.stop_reason !== "end_turn") {
       finalMessage = await claudeService.streamConversation(
         {
@@ -309,10 +304,50 @@ async function handleChatSession({
             stream.sendMessage({ type: "chunk", chunk: textDelta });
           },
 
+          onMessage: async (message) => {
+            conversationHistory.push({ role: message.role, content: message.content });
+
+            // Extract text
+            let textContent = "";
+            if (Array.isArray(message.content)) {
+              textContent = message.content
+                .filter((b) => b.type === "text")
+                .map((b) => b.text)
+                .join("\n\n");
+            } else {
+              textContent = message.content;
+            }
+
+            const responseTime = Date.now() - startTime;
+
+            // Save message (non-blocking)
+            saveMessage(conversationId, message.role, textContent, {
+              contentType: "TEXT",
+              responseTimeMs: responseTime,
+              shopDomain,
+              visitorId,
+            }).catch((err) => console.error("Error saving assistant message:", err));
+
+            // Track analytics (non-blocking)
+            const trackingId = visitorId || fingerprintId || conversationId;
+            try {
+              ChatEvents.messageReceived(trackingId, {
+                conversationId,
+                responseTimeMs: responseTime,
+                contentLength: textContent.length,
+              });
+            } catch (e) {
+              console.warn("Analytics failed:", e);
+            }
+
+            stream.sendMessage({ type: "message_complete" });
+          },
+
           onToolUse: async (content) => {
             const toolName = content.name;
             const toolArgs = content.input;
-            
+            const toolUseId = content.id;
+
             stream.sendMessage({
               type: "tool_use",
               tool_use_message: `Calling tool: ${toolName}`,
@@ -333,100 +368,41 @@ async function handleChatSession({
             // Call the tool
             const toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
 
-            // Handle errors or success for the UI stream
-            if (toolUseResponse.error) {
-                // We use the service just for formatting logic/logging if needed, 
-                // but we will handle the SAVING manually below to preserve order.
-                if(toolUseResponse.error.type === 'auth_required') {
-                    stream.sendMessage({ type: 'auth_required' });
-                }
-            } else {
-                 // Check if this is a product search result to help the UI
-                if (toolName === "search_shop_catalog" && toolService.processProductSearchResult) {
-                    // FIX: Pass shopDomain so we can generate valid absolute URLs
-                    toolService.processProductSearchResult(toolUseResponse, shopDomain);
-                }
+            // ✅ CRITICAL FIX: Process and send products to frontend
+            if (toolName === "search_shop_catalog" && !toolUseResponse.error) {
+              const products = toolService.processProductSearchResult(toolUseResponse, shopDomain);
+              
+              // Send products to frontend for display
+              if (products && products.length > 0) {
+                console.log(`📦 Sending ${products.length} products to frontend`);
+                stream.sendMessage({
+                  type: "product_results",
+                  products: products
+                });
+              }
             }
 
-            // Prepare the tool result message
-            const resultContent = toolUseResponse.error ? (toolUseResponse.error.data || "Error") : toolUseResponse.content;
-            
-            const toolResultMessage = {
-              role: 'user',
-              content: [{
-                type: "tool_result",
-                tool_use_id: content.id,
-                content: resultContent
-              }]
-            };
-
-            // Add to buffer - DO NOT SAVE TO DB YET
-            toolResultsBuffer.push(toolResultMessage);
+            if (toolUseResponse.error) {
+              await toolService.handleToolError(
+                toolUseResponse,
+                toolName,
+                toolUseId,
+                conversationHistory,
+                stream.sendMessage,
+                conversationId
+              );
+            } else {
+              await toolService.handleToolSuccess(
+                toolUseResponse,
+                toolName,
+                toolUseId,
+                conversationHistory,
+                [],
+                conversationId
+              );
+            }
 
             stream.sendMessage({ type: "new_message" });
-          },
-
-          onMessage: async (message) => {
-            // 1. Update in-memory history
-            conversationHistory.push({ role: message.role, content: message.content });
-
-            const responseTime = Date.now() - startTime;
-            
-            // 2. Determine content to save
-            // FIX: If message contains tool_use, we MUST save the full JSON structure
-            let contentToSave = message.content;
-            let contentType = "TEXT";
-
-            if (Array.isArray(message.content)) {
-                // If it contains tools, save as JSON
-                if (message.content.some(b => b.type === 'tool_use')) {
-                    contentToSave = JSON.stringify(message.content);
-                    contentType = "JSON";
-                } else {
-                     // Otherwise just extract text to keep DB clean
-                    contentToSave = message.content
-                        .filter((b) => b.type === "text")
-                        .map((b) => b.text)
-                        .join("\n\n");
-                }
-            }
-
-            // 3. Save Assistant Message FIRST
-            await saveMessage(conversationId, message.role, contentToSave, {
-              contentType,
-              responseTimeMs: responseTime,
-              shopDomain,
-              visitorId,
-            }).catch((err) => console.error("Error saving assistant message:", err));
-
-            // 4. Save Buffered Tool Results SECOND
-            // This guarantees the DB has Assistant(Request) -> User(Result)
-            if (toolResultsBuffer.length > 0) {
-                for (const resMsg of toolResultsBuffer) {
-                    conversationHistory.push(resMsg); // Update memory
-                    
-                    await saveMessage(conversationId, 'user', JSON.stringify(resMsg.content), {
-                        contentType: "JSON",
-                        shopDomain,
-                        visitorId
-                    }).catch(err => console.error("Error saving tool result:", err));
-                }
-                toolResultsBuffer = []; // Clear buffer
-            }
-
-            // Track analytics
-            const trackingId = visitorId || fingerprintId || conversationId;
-            try {
-              ChatEvents.messageReceived(trackingId, {
-                conversationId,
-                responseTimeMs: responseTime,
-                contentLength: fullResponseText.length,
-              });
-            } catch (e) {
-              console.warn("Analytics failed:", e);
-            }
-
-            stream.sendMessage({ type: "message_complete" });
           },
 
           onContentBlock: (contentBlock) => {
@@ -462,7 +438,6 @@ async function handleChatSession({
     });
   }
 }
-
 /* ------------------------
    Get customer URLs helper
    ------------------------ */

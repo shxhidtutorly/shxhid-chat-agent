@@ -1,7 +1,10 @@
 // app/routes/chat.jsx
 /**
  * Chat API Route - FIXED VERSION
- * Fixes: P2025 (Visitor ID) & invalid_request_error (Tool Use Order/Data Loss)
+ * Fixes: 
+ * 1. P2025 (Visitor ID errors)
+ * 2. invalid_request_error (Tool Use Order/Data Loss)
+ * 3. Broken Product URLs & Images (Passes shopDomain to tool processor)
  */
 
 export async function loader({ request }) {
@@ -340,7 +343,8 @@ async function handleChatSession({
             } else {
                  // Check if this is a product search result to help the UI
                 if (toolName === "search_shop_catalog" && toolService.processProductSearchResult) {
-                    toolService.processProductSearchResult(toolUseResponse);
+                    // FIX: Pass shopDomain so we can generate valid absolute URLs
+                    toolService.processProductSearchResult(toolUseResponse, shopDomain);
                 }
             }
 

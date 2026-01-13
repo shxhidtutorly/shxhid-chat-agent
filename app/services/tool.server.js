@@ -1,10 +1,8 @@
 // app/services/tool.server.js
 /**
- * Tool Service - FIXED VERSION
+ * Tool Service - COMPLETE FIXED VERSION
  * Manages tool execution and product processing
  */
-
-import { saveMessage } from "../db.server";
 
 export function createToolService() {
   const MAX_PRODUCTS_TO_DISPLAY = 8;
@@ -130,71 +128,8 @@ export function createToolService() {
     }
   };
 
-  /**
-   * Handle tool errors
-   */
-  const handleToolError = async (
-    toolUseResponse,
-    toolName,
-    toolUseId,
-    conversationHistory,
-    sendMessage,
-    conversationId
-  ) => {
-    console.error(`Tool ${toolName} error:`, toolUseResponse.error);
-
-    const errorContent = {
-      type: "tool_result",
-      tool_use_id: toolUseId,
-      content: JSON.stringify({
-        error: toolUseResponse.error.data || toolUseResponse.error,
-      }),
-      is_error: true,
-    };
-
-    conversationHistory.push({
-      role: "user",
-      content: [errorContent],
-    });
-
-    if (sendMessage) {
-      sendMessage({
-        type: "tool_error",
-        tool_name: toolName,
-        error: toolUseResponse.error.data || toolUseResponse.error,
-      });
-    }
-  };
-
-  /**
-   * Handle successful tool calls
-   */
-  const handleToolSuccess = async (
-    toolUseResponse,
-    toolName,
-    toolUseId,
-    conversationHistory,
-    images,
-    conversationId
-  ) => {
-    console.log(`Tool ${toolName} succeeded`);
-
-    const resultContent = {
-      type: "tool_result",
-      tool_use_id: toolUseId,
-      content: toolUseResponse.content || [],
-    };
-
-    conversationHistory.push({
-      role: "user",
-      content: [resultContent],
-    });
-  };
-
   return {
     processProductSearchResult,
-    handleToolError,
-    handleToolSuccess,
   };
 }
 

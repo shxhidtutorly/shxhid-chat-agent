@@ -205,7 +205,7 @@ async function handleChatRequest(request) {
 }
 
 /* ------------------------
-  Core chat session - FIXED VERSION WITH PRODUCT DISPLAY
+  Core chat session - COMPLETE FIX
   ------------------------ */
 async function handleChatSession({
   request,
@@ -305,9 +305,13 @@ async function handleChatSession({
           },
 
           onMessage: async (message) => {
-            conversationHistory.push({ role: message.role, content: message.content });
+            // ✅ CRITICAL FIX: Add assistant message to history FIRST (with tool_use blocks)
+            conversationHistory.push({ 
+              role: message.role, 
+              content: message.content 
+            });
 
-            // Extract text
+            // Extract text content for saving to database
             let textContent = "";
             if (Array.isArray(message.content)) {
               textContent = message.content
@@ -320,13 +324,15 @@ async function handleChatSession({
 
             const responseTime = Date.now() - startTime;
 
-            // Save message (non-blocking)
-            saveMessage(conversationId, message.role, textContent, {
-              contentType: "TEXT",
-              responseTimeMs: responseTime,
-              shopDomain,
-              visitorId,
-            }).catch((err) => console.error("Error saving assistant message:", err));
+            // Save message to database (non-blocking)
+            if (textContent.trim()) {
+              saveMessage(conversationId, message.role, textContent, {
+                contentType: "TEXT",
+                responseTimeMs: responseTime,
+                shopDomain,
+                visitorId,
+              }).catch((err) => console.error("Error saving assistant message:", err));
+            }
 
             // Track analytics (non-blocking)
             const trackingId = visitorId || fingerprintId || conversationId;
@@ -368,11 +374,10 @@ async function handleChatSession({
             // Call the tool
             const toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
 
-            // ✅ CRITICAL FIX: Process and send products to frontend
+            // ✅ Process and send products to frontend BEFORE adding to conversation
             if (toolName === "search_shop_catalog" && !toolUseResponse.error) {
               const products = toolService.processProductSearchResult(toolUseResponse, shopDomain);
               
-              // Send products to frontend for display
               if (products && products.length > 0) {
                 console.log(`📦 Sending ${products.length} products to frontend`);
                 stream.sendMessage({
@@ -382,24 +387,38 @@ async function handleChatSession({
               }
             }
 
+            // ✅ CRITICAL FIX: Add tool_result to conversation history as USER message
             if (toolUseResponse.error) {
-              await toolService.handleToolError(
-                toolUseResponse,
-                toolName,
-                toolUseId,
-                conversationHistory,
-                stream.sendMessage,
-                conversationId
-              );
+              const errorContent = {
+                type: "tool_result",
+                tool_use_id: toolUseId,
+                content: JSON.stringify({
+                  error: toolUseResponse.error.data || toolUseResponse.error,
+                }),
+                is_error: true,
+              };
+
+              conversationHistory.push({
+                role: "user",
+                content: [errorContent],
+              });
+
+              stream.sendMessage({
+                type: "tool_error",
+                tool_name: toolName,
+                error: toolUseResponse.error.data || toolUseResponse.error,
+              });
             } else {
-              await toolService.handleToolSuccess(
-                toolUseResponse,
-                toolName,
-                toolUseId,
-                conversationHistory,
-                [],
-                conversationId
-              );
+              const resultContent = {
+                type: "tool_result",
+                tool_use_id: toolUseId,
+                content: toolUseResponse.content || [],
+              };
+
+              conversationHistory.push({
+                role: "user",
+                content: [resultContent],
+              });
             }
 
             stream.sendMessage({ type: "new_message" });

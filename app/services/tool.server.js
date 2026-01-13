@@ -1,3 +1,4 @@
+// app/services/tool.server.js
 /**
  * Tool Service
  * Manages tool execution and processing
@@ -5,146 +6,81 @@
 import { saveMessage } from "../db.server";
 import AppConfig from "./config.server";
 
-/**
- * Creates a tool service instance
- * @returns {Object} Tool service with methods for managing tools
- */
 export function createToolService() {
+
   /**
-   * Handles a tool error response
-   * @param {Object} toolUseResponse - The error response from the tool
-   * @param {string} toolName - The name of the tool
-   * @param {string} toolUseId - The ID of the tool use request
-   * @param {Array} conversationHistory - The conversation history
-   * @param {Function} sendMessage - Function to send messages to the client
-   * @param {string} conversationId - The conversation ID
+   * Helper to fix URLs by prepending shop domain if needed
    */
-  const handleToolError = async (toolUseResponse, toolName, toolUseId, conversationHistory, sendMessage, conversationId) => {
-    if (toolUseResponse.error.type === "auth_required") {
-      console.log("Auth required for tool:", toolName);
-      await addToolResultToHistory(conversationHistory, toolUseId, toolUseResponse.error.data, conversationId);
-      sendMessage({ type: 'auth_required' });
-    } else {
-      console.log("Tool use error", toolUseResponse.error);
-      await addToolResultToHistory(conversationHistory, toolUseId, toolUseResponse.error.data, conversationId);
-    }
+  const fixUrl = (url, shopDomain) => {
+    if (!url) return '';
+    if (url.startsWith('http')) return url;
+    // Remove leading slash if present to avoid double slashes
+    const cleanPath = url.startsWith('/') ? url.substring(1) : url;
+    return `https://${shopDomain}/${cleanPath}`;
   };
 
   /**
-   * Handles a successful tool response
-   * @param {Object} toolUseResponse - The response from the tool
-   * @param {string} toolName - The name of the tool
-   * @param {string} toolUseId - The ID of the tool use request
-   * @param {Array} conversationHistory - The conversation history
-   * @param {Array} productsToDisplay - Array to add product results to
-   * @param {string} conversationId - The conversation ID
+   * Processes product search results and FIXES data for the AI
    */
-  const handleToolSuccess = async (toolUseResponse, toolName, toolUseId, conversationHistory, productsToDisplay, conversationId) => {
-    // Check if this is a product search result
-    if (toolName === AppConfig.tools.productSearchName) {
-      productsToDisplay.push(...processProductSearchResult(toolUseResponse));
-    }
-
-    addToolResultToHistory(conversationHistory, toolUseId, toolUseResponse.content, conversationId);
-  };
-
-  /**
-   * Processes product search results
-   * @param {Object} toolUseResponse - The response from the tool
-   * @returns {Array} Processed product data
-   */
-  const processProductSearchResult = (toolUseResponse) => {
+  const processProductSearchResult = (toolUseResponse, shopDomain) => {
     try {
-      console.log("Processing product search result");
-      let products = [];
-
+      console.log("Processing product search result for domain:", shopDomain);
+      
       if (toolUseResponse.content && toolUseResponse.content.length > 0) {
-        const content = toolUseResponse.content[0].text;
-
+        // 1. Parse the JSON content
+        let contentText = toolUseResponse.content[0].text;
+        let responseData;
+        
         try {
-          let responseData;
-          if (typeof content === 'object') {
-            responseData = content;
-          } else if (typeof content === 'string') {
-            responseData = JSON.parse(content);
-          }
-
-          if (responseData?.products && Array.isArray(responseData.products)) {
-            products = responseData.products
-              .slice(0, AppConfig.tools.maxProductsToDisplay)
-              .map(formatProductData);
-
-            console.log(`Found ${products.length} products to display`);
-          }
+          responseData = typeof contentText === 'string' ? JSON.parse(contentText) : contentText;
         } catch (e) {
-          console.error("Error parsing product data:", e);
+          console.error("Failed to parse tool content:", e);
+          return null;
+        }
+
+        // 2. Fix Products
+        if (responseData?.products && Array.isArray(responseData.products)) {
+          const fixedProducts = responseData.products.map(p => {
+             // Fix Image URL
+             const fixedImage = fixUrl(p.image_url || p.featuredImage?.url, shopDomain);
+             
+             // Fix Product URL
+             const fixedProductUrl = fixUrl(p.url || p.onlineStoreUrl, shopDomain);
+
+             // Generate Checkout URL (if variant exists)
+             let checkoutUrl = '';
+             if (p.variants && p.variants.length > 0) {
+                const variantId = p.variants[0].id.replace('gid://shopify/ProductVariant/', '');
+                checkoutUrl = `https://${shopDomain}/cart/${variantId}:1`;
+             }
+
+             return {
+                ...p,
+                image_url: fixedImage,
+                url: fixedProductUrl,
+                checkout_url: checkoutUrl
+             };
+          });
+
+          // 3. Update the response data with fixed products
+          responseData.products = fixedProducts;
+          
+          // 4. Update the actual toolUseResponse content so Claude sees the FIXED URLs
+          toolUseResponse.content[0].text = JSON.stringify(responseData);
+          
+          // Return for display if needed
+          return fixedProducts.slice(0, AppConfig.tools.maxProductsToDisplay);
         }
       }
-
-      return products;
+      return [];
     } catch (error) {
       console.error("Error processing product search results:", error);
       return [];
     }
   };
 
-  /**
-   * Formats a product data object
-   * @param {Object} product - Raw product data
-   * @returns {Object} Formatted product data
-   */
-  const formatProductData = (product) => {
-    const price = product.price_range
-      ? `${product.price_range.currency} ${product.price_range.min}`
-      : (product.variants && product.variants.length > 0
-        ? `${product.variants[0].currency} ${product.variants[0].price}`
-        : 'Price not available');
-
-    return {
-      id: product.product_id || `product-${Math.random().toString(36).substring(7)}`,
-      title: product.title || 'Product',
-      price: price,
-      image_url: product.image_url || '',
-      description: product.description || '',
-      url: product.url || ''
-    };
-  };
-
-  /**
-   * Adds a tool result to the conversation history
-   * @param {Array} conversationHistory - The conversation history
-   * @param {string} toolUseId - The ID of the tool use request
-   * @param {string} content - The content of the tool result
-   * @param {string} conversationId - The conversation ID
-   */
-  const addToolResultToHistory = async (conversationHistory, toolUseId, content, conversationId) => {
-    const toolResultMessage = {
-      role: 'user',
-      content: [{
-        type: "tool_result",
-        tool_use_id: toolUseId,
-        content: content
-      }]
-    };
-
-    // Add to in-memory history
-    conversationHistory.push(toolResultMessage);
-
-    // Save to database with special format to indicate tool result
-    if (conversationId) {
-      try {
-        await saveMessage(conversationId, 'user', JSON.stringify(toolResultMessage.content));
-      } catch (error) {
-        console.error('Error saving tool result to database:', error);
-      }
-    }
-  };
-
   return {
-    handleToolError,
-    handleToolSuccess,
-    processProductSearchResult,
-    addToolResultToHistory
+    processProductSearchResult
   };
 }
 

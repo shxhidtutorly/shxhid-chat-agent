@@ -2,7 +2,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 /**
- * Create Claude service instance
+ * Create Claude service 
  */
 export function createClaudeService() {
   // CRITICAL: Check API key exists

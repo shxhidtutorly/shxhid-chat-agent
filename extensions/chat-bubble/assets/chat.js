@@ -1817,7 +1817,6 @@
         setTimeout(poll, 2000);
       }
     },
-
     // ============================================
     // PRODUCT CARDS
     // ============================================
@@ -1827,25 +1826,36 @@
         const card = document.createElement('div');
         card.classList.add('shop-ai-product-card');
 
+        // -------------------------
+        // 1) IMAGE
+        // -------------------------
         const imageContainer = document.createElement('div');
         imageContainer.classList.add('shop-ai-product-image');
 
         const image = document.createElement('img');
+        // Backend already provides a full CDN image_url
         image.src = product.image_url || 'https://cdn.shopify.com/s/files/1/0533/2089/files/placeholder-images-image_large.png';
         image.alt = product.title || 'Product';
         image.loading = 'lazy';
         image.onerror = function() {
           this.src = 'https://cdn.shopify.com/s/files/1/0533/2089/files/placeholder-images-image_large.png';
         };
+
         imageContainer.appendChild(image);
         card.appendChild(imageContainer);
 
+        // -------------------------
+        // 2) INFO WRAPPER
+        // -------------------------
         const info = document.createElement('div');
         info.classList.add('shop-ai-product-info');
 
+        // Title
         const title = document.createElement('h3');
         title.classList.add('shop-ai-product-title');
-        
+
+        // If backend ever adds a product URL, link the title. For now, most
+        // of your responses have no URL, so we just show plain text.
         if (product.url) {
           const titleLink = document.createElement('a');
           titleLink.href = product.url;
@@ -1858,16 +1868,61 @@
         }
         info.appendChild(title);
 
-        const price = document.createElement('p');
-        price.classList.add('shop-ai-product-price');
-        price.textContent = product.price || '';
-        info.appendChild(price);
+        // -------------------------
+        // 3) PRICE (FROM price_range)
+        // -------------------------
+        const priceEl = document.createElement('p');
+        priceEl.classList.add('shop-ai-product-price');
 
+        // Your backend returns price_range: { min, max, currency }
+        let priceText = '';
+        if (product.price) {
+          // If backend already normalized a price string, prefer that
+          priceText = product.price;
+        } else if (product.price_range) {
+          const pr = product.price_range;
+          const currency = pr.currency || '';
+          if (pr.min && pr.max && pr.min !== pr.max) {
+            priceText = `${pr.min} – ${pr.max} ${currency}`;
+          } else if (pr.min) {
+            priceText = `${pr.min} ${currency}`;
+          }
+        }
+
+        priceEl.textContent = priceText;
+        info.appendChild(priceEl);
+
+        // -------------------------
+        // 4) ADD TO CART BUTTON
+        // -------------------------
         const button = document.createElement('button');
         button.classList.add('shop-ai-add-to-cart');
         button.textContent = 'Add to Cart';
-        button.dataset.productId = product.id;
 
+        // Use product_id (gid) as ID; your backend uses product_id, not id
+        button.dataset.productId = product.id || product.product_id || '';
+
+        // If checkout_url exists, we could also support a direct link checkout:
+        // (optional, uncomment if you want):
+        //
+        // if (product.checkout_url) {
+        //   button.addEventListener('click', () => {
+        //     window.open(product.checkout_url, '_blank', 'noopener,noreferrer');
+        //   });
+        // } else {
+        //   // Fallback: send natural language message to the bot
+        //   button.addEventListener('click', () => {
+        //     const { chatInput, sendButton } = ShopAIChat.UI.elements;
+        //     if (chatInput) {
+        //       chatInput.value = `Add ${product.title} to my cart`;
+        //       ShopAIChat.UI.autoResizeTextarea();
+        //       ShopAIChat.UI.updateSubmitButton();
+        //       if (sendButton) sendButton.click();
+        //     }
+        //   });
+        // }
+
+        // For now, we keep the original NL-based "add to cart" behavior:
         button.addEventListener('click', () => {
           const { chatInput, sendButton } = ShopAIChat.UI.elements;
           if (chatInput) {

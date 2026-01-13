@@ -1,13 +1,6 @@
 // app/services/tool.server.js
-/**
- * Tool Service
- * Manages tool execution and processing
- */
-import { saveMessage } from "../db.server";
-import AppConfig from "./config.server";
 
 export function createToolService() {
-
   /**
    * Helper to fix URLs by prepending shop domain if needed
    */
@@ -38,28 +31,57 @@ export function createToolService() {
           return null;
         }
 
+        // Extra debug to see the raw shape on Railway
+        console.log("Raw product search response (first 1 product):", 
+          Array.isArray(responseData?.products) ? responseData.products.slice(0, 1) : responseData);
+
         // 2. Fix Products
         if (responseData?.products && Array.isArray(responseData.products)) {
           const fixedProducts = responseData.products.map(p => {
-             // Fix Image URL
-             const fixedImage = fixUrl(p.image_url || p.featuredImage?.url, shopDomain);
-             
-             // Fix Product URL
-             const fixedProductUrl = fixUrl(p.url || p.onlineStoreUrl, shopDomain);
+            // Try to find an image in multiple possible fields
+            const rawImageUrl =
+              p.image_url ||                      // custom / normalized field
+              p.featuredImage?.url ||             // Storefront API featuredImage
+              p.image?.url ||                     // sometimes tools might map to image.url
+              (p.images &&
+                Array.isArray(p.images.edges) &&
+                p.images.edges[0]?.node?.url) ||  // first image from images connection
+              '';
 
-             // Generate Checkout URL (if variant exists)
-             let checkoutUrl = '';
-             if (p.variants && p.variants.length > 0) {
-                const variantId = p.variants[0].id.replace('gid://shopify/ProductVariant/', '');
-                checkoutUrl = `https://${shopDomain}/cart/${variantId}:1`;
-             }
+            const fixedImage = fixUrl(rawImageUrl, shopDomain);
 
-             return {
-                ...p,
-                image_url: fixedImage,
-                url: fixedProductUrl,
-                checkout_url: checkoutUrl
-             };
+            // Fix Product URL
+            const rawProductUrl =
+              p.url ||             // normalized url
+              p.onlineStoreUrl ||  // Storefront API field
+              '';
+
+            const fixedProductUrl = fixUrl(rawProductUrl, shopDomain);
+
+            // Generate Checkout URL (if variant exists and has id)
+            let checkoutUrl = '';
+            const firstVariant =
+              Array.isArray(p.variants) && p.variants.length > 0
+                ? p.variants[0]
+                : null;
+
+            if (firstVariant && firstVariant.id) {
+              const variantGid = firstVariant.id;
+              // Only try replace if it's a string and includes the expected prefix
+              let numericVariantId = variantGid;
+              const prefix = 'gid://shopify/ProductVariant/';
+              if (typeof variantGid === 'string' && variantGid.startsWith(prefix)) {
+                numericVariantId = variantGid.replace(prefix, '');
+              }
+              checkoutUrl = `https://${shopDomain}/cart/${numericVariantId}:1`;
+            }
+
+            return {
+              ...p,
+              image_url: fixedImage,
+              url: fixedProductUrl,
+              checkout_url: checkoutUrl,
+            };
           });
 
           // 3. Update the response data with fixed products

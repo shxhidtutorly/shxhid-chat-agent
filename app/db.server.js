@@ -1,3 +1,4 @@
+// app/db.server.js
 /**
  * Database Server Module - PostgreSQL with Railway
  * Handles all database operations for chat, leads, and analytics
@@ -22,11 +23,6 @@ export default prisma;
 // VISITOR & LEAD MANAGEMENT
 // ============================================
 
-/**
- * Create or update a visitor
- * @param {Object} visitorData - Visitor information
- * @returns {Promise<Object>} - The visitor record
- */
 export async function createOrUpdateVisitor({
   fingerprintId,
   sessionId,
@@ -41,32 +37,34 @@ export async function createOrUpdateVisitor({
 }) {
   try {
     if (fingerprintId) {
-      // Try to find existing visitor by fingerprint
-      const existing = await prisma.visitor.findUnique({
-        where: { fingerprintId }
+      return await prisma.visitor.upsert({
+        where: { fingerprintId },
+        create: {
+          fingerprintId,
+          sessionId,
+          shopDomain,
+          userAgent,
+          ipAddress,
+          utmSource,
+          utmMedium,
+          utmCampaign,
+          utmTerm,
+          utmContent,
+        },
+        update: {
+          lastSeenAt: new Date(),
+          visitCount: { increment: 1 },
+          sessionId,
+          userAgent,
+          ...(utmSource && { utmSource }),
+          ...(utmMedium && { utmMedium }),
+          ...(utmCampaign && { utmCampaign }),
+          ...(utmTerm && { utmTerm }),
+          ...(utmContent && { utmContent }),
+        }
       });
-
-      if (existing) {
-        // Update existing visitor
-        return await prisma.visitor.update({
-          where: { fingerprintId },
-          data: {
-            lastSeenAt: new Date(),
-            visitCount: { increment: 1 },
-            sessionId,
-            userAgent,
-            // Only update UTM if provided
-            ...(utmSource && { utmSource }),
-            ...(utmMedium && { utmMedium }),
-            ...(utmCampaign && { utmCampaign }),
-            ...(utmTerm && { utmTerm }),
-            ...(utmContent && { utmContent }),
-          }
-        });
-      }
     }
 
-    // Create new visitor
     return await prisma.visitor.create({
       data: {
         fingerprintId,
@@ -87,11 +85,6 @@ export async function createOrUpdateVisitor({
   }
 }
 
-/**
- * Capture lead email
- * @param {Object} leadData - Lead information
- * @returns {Promise<Object>} - The lead record
- */
 export async function captureLeadEmail({
   email,
   shopDomain,
@@ -103,7 +96,7 @@ export async function captureLeadEmail({
   visitorId
 }) {
   try {
-    // Create lead record
+    // 1. Create/Update Lead Record
     const lead = await prisma.lead.upsert({
       where: {
         email_shopDomain: { email, shopDomain }
@@ -125,19 +118,27 @@ export async function captureLeadEmail({
       }
     });
 
-    // Update visitor if we have visitorId
+    // 2. Link to Visitor (Fixes P2025 Error)
+    // We use upsert to ensure we don't crash if the visitor ID is missing
     if (visitorId) {
-      await prisma.visitor.update({
+      await prisma.visitor.upsert({
         where: { id: visitorId },
-        data: {
+        create: {
+          id: visitorId,
+          email,
+          shopDomain: shopDomain || 'unknown',
+          emailCapturedAt: new Date(),
+          leadStatus: 'LEAD',
+        },
+        update: {
           email,
           emailCapturedAt: new Date(),
           leadStatus: 'LEAD',
         }
-      });
+      }).catch(err => console.warn("Visitor upsert warning:", err.message));
     }
 
-    // Track analytics event
+    // 3. Track Analytics
     if (conversationId) {
       await trackAnalyticsEvent({
         conversationId,
@@ -154,12 +155,6 @@ export async function captureLeadEmail({
   }
 }
 
-/**
- * Get leads for a shop
- * @param {string} shopDomain - Shop domain
- * @param {Object} options - Query options
- * @returns {Promise<Array>} - List of leads
- */
 export async function getLeadsByShop(shopDomain, { limit = 100, offset = 0, status } = {}) {
   try {
     return await prisma.lead.findMany({
@@ -177,11 +172,6 @@ export async function getLeadsByShop(shopDomain, { limit = 100, offset = 0, stat
   }
 }
 
-/**
- * Check if visitor has provided email
- * @param {string} visitorId - Visitor ID or fingerprint
- * @returns {Promise<boolean>}
- */
 export async function hasVisitorProvidedEmail(visitorId) {
   try {
     const visitor = await prisma.visitor.findFirst({
@@ -202,15 +192,9 @@ export async function hasVisitorProvidedEmail(visitorId) {
 }
 
 // ============================================
-// CONVERSATION MANAGEMENT
+// CONVERSATION & MESSAGE MANAGEMENT
 // ============================================
 
-/**
- * Create or update a conversation in the database
- * @param {string} conversationId - The conversation ID
- * @param {Object} options - Additional options
- * @returns {Promise<Object>} - The created or updated conversation
- */
 export async function createOrUpdateConversation(conversationId, {
   visitorId,
   shopDomain,
@@ -218,59 +202,26 @@ export async function createOrUpdateConversation(conversationId, {
   title
 } = {}) {
   try {
-    const existingConversation = await prisma.conversation.findUnique({
-      where: { id: conversationId }
-    });
-
-    if (existingConversation) {
-      return await prisma.conversation.update({
-        where: { id: conversationId },
-        data: {
-          updatedAt: new Date(),
-          ...(title && { title }),
-        }
-      });
-    }
-
-    const conversation = await prisma.conversation.create({
-      data: {
+    return await prisma.conversation.upsert({
+      where: { id: conversationId },
+      create: {
         id: conversationId,
         visitorId,
         shopDomain,
         shopId,
         title: title || 'Chat',
+      },
+      update: {
+        updatedAt: new Date(),
+        ...(title && { title }),
       }
     });
-
-    // Update visitor stats if available
-    if (visitorId) {
-      await prisma.visitor.update({
-        where: { id: visitorId },
-        data: {
-          totalChats: { increment: 1 },
-          leadStatus: 'ENGAGED',
-        }
-      }).catch(console.error);
-    }
-
-    // Track analytics
-    await trackAnalyticsEvent({
-      conversationId,
-      eventType: 'CHAT_STARTED',
-      shopDomain,
-    });
-
-    return conversation;
   } catch (error) {
     console.error('Error creating/updating conversation:', error);
     throw error;
   }
 }
 
-/**
- * End a conversation
- * @param {string} conversationId - The conversation ID
- */
 export async function endConversation(conversationId) {
   try {
     await prisma.conversation.update({
@@ -280,7 +231,6 @@ export async function endConversation(conversationId) {
         endedAt: new Date(),
       }
     });
-
     await trackAnalyticsEvent({
       conversationId,
       eventType: 'CHAT_ENDED',
@@ -290,11 +240,6 @@ export async function endConversation(conversationId) {
   }
 }
 
-/**
- * Get conversation with messages
- * @param {string} conversationId - The conversation ID
- * @returns {Promise<Object|null>}
- */
 export async function getConversationWithMessages(conversationId) {
   try {
     return await prisma.conversation.findUnique({
@@ -318,18 +263,6 @@ export async function getConversationWithMessages(conversationId) {
   }
 }
 
-// ============================================
-// MESSAGE MANAGEMENT
-// ============================================
-
-/**
- * Save a message to the database
- * @param {string} conversationId - The conversation ID
- * @param {string} role - The message role (user or assistant)
- * @param {string} content - The message content
- * @param {Object} options - Additional options
- * @returns {Promise<Object>} - The saved message
- */
 export async function saveMessage(conversationId, role, content, {
   contentType = 'TEXT',
   toolName,
@@ -339,10 +272,19 @@ export async function saveMessage(conversationId, role, content, {
   visitorId
 } = {}) {
   try {
-    // Ensure the conversation exists
+    // Ensure visitor exists first
+    if (visitorId) {
+      await prisma.visitor.upsert({
+        where: { id: visitorId },
+        create: { id: visitorId, shopDomain: shopDomain || 'unknown' },
+        update: { lastSeenAt: new Date() }
+      }).catch(e => null);
+    }
+
+    // Ensure conversation exists
     await createOrUpdateConversation(conversationId, { shopDomain, visitorId });
 
-    // Create the message
+    // Create message
     const message = await prisma.message.create({
       data: {
         conversationId,
@@ -355,7 +297,7 @@ export async function saveMessage(conversationId, role, content, {
       }
     });
 
-    // Update conversation stats
+    // Update stats
     await prisma.conversation.update({
       where: { id: conversationId },
       data: {
@@ -365,25 +307,6 @@ export async function saveMessage(conversationId, role, content, {
       }
     });
 
-    // Update visitor stats if available
-    if (visitorId && role === 'user') {
-      await prisma.visitor.update({
-        where: { id: visitorId },
-        data: {
-          totalMessages: { increment: 1 },
-          lastSeenAt: new Date(),
-        }
-      }).catch(console.error);
-    }
-
-    // Track analytics
-    await trackAnalyticsEvent({
-      conversationId,
-      eventType: role === 'user' ? 'MESSAGE_SENT' : 'MESSAGE_RECEIVED',
-      eventData: { role, contentType, toolName },
-      shopDomain,
-    });
-
     return message;
   } catch (error) {
     console.error('Error saving message:', error);
@@ -391,14 +314,9 @@ export async function saveMessage(conversationId, role, content, {
   }
 }
 
-/**
- * Get conversation history
- * @param {string} conversationId - The conversation ID
- * @returns {Promise<Array>} - Array of messages in the conversation
- */
 export async function getConversationHistory(conversationId) {
   try {
-    const messages = await prisma.message.findMany({
+    return await prisma.message.findMany({
       where: { conversationId },
       orderBy: { createdAt: 'asc' },
       select: {
@@ -410,20 +328,12 @@ export async function getConversationHistory(conversationId) {
         createdAt: true,
       }
     });
-
-    return messages;
   } catch (error) {
     console.error('Error retrieving conversation history:', error);
     return [];
   }
 }
 
-/**
- * Get recent conversations for a visitor
- * @param {string} visitorId - Visitor ID
- * @param {number} limit - Max conversations to return
- * @returns {Promise<Array>}
- */
 export async function getVisitorConversations(visitorId, limit = 20) {
   try {
     return await prisma.conversation.findMany({
@@ -434,10 +344,7 @@ export async function getVisitorConversations(visitorId, limit = 20) {
         messages: {
           take: 1,
           orderBy: { createdAt: 'desc' },
-          select: {
-            content: true,
-            role: true,
-          }
+          select: { content: true, role: true }
         }
       }
     });
@@ -448,13 +355,9 @@ export async function getVisitorConversations(visitorId, limit = 20) {
 }
 
 // ============================================
-// ANALYTICS TRACKING
+// ANALYTICS & AUTH
 // ============================================
 
-/**
- * Track an analytics event
- * @param {Object} eventData - Event data
- */
 export async function trackAnalyticsEvent({
   conversationId,
   eventType,
@@ -473,34 +376,22 @@ export async function trackAnalyticsEvent({
       }
     });
   } catch (error) {
-    // Don't throw - analytics should not break the main flow
     console.error('Error tracking analytics event:', error);
   }
 }
 
-/**
- * Get analytics summary for a shop
- * @param {string} shopDomain - Shop domain
- * @param {Object} options - Query options
- * @returns {Promise<Object>}
- */
 export async function getAnalyticsSummary(shopDomain, { startDate, endDate } = {}) {
   try {
     const where = {
       shopDomain,
       ...(startDate && endDate && {
-        createdAt: {
-          gte: startDate,
-          lte: endDate,
-        }
+        createdAt: { gte: startDate, lte: endDate }
       })
     };
 
     const [totalConversations, totalMessages, totalLeads, eventCounts] = await Promise.all([
       prisma.conversation.count({ where: { shopDomain } }),
-      prisma.message.count({
-        where: { conversation: { shopDomain } }
-      }),
+      prisma.message.count({ where: { conversation: { shopDomain } } }),
       prisma.lead.count({ where: { shopDomain } }),
       prisma.chatAnalytics.groupBy({
         by: ['eventType'],
@@ -524,184 +415,60 @@ export async function getAnalyticsSummary(shopDomain, { startDate, endDate } = {
   }
 }
 
-// ============================================
-// AUTHENTICATION (OAuth/PKCE)
-// ============================================
-
-/**
- * Store a code verifier for PKCE authentication
- * @param {string} state - The state parameter used in OAuth flow
- * @param {string} verifier - The code verifier to store
- * @returns {Promise<Object>} - The saved code verifier object
- */
 export async function storeCodeVerifier(state, verifier) {
   const expiresAt = new Date();
   expiresAt.setMinutes(expiresAt.getMinutes() + 10);
-
-  try {
-    return await prisma.codeVerifier.create({
-      data: {
-        id: `cv_${Date.now()}`,
-        state,
-        verifier,
-        expiresAt
-      }
-    });
-  } catch (error) {
-    console.error('Error storing code verifier:', error);
-    throw error;
-  }
+  return await prisma.codeVerifier.create({
+    data: { id: `cv_${Date.now()}`, state, verifier, expiresAt }
+  });
 }
 
-/**
- * Get a code verifier by state parameter
- * @param {string} state - The state parameter used in OAuth flow
- * @returns {Promise<Object|null>} - The code verifier object or null if not found
- */
 export async function getCodeVerifier(state) {
   try {
     const verifier = await prisma.codeVerifier.findFirst({
-      where: {
-        state,
-        expiresAt: { gt: new Date() }
-      }
+      where: { state, expiresAt: { gt: new Date() } }
     });
-
-    if (verifier) {
-      // Delete after retrieval to prevent reuse
-      await prisma.codeVerifier.delete({
-        where: { id: verifier.id }
-      });
-    }
-
+    if (verifier) await prisma.codeVerifier.delete({ where: { id: verifier.id } });
     return verifier;
-  } catch (error) {
-    console.error('Error retrieving code verifier:', error);
-    return null;
-  }
+  } catch (error) { return null; }
 }
 
-/**
- * Store a customer access token
- * @param {string} conversationId - The conversation ID
- * @param {string} accessToken - The access token
- * @param {Date} expiresAt - Token expiration
- * @returns {Promise<Object>}
- */
 export async function storeCustomerToken(conversationId, accessToken, expiresAt) {
-  try {
-    const existingToken = await prisma.customerToken.findFirst({
-      where: { conversationId }
+  const existingToken = await prisma.customerToken.findFirst({ where: { conversationId } });
+  if (existingToken) {
+    return await prisma.customerToken.update({
+      where: { id: existingToken.id },
+      data: { accessToken, expiresAt, updatedAt: new Date() }
     });
-
-    if (existingToken) {
-      return await prisma.customerToken.update({
-        where: { id: existingToken.id },
-        data: {
-          accessToken,
-          expiresAt,
-          updatedAt: new Date()
-        }
-      });
-    }
-
-    return await prisma.customerToken.create({
-      data: {
-        id: `ct_${Date.now()}`,
-        conversationId,
-        accessToken,
-        expiresAt,
-      }
-    });
-  } catch (error) {
-    console.error('Error storing customer token:', error);
-    throw error;
   }
+  return await prisma.customerToken.create({
+    data: { id: `ct_${Date.now()}`, conversationId, accessToken, expiresAt }
+  });
 }
 
-/**
- * Get a customer access token
- * @param {string} conversationId - The conversation ID
- * @returns {Promise<Object|null>}
- */
 export async function getCustomerToken(conversationId) {
-  try {
-    return await prisma.customerToken.findFirst({
-      where: {
-        conversationId,
-        expiresAt: { gt: new Date() }
-      }
-    });
-  } catch (error) {
-    console.error('Error retrieving customer token:', error);
-    return null;
-  }
+  return await prisma.customerToken.findFirst({
+    where: { conversationId, expiresAt: { gt: new Date() } }
+  });
 }
 
-/**
- * Store customer account URLs
- */
 export async function storeCustomerAccountUrls({ conversationId, mcpApiUrl, authorizationUrl, tokenUrl }) {
-  try {
-    return await prisma.customerAccountUrls.upsert({
-      where: { conversationId },
-      create: {
-        conversationId,
-        mcpApiUrl,
-        authorizationUrl,
-        tokenUrl,
-      },
-      update: {
-        mcpApiUrl,
-        authorizationUrl,
-        tokenUrl,
-        updatedAt: new Date(),
-      },
-    });
-  } catch (error) {
-    console.error('Error storing customer account URLs:', error);
-    throw error;
-  }
+  return await prisma.customerAccountUrls.upsert({
+    where: { conversationId },
+    create: { conversationId, mcpApiUrl, authorizationUrl, tokenUrl },
+    update: { mcpApiUrl, authorizationUrl, tokenUrl, updatedAt: new Date() },
+  });
 }
 
-/**
- * Get customer account URLs
- * @param {string} conversationId - The conversation ID
- * @returns {Promise<Object|null>}
- */
 export async function getCustomerAccountUrls(conversationId) {
-  try {
-    return await prisma.customerAccountUrls.findUnique({
-      where: { conversationId }
-    });
-  } catch (error) {
-    console.error('Error retrieving customer account URLs:', error);
-    return null;
-  }
+  return await prisma.customerAccountUrls.findUnique({ where: { conversationId } });
 }
 
-// ============================================
-// CLEANUP UTILITIES
-// ============================================
-
-/**
- * Clean up expired data
- */
 export async function cleanupExpiredData() {
   try {
     const now = new Date();
-    
-    // Delete expired code verifiers
-    await prisma.codeVerifier.deleteMany({
-      where: { expiresAt: { lt: now } }
-    });
-
-    // Delete expired customer tokens
-    await prisma.customerToken.deleteMany({
-      where: { expiresAt: { lt: now } }
-    });
-
-    console.log('Cleanup completed successfully');
+    await prisma.codeVerifier.deleteMany({ where: { expiresAt: { lt: now } } });
+    await prisma.customerToken.deleteMany({ where: { expiresAt: { lt: now } } });
   } catch (error) {
     console.error('Error during cleanup:', error);
   }

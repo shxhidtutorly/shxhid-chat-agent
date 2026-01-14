@@ -205,7 +205,8 @@ async function handleChatRequest(request) {
 }
 
 /* ------------------------
-  Core chat session - COMPLETE FIX
+  Core chat session - FINAL WORKING VERSION
+  This properly handles the conversation flow for Claude API
   ------------------------ */
 async function handleChatSession({
   request,
@@ -290,8 +291,12 @@ async function handleChatSession({
     // Stream from Claude
     let finalMessage = { role: "user", content: userMessage };
     let fullResponseText = "";
+    let currentAssistantMessage = null;
 
     while (finalMessage.stop_reason !== "end_turn") {
+      // Reset for each turn
+      currentAssistantMessage = null;
+      
       finalMessage = await claudeService.streamConversation(
         {
           messages: conversationHistory,
@@ -305,13 +310,11 @@ async function handleChatSession({
           },
 
           onMessage: async (message) => {
-            // ✅ CRITICAL FIX: Add assistant message to history FIRST (with tool_use blocks)
-            conversationHistory.push({ 
-              role: message.role, 
-              content: message.content 
-            });
+            // ✅ Store the message but DON'T add to history yet
+            // We'll add it after all tool uses are processed
+            currentAssistantMessage = message;
 
-            // Extract text content for saving to database
+            // Extract text content for saving to database and streaming
             let textContent = "";
             if (Array.isArray(message.content)) {
               textContent = message.content
@@ -324,7 +327,7 @@ async function handleChatSession({
 
             const responseTime = Date.now() - startTime;
 
-            // Save message to database (non-blocking)
+            // Save message to database (non-blocking) - only if there's text
             if (textContent.trim()) {
               saveMessage(conversationId, message.role, textContent, {
                 contentType: "TEXT",
@@ -374,7 +377,7 @@ async function handleChatSession({
             // Call the tool
             const toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
 
-            // ✅ Process and send products to frontend BEFORE adding to conversation
+            // ✅ Process and send products to frontend
             if (toolName === "search_shop_catalog" && !toolUseResponse.error) {
               const products = toolService.processProductSearchResult(toolUseResponse, shopDomain);
               
@@ -387,7 +390,17 @@ async function handleChatSession({
               }
             }
 
-            // ✅ CRITICAL FIX: Add tool_result to conversation history as USER message
+            // ✅ CRITICAL: Now add assistant message to history FIRST (if not already added)
+            if (currentAssistantMessage) {
+              conversationHistory.push({
+                role: currentAssistantMessage.role,
+                content: currentAssistantMessage.content
+              });
+              // Mark as added so we don't add it again for multiple tool uses
+              currentAssistantMessage = null;
+            }
+
+            // ✅ Then add tool_result to conversation history as USER message
             if (toolUseResponse.error) {
               const errorContent = {
                 type: "tool_result",
@@ -434,6 +447,15 @@ async function handleChatSession({
           },
         }
       );
+
+      // ✅ If no tools were used, add the assistant message to history now
+      if (currentAssistantMessage) {
+        conversationHistory.push({
+          role: currentAssistantMessage.role,
+          content: currentAssistantMessage.content
+        });
+        currentAssistantMessage = null;
+      }
     }
 
     stream.sendMessage({ type: "end_turn" });

@@ -353,71 +353,91 @@ async function handleChatSession({
           },
 
            onToolUse: async (content) => {
-            const toolName = content.name;
-            const toolArgs = content.input;
-            const toolUseId = content.id;
+  const toolName = content.name;
+  const toolArgs = content.input;
+  const toolUseId = content.id;
 
-            const toolUseMessage = `Calling tool: ${toolName} with arguments: ${JSON.stringify(toolArgs)}`;
+  const toolUseMessage = `Calling tool: ${toolName} with arguments: ${JSON.stringify(toolArgs)}`;
 
-            stream.sendMessage({
-              type: 'tool_use',
-              tool_use_message: toolUseMessage
-            });
+  stream.sendMessage({
+    type: 'tool_use',
+    tool_use_message: toolUseMessage
+  });
 
-            // Call the tool
-            const toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
+  const trackingId = visitorId || fingerprintId || conversationId;
+  try {
+    ChatEvents.toolCalled(trackingId, {
+      conversationId,
+      toolName,
+      toolArgs,
+    });
+  } catch (e) {
+    console.warn("Analytics failed:", e);
+  }
 
-            // ✅ Process and send products to frontend
-            if (toolName === "search_shop_catalog" && !toolUseResponse.error) {
-              const products = toolService.processProductSearchResult(toolUseResponse, shopDomain);
-              
-              if (products && products.length > 0) {
-                console.log(`📦 Sending ${products.length} products to frontend`);
-                stream.sendMessage({
-                  type: "product_results",
-                  products: products
-                });
-              }
-            }
+  // Call the tool
+  const toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
 
-            // ✅ FIX: Add tool_result to conversation history directly
-            // DON'T use handleToolSuccess/handleToolError - they're not needed
-            if (toolUseResponse.error) {
-              const errorContent = {
-                type: "tool_result",
-                tool_use_id: toolUseId,
-                content: JSON.stringify({
-                  error: toolUseResponse.error.data || toolUseResponse.error,
-                }),
-                is_error: true,
-              };
+  // ✅ Process and send products to frontend
+  if (toolName === "search_shop_catalog" && !toolUseResponse.error) {
+    const products = toolService.processProductSearchResult(toolUseResponse, shopDomain);
+    
+    if (products && products.length > 0) {
+      console.log(`📦 Sending ${products.length} products to frontend`);
+      stream.sendMessage({
+        type: "product_results",
+        products: products
+      });
+    }
+  }
 
-              conversationHistory.push({
-                role: "user",
-                content: [errorContent],
-              });
+  // ✅✅✅ CRITICAL FIX: Add assistant message to history FIRST
+  if (currentAssistantMessage) {
+    conversationHistory.push({
+      role: currentAssistantMessage.role,
+      content: currentAssistantMessage.content
+    });
+    currentAssistantMessage = null; // Mark as added
+  }
 
-              stream.sendMessage({
-                type: "tool_error",
-                tool_name: toolName,
-                error: toolUseResponse.error.data || toolUseResponse.error,
-              });
-            } else {
-              const resultContent = {
-                type: "tool_result",
-                tool_use_id: toolUseId,
-                content: toolUseResponse.content || [],
-              };
+  // ✅ Then add tool_result to conversation history
+  if (toolUseResponse.error) {
+    const errorContent = {
+      type: "tool_result",
+      tool_use_id: toolUseId,
+      content: JSON.stringify({
+        error: toolUseResponse.error.data || toolUseResponse.error,
+      }),
+      is_error: true,
+    };
 
-              conversationHistory.push({
-                role: "user",
-                content: [resultContent],
-              });
-            }
+    conversationHistory.push({
+      role: "user",
+      content: [errorContent],
+    });
 
-            // Signal new message to client
-            stream.sendMessage({ type: 'new_message' });
-          },
+    stream.sendMessage({
+      type: "tool_error",
+      tool_name: toolName,
+      error: toolUseResponse.error.data || toolUseResponse.error,
+    });
+  } else {
+    const resultContent = {
+      type: "tool_result",
+      tool_use_id: toolUseId,
+      content: toolUseResponse.content || [],
+    };
+
+    conversationHistory.push({
+      role: "user",
+      content: [resultContent],
+    });
+  }
+
+  // Signal new message to client
+  stream.sendMessage({ type: 'new_message' });
+},
+        
           onContentBlock: (contentBlock) => {
             if (contentBlock.type === "text") {
               stream.sendMessage({ 

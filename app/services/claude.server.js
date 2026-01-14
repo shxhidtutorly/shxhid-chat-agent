@@ -1,11 +1,7 @@
 // app/services/claude.server.js
 import Anthropic from "@anthropic-ai/sdk";
 
-/**
- * Create Claude service 
- */
 export function createClaudeService() {
-  // CRITICAL: Check API key exists
   const apiKey = process.env.ANTHROPIC_API_KEY;
   
   if (!apiKey) {
@@ -20,18 +16,13 @@ export function createClaudeService() {
   });
 
   return {
-    /**
-     * Stream a conversation with Claude
-     */
     async streamConversation(config, callbacks) {
       const { messages, promptType = "standardAssistant", tools = [] } = config;
       const { onText, onMessage, onToolUse, onContentBlock } = callbacks;
 
       try {
-        // Build system prompt
         const systemPrompt = getSystemPrompt(promptType);
 
-        // Prepare API call parameters
         const apiParams = {
           model: "claude-sonnet-4-20250514",
           max_tokens: 4096,
@@ -40,14 +31,12 @@ export function createClaudeService() {
           stream: true,
         };
 
-        // Add tools if available
         if (tools && tools.length > 0) {
           apiParams.tools = tools;
         }
 
         console.log("🤖 Calling Claude API...");
 
-        // Create stream
         const stream = await client.messages.stream(apiParams);
 
         let currentMessage = {
@@ -56,7 +45,6 @@ export function createClaudeService() {
           stop_reason: null,
         };
 
-        // Handle stream events
         stream.on("text", (textDelta) => {
           if (onText) onText(textDelta);
         });
@@ -89,14 +77,17 @@ export function createClaudeService() {
           console.log("✅ Message completed");
         });
 
-        // Wait for stream to complete
         const finalMessage = await stream.finalMessage();
 
-        // Process final message
         currentMessage.content = finalMessage.content;
         currentMessage.stop_reason = finalMessage.stop_reason;
 
-        // Handle tool uses
+        // ✅ CRITICAL FIX: Call onMessage FIRST (adds assistant message to history)
+        if (onMessage) {
+          await onMessage(currentMessage);
+        }
+
+        // ✅ Then handle tool uses (adds tool_result to history)
         const toolUses = finalMessage.content.filter((c) => c.type === "tool_use");
         
         for (const toolUse of toolUses) {
@@ -105,17 +96,11 @@ export function createClaudeService() {
           }
         }
 
-        // Call onMessage callback
-        if (onMessage) {
-          await onMessage(currentMessage);
-        }
-
         return currentMessage;
 
       } catch (error) {
         console.error("❌ Claude API Error:", error);
         
-        // Check if it's an API key error
         if (error.message?.includes("api_key") || error.status === 401) {
           throw new Error("Invalid Anthropic API key. Please check your ANTHROPIC_API_KEY environment variable.");
         }
@@ -126,9 +111,6 @@ export function createClaudeService() {
   };
 }
 
-/**
- * Get system prompt based on type
- */
 function getSystemPrompt(promptType) {
   const prompts = {
     standardAssistant: `You are a helpful AI shopping assistant for a Shopify store. You help customers:

@@ -1,6 +1,6 @@
 /* ============================================
-   SHOPIFY SHOP-CHAT-AGENT - UPDATED UI/UX JS
-   Handles: Floating Buttons, Menu, History Panel
+   SHOPIFY SHOP-CHAT-AGENT - LOGIC & UI
+   Updated with Shimmer Effect & Enhanced UI
    ============================================ */
 
 (function() {
@@ -15,12 +15,9 @@
       container: '.shop-ai-chat-container',
       floatingGroup: '.shop-ai-floating-group',
       chatWindow: '.shop-ai-chat-window',
-      chatBubble: '.shop-ai-chat-bubble',
-      primaryBtn: '.shop-ai-primary-btn',
-      secondaryBtn: '.shop-ai-secondary-btn',
       messagesContainer: '.shop-ai-chat-messages',
       inputField: '.shop-ai-chat-input input',
-      sendBtn: '.shop-ai-chat-send, .shop-ai-send-btn',
+      sendBtn: '.shop-ai-send-btn',
       closeBtn: '.shop-ai-chat-close',
       menuBtn: '.shop-ai-menu-btn',
       dropdownMenu: '.shop-ai-dropdown-menu',
@@ -49,10 +46,6 @@
     chatHistory: []
   };
 
-  // ============================================
-  // DOM ELEMENTS
-  // ============================================
-  
   let elements = {};
 
   // ============================================
@@ -60,25 +53,16 @@
   // ============================================
   
   function init() {
-    // Set viewport height for mobile
     setViewportHeight();
     window.addEventListener('resize', setViewportHeight);
-    window.addEventListener('orientationchange', setViewportHeight);
-
-    // Cache DOM elements
+    
     cacheElements();
-
-    // Load chat history from storage
     loadChatHistory();
-
-    // Inject new UI elements if not present
-    injectUIElements();
-
-    // Bind events
+    injectUIElements(); // Main Injection
     bindEvents();
-
-    // Show floating buttons with animation
-    showFloatingButtons();
+    
+    // Animate in buttons on load
+    setTimeout(showFloatingButtons, 500);
   }
 
   function cacheElements() {
@@ -86,7 +70,6 @@
       container: document.querySelector(CONFIG.selectors.container),
       floatingGroup: document.querySelector(CONFIG.selectors.floatingGroup),
       chatWindow: document.querySelector(CONFIG.selectors.chatWindow),
-      chatBubble: document.querySelector(CONFIG.selectors.chatBubble),
       messagesContainer: document.querySelector(CONFIG.selectors.messagesContainer),
       inputField: document.querySelector(CONFIG.selectors.inputField),
       sendBtn: document.querySelector(CONFIG.selectors.sendBtn),
@@ -100,86 +83,67 @@
   }
 
   function setViewportHeight() {
-    const vh = window.innerHeight * 0.01;
     document.documentElement.style.setProperty('--viewport-height', `${window.innerHeight}px`);
   }
 
   // ============================================
-  // UI INJECTION (For Missing Elements)
+  // UI INJECTION
   // ============================================
   
   function injectUIElements() {
     const container = elements.container;
     if (!container) return;
 
-    // Inject floating buttons if not present
+    // 1. Inject Floating Buttons (if missing)
     if (!elements.floatingGroup) {
-      const floatingHTML = createFloatingButtonsHTML();
-      container.insertAdjacentHTML('afterbegin', floatingHTML);
+      container.insertAdjacentHTML('afterbegin', createFloatingButtonsHTML());
       elements.floatingGroup = container.querySelector(CONFIG.selectors.floatingGroup);
     }
 
-    // Inject menu dropdown if not present in header
-    if (!elements.dropdownMenu && elements.chatWindow) {
-      const headerActions = elements.chatWindow.querySelector('.shop-ai-header-actions');
-      if (headerActions) {
-        // Add menu button if not present
-        if (!headerActions.querySelector('.shop-ai-menu-btn')) {
-          const menuBtnHTML = createMenuButtonHTML();
-          const closeBtn = headerActions.querySelector('.shop-ai-chat-close');
-          if (closeBtn) {
-            closeBtn.insertAdjacentHTML('beforebegin', menuBtnHTML);
-          } else {
-            headerActions.insertAdjacentHTML('afterbegin', menuBtnHTML);
-          }
-        }
-        
-        // Add dropdown menu
-        const dropdownHTML = createDropdownMenuHTML();
-        headerActions.insertAdjacentHTML('beforeend', dropdownHTML);
-        elements.menuBtn = headerActions.querySelector('.shop-ai-menu-btn');
-        elements.dropdownMenu = headerActions.querySelector(CONFIG.selectors.dropdownMenu);
-      }
+    // 2. Inject or Update Chat Window Structure
+    if (!elements.chatWindow) {
+      container.insertAdjacentHTML('beforeend', createChatWindowHTML());
+      elements.chatWindow = container.querySelector(CONFIG.selectors.chatWindow);
+      // Re-cache specific chat elements
+      elements.messagesContainer = elements.chatWindow.querySelector(CONFIG.selectors.messagesContainer);
+      elements.inputField = elements.chatWindow.querySelector(CONFIG.selectors.inputField);
+      elements.sendBtn = elements.chatWindow.querySelector(CONFIG.selectors.sendBtn);
+      elements.closeBtn = elements.chatWindow.querySelector(CONFIG.selectors.closeBtn);
+    }
+    
+    // 3. Inject Menu & History (if missing inside window)
+    const headerActions = elements.chatWindow.querySelector('.shop-ai-header-actions');
+    if (headerActions && !headerActions.querySelector('.shop-ai-menu-btn')) {
+      headerActions.insertAdjacentHTML('afterbegin', createMenuButtonHTML());
+      headerActions.insertAdjacentHTML('beforeend', createDropdownMenuHTML());
+      elements.menuBtn = headerActions.querySelector('.shop-ai-menu-btn');
+      elements.dropdownMenu = headerActions.querySelector(CONFIG.selectors.dropdownMenu);
     }
 
-    // Inject history panel if not present
-    if (!elements.historyPanel && elements.chatWindow) {
-      const historyHTML = createHistoryPanelHTML();
-      elements.chatWindow.insertAdjacentHTML('beforeend', historyHTML);
+    if (!elements.historyPanel) {
+      elements.chatWindow.insertAdjacentHTML('beforeend', createHistoryPanelHTML());
       elements.historyPanel = elements.chatWindow.querySelector(CONFIG.selectors.historyPanel);
       elements.historyList = elements.chatWindow.querySelector(CONFIG.selectors.historyList);
       elements.backBtn = elements.chatWindow.querySelector(CONFIG.selectors.backBtn);
     }
-
-    // Re-cache elements after injection
-    cacheElements();
   }
+
+  // --- HTML TEMPLATES ---
 
   function createFloatingButtonsHTML() {
     return `
       <div class="shop-ai-floating-group">
         <button class="shop-ai-secondary-btn" data-action="open-chat">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
           </svg>
-          <span>Chat with our AI</span>
+          <span>Chat with AI</span>
         </button>
-        
-        <button class="shop-ai-secondary-btn" data-action="open-chat">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/>
-            <line x1="12" y1="17" x2="12.01" y2="17"/>
-          </svg>
-          <span>Help me choose</span>
-        </button>
-        
         <button class="shop-ai-primary-btn" data-action="open-chat">
           <span class="shop-ai-sparkle-icon">
-            <svg viewBox="0 0 24 24" fill="none">
+             <svg viewBox="0 0 24 24" fill="none">
               <path class="shop-ai-sparkle-main" d="M12 2L13.5 8.5L20 10L13.5 11.5L12 18L10.5 11.5L4 10L10.5 8.5L12 2Z" fill="currentColor"/>
               <path class="shop-ai-sparkle-small-1" d="M19 14L19.5 16.5L22 17L19.5 17.5L19 20L18.5 17.5L16 17L18.5 16.5L19 14Z" fill="currentColor"/>
-              <path class="shop-ai-sparkle-small-2" d="M5 14L5.5 16.5L8 17L5.5 17.5L5 20L4.5 17.5L2 17L4.5 16.5L5 14Z" fill="currentColor"/>
             </svg>
           </span>
           <span>Ask our AI</span>
@@ -188,45 +152,68 @@
     `;
   }
 
-  function createMenuButtonHTML() {
+  function createChatWindowHTML() {
     return `
-      <button class="shop-ai-header-btn shop-ai-menu-btn" data-action="toggle-menu" aria-label="Menu">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="1.5"/>
-          <circle cx="12" cy="5" r="1.5"/>
-          <circle cx="12" cy="19" r="1.5"/>
-        </svg>
-      </button>
+      <div class="shop-ai-chat-window">
+        <div class="shop-ai-chat-header">
+          <div class="shop-ai-header-left">
+            <div class="shop-ai-avatar">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/>
+                <path d="M12 6v6l4 2"/>
+              </svg>
+            </div>
+            <div class="shop-ai-header-info">
+              <h3>AI Assistant</h3>
+              <p><span class="shop-ai-status-dot"></span> Online now</p>
+            </div>
+          </div>
+          <div class="shop-ai-header-actions">
+            <button class="shop-ai-header-btn shop-ai-chat-close" data-action="close-chat">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="shop-ai-chat-messages">
+          <div class="shop-ai-message assistant">
+            Hello! 👋 I can help you find products, check stock, or answer technical questions. How can I help today?
+          </div>
+        </div>
+
+        <div class="shop-ai-chat-input">
+          <div class="shop-ai-input-wrapper">
+            <input type="text" placeholder="Ask me anything..." />
+            <button class="shop-ai-send-btn" data-action="send-message">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="shop-ai-status-footer">
+          <span class="shop-ai-status-pill">Ready to help</span>
+        </div>
+      </div>
     `;
+  }
+
+  function createMenuButtonHTML() {
+    return `<button class="shop-ai-header-btn shop-ai-menu-btn" data-action="toggle-menu"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg></button>`;
   }
 
   function createDropdownMenuHTML() {
     return `
       <div class="shop-ai-dropdown-menu">
-        <button class="shop-ai-menu-item" data-action="new-chat">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
-            <line x1="12" y1="8" x2="12" y2="14"/>
-            <line x1="9" y1="11" x2="15" y2="11"/>
-          </svg>
-          <span>Start a new chat</span>
-        </button>
-        <button class="shop-ai-menu-item" data-action="show-history">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/>
-            <polyline points="12,6 12,12 16,14"/>
-          </svg>
-          <span>View recent chats</span>
-        </button>
-        <div class="shop-ai-menu-divider"></div>
-        <button class="shop-ai-menu-item danger" data-action="end-chat">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/>
-            <line x1="15" y1="9" x2="9" y2="15"/>
-            <line x1="9" y1="9" x2="15" y2="15"/>
-          </svg>
-          <span>End chat</span>
-        </button>
+        <button class="shop-ai-menu-item" data-action="new-chat"><span>Start new chat</span></button>
+        <button class="shop-ai-menu-item" data-action="show-history"><span>History</span></button>
+        <div style="height:1px;background:var(--border-light);margin:4px 0"></div>
+        <button class="shop-ai-menu-item danger" data-action="close-chat"><span>Close</span></button>
       </div>
     `;
   }
@@ -235,434 +222,199 @@
     return `
       <div class="shop-ai-history-panel">
         <div class="shop-ai-history-header">
-          <button class="shop-ai-back-btn" data-action="hide-history" aria-label="Back">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="15,18 9,12 15,6"/>
-            </svg>
+          <button class="shop-ai-back-btn" data-action="hide-history">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
           </button>
           <h3>Recent Chats</h3>
         </div>
-        <div class="shop-ai-history-list">
-          <!-- History items will be populated here -->
-        </div>
+        <div class="shop-ai-history-list"></div>
       </div>
     `;
   }
 
   // ============================================
-  // EVENT BINDING
+  // EVENT HANDLING
   // ============================================
   
   function bindEvents() {
-    // Use event delegation for dynamically added elements
     document.addEventListener('click', handleClick);
-    document.addEventListener('keydown', handleKeydown);
-
-    // Close menu when clicking outside
-    document.addEventListener('click', function(e) {
-      if (state.isMenuOpen && elements.dropdownMenu) {
-        const isMenuClick = elements.dropdownMenu.contains(e.target);
-        const isMenuBtnClick = elements.menuBtn && elements.menuBtn.contains(e.target);
-        
-        if (!isMenuClick && !isMenuBtnClick) {
-          closeMenu();
-        }
-      }
-    });
+    
+    // Input Enter Key
+    if (elements.inputField) {
+      elements.inputField.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') handleSendMessage();
+      });
+    }
   }
 
   function handleClick(e) {
     const target = e.target.closest('[data-action]');
     if (!target) {
-      // Handle legacy selectors
-      handleLegacyClick(e);
+      // Close menu if clicked outside
+      if (state.isMenuOpen && elements.dropdownMenu && !elements.dropdownMenu.contains(e.target) && !elements.menuBtn.contains(e.target)) {
+        closeMenu();
+      }
       return;
     }
 
     const action = target.dataset.action;
-
     switch (action) {
-      case 'open-chat':
-        openChat();
-        break;
-      case 'close-chat':
-        closeChat();
-        break;
-      case 'toggle-menu':
-        toggleMenu();
-        break;
-      case 'new-chat':
-        startNewChat();
-        break;
-      case 'show-history':
-        showHistory();
-        break;
-      case 'hide-history':
-        hideHistory();
-        break;
-      case 'end-chat':
-        endChat();
-        break;
-      case 'load-chat':
-        const chatId = target.dataset.chatId;
-        if (chatId) loadChatFromHistory(chatId);
-        break;
-    }
-  }
-
-  function handleLegacyClick(e) {
-    // Handle legacy chat bubble click
-    if (e.target.closest('.shop-ai-chat-bubble')) {
-      openChat();
-      return;
-    }
-
-    // Handle legacy close button
-    if (e.target.closest('.shop-ai-chat-close')) {
-      closeChat();
-      return;
-    }
-
-    // Handle floating buttons without data-action
-    if (e.target.closest('.shop-ai-primary-btn') || e.target.closest('.shop-ai-secondary-btn')) {
-      openChat();
-      return;
-    }
-  }
-
-  function handleKeydown(e) {
-    // Close chat on Escape
-    if (e.key === 'Escape') {
-      if (state.isHistoryOpen) {
-        hideHistory();
-      } else if (state.isMenuOpen) {
-        closeMenu();
-      } else if (state.isOpen) {
-        closeChat();
-      }
+      case 'open-chat': openChat(); break;
+      case 'close-chat': closeChat(); break;
+      case 'toggle-menu': toggleMenu(); break;
+      case 'new-chat': startNewChat(); break;
+      case 'show-history': showHistory(); break;
+      case 'hide-history': hideHistory(); break;
+      case 'send-message': handleSendMessage(); break;
     }
   }
 
   // ============================================
-  // CHAT ACTIONS
+  // ACTIONS
   // ============================================
   
   function openChat() {
     state.isOpen = true;
+    if (elements.chatWindow) elements.chatWindow.classList.add(CONFIG.classes.active, CONFIG.classes.visible);
+    if (elements.chatWindow) elements.chatWindow.classList.remove(CONFIG.classes.closing);
+    
+    // HIDE FLOATING BUTTONS
+    if (elements.floatingGroup) elements.floatingGroup.classList.add(CONFIG.classes.hidden);
 
-    // Hide floating buttons
-    if (elements.floatingGroup) {
-      elements.floatingGroup.classList.add(CONFIG.classes.hidden);
-    }
-
-    // Hide legacy bubble
-    if (elements.chatBubble) {
-      elements.chatBubble.classList.add(CONFIG.classes.hidden);
-    }
-
-    // Show chat window
-    if (elements.chatWindow) {
-      elements.chatWindow.classList.add(CONFIG.classes.active);
-      elements.chatWindow.classList.remove(CONFIG.classes.closing);
-    }
-
-    // Add body class for mobile
-    document.body.classList.add(CONFIG.classes.chatOpen);
-
-    // Focus input
-    setTimeout(() => {
-      if (elements.inputField) {
-        elements.inputField.focus();
-      }
-    }, 300);
+    setTimeout(() => elements.inputField?.focus(), 300);
   }
 
   function closeChat() {
     state.isOpen = false;
-
-    // Close menu and history first
     closeMenu();
     hideHistory();
-
-    // Add closing animation
+    
     if (elements.chatWindow) {
       elements.chatWindow.classList.add(CONFIG.classes.closing);
+      elements.chatWindow.classList.remove(CONFIG.classes.active);
     }
 
-    // Remove body class
-    document.body.classList.remove(CONFIG.classes.chatOpen);
-
-    // After animation, hide window and show buttons
     setTimeout(() => {
-      if (elements.chatWindow) {
-        elements.chatWindow.classList.remove(CONFIG.classes.active, CONFIG.classes.closing);
-      }
-
-      // Show floating buttons
+      if (elements.chatWindow) elements.chatWindow.classList.remove(CONFIG.classes.closing, CONFIG.classes.visible);
+      // SHOW FLOATING BUTTONS
       if (elements.floatingGroup) {
         elements.floatingGroup.classList.remove(CONFIG.classes.hidden);
         showFloatingButtons();
       }
-
-      // Show legacy bubble
-      if (elements.chatBubble) {
-        elements.chatBubble.classList.remove(CONFIG.classes.hidden);
-      }
-    }, 250);
+    }, 300);
   }
 
-  function showFloatingButtons() {
-    if (!elements.floatingGroup) return;
-
-    const buttons = elements.floatingGroup.querySelectorAll('.shop-ai-secondary-btn, .shop-ai-primary-btn');
-    buttons.forEach((btn, index) => {
-      btn.classList.remove(CONFIG.classes.visible);
-      setTimeout(() => {
-        btn.classList.add(CONFIG.classes.visible);
-      }, index * 50);
-    });
-  }
-
-  // ============================================
-  // MENU ACTIONS
-  // ============================================
-  
   function toggleMenu() {
     state.isMenuOpen = !state.isMenuOpen;
-    
-    if (elements.dropdownMenu) {
-      elements.dropdownMenu.classList.toggle(CONFIG.classes.active, state.isMenuOpen);
-    }
+    elements.dropdownMenu?.classList.toggle(CONFIG.classes.active, state.isMenuOpen);
   }
 
   function closeMenu() {
     state.isMenuOpen = false;
-    
-    if (elements.dropdownMenu) {
-      elements.dropdownMenu.classList.remove(CONFIG.classes.active);
-    }
+    elements.dropdownMenu?.classList.remove(CONFIG.classes.active);
   }
 
-  function startNewChat() {
-    closeMenu();
+  function showFloatingButtons() {
+    const btns = document.querySelectorAll('.shop-ai-secondary-btn, .shop-ai-primary-btn');
+    btns.forEach((btn, i) => {
+      btn.classList.remove(CONFIG.classes.visible);
+      setTimeout(() => btn.classList.add(CONFIG.classes.visible), i * 100);
+    });
+  }
 
-    // Save current chat to history before clearing
-    saveChatToHistory();
+  // ============================================
+  // MESSAGING & SHIMMER EFFECT
+  // ============================================
 
-    // Clear messages (trigger your existing clear logic)
-    if (elements.messagesContainer) {
-      // Keep only the welcome message or clear all
-      const welcomeMessage = `
-        <div class="shop-ai-message assistant">
-          Starting a fresh conversation! 🌟 How can I help you today?
-        </div>
+  function handleSendMessage() {
+    const text = elements.inputField.value.trim();
+    if (!text) return;
+
+    // Add User Message
+    addMessage(text, 'user');
+    elements.inputField.value = '';
+
+    // SHOW SHIMMER (Thinking Effect)
+    showThinkingShimmer();
+
+    // Mock Response (Replace with your real API call)
+    setTimeout(() => {
+      removeThinkingShimmer();
+      addMessage("I found some products for you. Here is the stock table:", 'assistant');
+      
+      // Example Table Render
+      const tableHTML = `
+        <table>
+          <thead><tr><th>Model</th><th>Stock</th><th>Price</th></tr></thead>
+          <tbody>
+            <tr><td>AODD-15</td><td>12</td><td>$450</td></tr>
+            <tr><td>AODD-20</td><td>5</td><td>$520</td></tr>
+            <tr><td>PMP-X</td><td>Out</td><td>$300</td></tr>
+          </tbody>
+        </table>
       `;
-      elements.messagesContainer.innerHTML = welcomeMessage;
-    }
-
-    // Dispatch custom event for external handling
-    dispatchEvent('shop-ai-new-chat');
-  }
-
-  function endChat() {
-    closeMenu();
-
-    // Save to history
-    saveChatToHistory();
-
-    // Show end message
-    if (elements.messagesContainer) {
-      const endMessage = document.createElement('div');
-      endMessage.className = 'shop-ai-message assistant';
-      endMessage.textContent = 'Chat ended. Thank you for chatting with us! Feel free to start a new conversation anytime. 👋';
-      elements.messagesContainer.appendChild(endMessage);
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'shop-ai-message assistant';
+      msgDiv.innerHTML = tableHTML;
+      elements.messagesContainer.appendChild(msgDiv);
       scrollToBottom();
-    }
-
-    // Dispatch custom event
-    dispatchEvent('shop-ai-end-chat');
+      
+    }, 2000);
   }
 
-  // ============================================
-  // HISTORY ACTIONS
-  // ============================================
-  
-  function showHistory() {
-    closeMenu();
-    state.isHistoryOpen = true;
-
-    renderHistory();
-
-    if (elements.historyPanel) {
-      elements.historyPanel.classList.add(CONFIG.classes.active);
-    }
+  function addMessage(text, type) {
+    const div = document.createElement('div');
+    div.className = `shop-ai-message ${type}`;
+    div.innerHTML = text.replace(/\n/g, '<br>'); // Simple formatting
+    elements.messagesContainer.appendChild(div);
+    scrollToBottom();
   }
 
-  function hideHistory() {
-    state.isHistoryOpen = false;
+  // --- NEW SHIMMER LOGIC ---
+  function showThinkingShimmer() {
+    // Check if exists
+    if (elements.messagesContainer.querySelector('.shop-ai-typing-shimmer')) return;
 
-    if (elements.historyPanel) {
-      elements.historyPanel.classList.remove(CONFIG.classes.active);
-    }
-  }
-
-  function renderHistory() {
-    if (!elements.historyList) return;
-
-    if (state.chatHistory.length === 0) {
-      elements.historyList.innerHTML = `
-        <div class="shop-ai-empty-history">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <circle cx="12" cy="12" r="10"/>
-            <polyline points="12,6 12,12 16,14"/>
-          </svg>
-          <p>No chat history yet</p>
-        </div>
-      `;
-      return;
-    }
-
-    elements.historyList.innerHTML = state.chatHistory.map(chat => `
-      <button class="shop-ai-history-item" data-action="load-chat" data-chat-id="${chat.id}">
-        <span class="shop-ai-history-title">${escapeHTML(chat.title)}</span>
-        <span class="shop-ai-history-preview">${escapeHTML(chat.preview)}</span>
-        <span class="shop-ai-history-date">${chat.date}</span>
-      </button>
-    `).join('');
-  }
-
-  function loadChatFromHistory(chatId) {
-    const chat = state.chatHistory.find(c => c.id === chatId);
-    if (!chat || !chat.messages) return;
-
-    hideHistory();
-
-    // Restore messages
-    if (elements.messagesContainer && chat.messages) {
-      elements.messagesContainer.innerHTML = chat.messages;
-      scrollToBottom();
-    }
-
-    // Dispatch custom event
-    dispatchEvent('shop-ai-load-chat', { chatId, chat });
-  }
-
-  function saveChatToHistory() {
-    if (!elements.messagesContainer) return;
-
-    const messages = elements.messagesContainer.innerHTML;
-    const messageElements = elements.messagesContainer.querySelectorAll('.shop-ai-message');
+    const shimmerDiv = document.createElement('div');
+    shimmerDiv.className = 'shop-ai-typing-shimmer';
+    // This HTML structure matches the CSS animation
+    shimmerDiv.innerHTML = `<span class="shop-ai-shimmer-text">AI is thinking...</span>`;
     
-    if (messageElements.length <= 1) return; // Don't save if only welcome message
-
-    // Get preview from last user message
-    const userMessages = elements.messagesContainer.querySelectorAll('.shop-ai-message.user');
-    const lastUserMessage = userMessages[userMessages.length - 1];
-    const preview = lastUserMessage ? 
-      lastUserMessage.textContent.slice(0, 50) + (lastUserMessage.textContent.length > 50 ? '...' : '') :
-      'No messages';
-
-    const chatEntry = {
-      id: Date.now().toString(),
-      title: 'Chat session',
-      preview: preview,
-      date: getRelativeTime(new Date()),
-      messages: messages,
-      timestamp: Date.now()
-    };
-
-    state.chatHistory.unshift(chatEntry);
-
-    // Keep only last 20 chats
-    if (state.chatHistory.length > 20) {
-      state.chatHistory = state.chatHistory.slice(0, 20);
-    }
-
-    // Save to localStorage
-    try {
-      localStorage.setItem(CONFIG.storageKey, JSON.stringify(state.chatHistory));
-    } catch (e) {
-      console.warn('Could not save chat history:', e);
-    }
+    elements.messagesContainer.appendChild(shimmerDiv);
+    scrollToBottom();
   }
 
-  function loadChatHistory() {
-    try {
-      const saved = localStorage.getItem(CONFIG.storageKey);
-      if (saved) {
-        state.chatHistory = JSON.parse(saved);
-        // Update relative dates
-        state.chatHistory = state.chatHistory.map(chat => ({
-          ...chat,
-          date: getRelativeTime(new Date(chat.timestamp))
-        }));
-      }
-    } catch (e) {
-      console.warn('Could not load chat history:', e);
-      state.chatHistory = [];
-    }
+  function removeThinkingShimmer() {
+    const shimmer = elements.messagesContainer.querySelector('.shop-ai-typing-shimmer');
+    if (shimmer) shimmer.remove();
   }
 
-  // ============================================
-  // UTILITY FUNCTIONS
-  // ============================================
-  
   function scrollToBottom() {
     if (elements.messagesContainer) {
       elements.messagesContainer.scrollTop = elements.messagesContainer.scrollHeight;
     }
   }
 
-  function escapeHTML(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+  // History logic stubs (kept simple for UI demo)
+  function showHistory() { 
+    state.isHistoryOpen = true; 
+    elements.historyPanel?.classList.add(CONFIG.classes.active); 
   }
-
-  function getRelativeTime(date) {
-    const now = new Date();
-    const diff = now - date;
-    const seconds = Math.floor(diff / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
-
-    if (seconds < 60) return 'Just now';
-    if (minutes < 60) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
-    if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
-    if (days < 7) return `${days} day${days > 1 ? 's' : ''} ago`;
-    return date.toLocaleDateString();
+  function hideHistory() { 
+    state.isHistoryOpen = false; 
+    elements.historyPanel?.classList.remove(CONFIG.classes.active); 
   }
-
-  function dispatchEvent(eventName, detail = {}) {
-    const event = new CustomEvent(eventName, { detail, bubbles: true });
-    document.dispatchEvent(event);
+  function startNewChat() {
+    elements.messagesContainer.innerHTML = '<div class="shop-ai-message assistant">Starting fresh! How can I help?</div>';
+    closeMenu();
   }
+  function loadChatHistory() { /* Load from local storage logic here */ }
 
-  // ============================================
-  // PUBLIC API
-  // ============================================
-  
-  window.ShopAIChat = {
-    open: openChat,
-    close: closeChat,
-    toggleMenu: toggleMenu,
-    showHistory: showHistory,
-    hideHistory: hideHistory,
-    startNewChat: startNewChat,
-    endChat: endChat,
-    getState: () => ({ ...state }),
-    getHistory: () => [...state.chatHistory]
-  };
+  // Expose API
+  window.ShopAIChat = { open: openChat, close: closeChat };
 
-  // ============================================
-  // INITIALIZE
-  // ============================================
-  
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
+  // Run
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
 
 })();

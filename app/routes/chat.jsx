@@ -357,22 +357,12 @@ async function handleChatSession({
             const toolArgs = content.input;
             const toolUseId = content.id;
 
-            stream.sendMessage({
-              type: "tool_use",
-              tool_use_message: `Calling tool: ${toolName}`,
-              tool_name: toolName,
-            });
+            const toolUseMessage = `Calling tool: ${toolName} with arguments: ${JSON.stringify(toolArgs)}`;
 
-            const trackingId = visitorId || fingerprintId || conversationId;
-            try {
-              ChatEvents.toolCalled(trackingId, {
-                conversationId,
-                toolName,
-                toolArgs,
-              });
-            } catch (e) {
-              console.warn("Analytics failed:", e);
-            }
+            stream.sendMessage({
+              type: 'tool_use',
+              tool_use_message: toolUseMessage
+            });
 
             // Call the tool
             const toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
@@ -390,15 +380,45 @@ async function handleChatSession({
               }
             }
 
-            // ✅ CRITICAL: Now add assistant message to history FIRST (if not already added)
-            if (currentAssistantMessage) {
+            // ✅ FIX: Add tool_result to conversation history directly
+            // DON'T use handleToolSuccess/handleToolError - they're not needed
+            if (toolUseResponse.error) {
+              const errorContent = {
+                type: "tool_result",
+                tool_use_id: toolUseId,
+                content: JSON.stringify({
+                  error: toolUseResponse.error.data || toolUseResponse.error,
+                }),
+                is_error: true,
+              };
+
               conversationHistory.push({
-                role: currentAssistantMessage.role,
-                content: currentAssistantMessage.content
+                role: "user",
+                content: [errorContent],
               });
-              // Mark as added so we don't add it again for multiple tool uses
-              currentAssistantMessage = null;
+
+              stream.sendMessage({
+                type: "tool_error",
+                tool_name: toolName,
+                error: toolUseResponse.error.data || toolUseResponse.error,
+              });
+            } else {
+              const resultContent = {
+                type: "tool_result",
+                tool_use_id: toolUseId,
+                content: toolUseResponse.content || [],
+              };
+
+              conversationHistory.push({
+                role: "user",
+                content: [resultContent],
+              });
             }
+
+            // Signal new message to client
+            stream.sendMessage({ type: 'new_message' });
+          },
+           
 
             // ✅ Then add tool_result to conversation history as USER message
             if (toolUseResponse.error) {

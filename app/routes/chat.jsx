@@ -352,7 +352,7 @@ async function handleChatSession({
             stream.sendMessage({ type: "message_complete" });
           },
 
-          onToolUse: async (content) => {
+           onToolUse: async (content) => {
             const toolName = content.name;
             const toolArgs = content.input;
             const toolUseId = content.id;
@@ -418,45 +418,6 @@ async function handleChatSession({
             // Signal new message to client
             stream.sendMessage({ type: 'new_message' });
           },
-           
-
-            // ✅ Then add tool_result to conversation history as USER message
-            if (toolUseResponse.error) {
-              const errorContent = {
-                type: "tool_result",
-                tool_use_id: toolUseId,
-                content: JSON.stringify({
-                  error: toolUseResponse.error.data || toolUseResponse.error,
-                }),
-                is_error: true,
-              };
-
-              conversationHistory.push({
-                role: "user",
-                content: [errorContent],
-              });
-
-              stream.sendMessage({
-                type: "tool_error",
-                tool_name: toolName,
-                error: toolUseResponse.error.data || toolUseResponse.error,
-              });
-            } else {
-              const resultContent = {
-                type: "tool_result",
-                tool_use_id: toolUseId,
-                content: toolUseResponse.content || [],
-              };
-
-              conversationHistory.push({
-                role: "user",
-                content: [resultContent],
-              });
-            }
-
-            stream.sendMessage({ type: "new_message" });
-          },
-
           onContentBlock: (contentBlock) => {
             if (contentBlock.type === "text") {
               stream.sendMessage({ 

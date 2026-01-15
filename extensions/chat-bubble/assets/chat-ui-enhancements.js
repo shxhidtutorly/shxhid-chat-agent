@@ -164,7 +164,7 @@
               </svg>
             </div>
             <div class="shop-ai-header-info">
-              <h3>AI Assistant</h3>
+              <h3>Creative Assistant</h3>
               <p><span class="shop-ai-status-dot"></span> Online now</p>
             </div>
           </div>

@@ -6,7 +6,7 @@
 export const AppConfig = {
   // API Configuration
   api: {
-    defaultModel: 'claude-3-5-haiku-20241022',
+    defaultModel: 'claude-haiku-4-5-20251001',
     maxTokens: 2000,
     defaultPromptType: 'standardAssistant',
   },
@@ -25,7 +25,7 @@ export const AppConfig = {
   // Tool Configuration
   tools: {
     productSearchName: "search_shop_catalog",
-    maxProductsToDisplay: 10
+    maxProductsToDisplay: 15
   }
 };
 

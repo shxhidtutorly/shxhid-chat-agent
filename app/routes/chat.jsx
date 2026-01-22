@@ -378,29 +378,46 @@ async function handleChatSession({
   // Call the tool
   const toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
 
-  // ✅ Process and send products to frontend
+  // ✅ ENHANCED: Process and send products to frontend
   if (toolName === "search_shop_catalog" && !toolUseResponse.error) {
     const products = toolService.processProductSearchResult(toolUseResponse, shopDomain);
     
     if (products && products.length > 0) {
       console.log(`📦 Sending ${products.length} products to frontend`);
+      
+      // Send products to frontend for display
       stream.sendMessage({
         type: "product_results",
-        products: products
+        products: products,
+        count: products.length
       });
+
+      // ✅ CRITICAL: Modify the tool response to prevent Claude from being verbose
+      // Replace the detailed product list with a concise summary
+      if (toolUseResponse.content && toolUseResponse.content.length > 0) {
+        const summary = toolService.createProductSummary(products);
+        toolUseResponse.content = [{
+          type: "text",
+          text: JSON.stringify({
+            status: "success",
+            product_count: summary.product_count,
+            message: "Products have been displayed in the UI with images and add-to-cart buttons. Keep your response very brief - just acknowledge the results in 1-2 sentences maximum."
+          })
+        }];
+      }
     }
   }
 
-  // ✅✅✅ CRITICAL FIX: Add assistant message to history FIRST
+  // Add assistant message to history FIRST
   if (currentAssistantMessage) {
     conversationHistory.push({
       role: currentAssistantMessage.role,
       content: currentAssistantMessage.content
     });
-    currentAssistantMessage = null; // Mark as added
+    currentAssistantMessage = null;
   }
 
-  // ✅ Then add tool_result to conversation history
+  // Then add tool_result to conversation history
   if (toolUseResponse.error) {
     const errorContent = {
       type: "tool_result",

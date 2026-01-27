@@ -273,24 +273,7 @@ class MCPClient {
     return await response.json();
   }
 
-  /**
-   * Formats raw tool data into a consistent format.
-   *
-   * @private
-   * @param {Array} toolsData - Raw tools data from the API
-   * @returns {Array} Formatted tools data
-   */
-  _formatToolsData(toolsData) {
-    return toolsData.map((tool) => {
-      return {
-        name: tool.name,
-        description: tool.description,
-        input_schema: tool.inputSchema || tool.input_schema,
-      };
-    });
-  }
-}
-  /**
+   /**
    * Convenience wrapper for the storefront `search_shop_catalog` tool.
    * Use this to find products by text (title, SKU, etc.) and get variant IDs.
    *
@@ -416,4 +399,16 @@ class MCPClient {
     // cartResult should include the cart object with checkout URL, etc.
     return cartResult;
   }
+  
+  _formatToolsData(toolsData) {
+    return toolsData.map((tool) => {
+      return {
+        name: tool.name,
+        description: tool.description,
+        input_schema: tool.inputSchema || tool.input_schema,
+      };
+    });
+  }
+}
+
 export default MCPClient;

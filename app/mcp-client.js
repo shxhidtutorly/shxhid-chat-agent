@@ -290,5 +290,130 @@ class MCPClient {
     });
   }
 }
+  /**
+   * Convenience wrapper for the storefront `search_shop_catalog` tool.
+   * Use this to find products by text (title, SKU, etc.) and get variant IDs.
+   *
+   * @param {string} query - Search text (e.g. "Abb Inverter Drives ACS480-04-050A-4")
+   * @param {string} context - Optional context string for better relevance
+   * @returns {Promise<Object>} Raw result from the MCP tool
+   */
+  async searchShopCatalog(query, context = "customer shopping in chat") {
+    const result = await this.callStorefrontTool("search_shop_catalog", {
+      query,
+      context,
+    });
 
+    // The exact shape depends on the MCP tool schema.
+    // Typically you'll see something like:
+    // {
+    //   items: [
+    //     {
+    //       title,
+    //       price,
+    //       currency,
+    //       variant_id,      // ProductVariant GID
+    //       url,
+    //       image_url,
+    //       description,
+    //       ...
+    //     }
+    //   ]
+    // }
+    return result;
+  }
+
+  /**
+   * Convenience wrapper for the storefront `update_cart` tool.
+   * Use this to create or update carts.
+   *
+   * @param {Object} params
+   * @param {string|undefined} params.cartId - Existing cart ID (omit to create new cart)
+   * @param {Array} params.lines - Array of line updates:
+   *   [{ merchandise_id, quantity, line_item_id? }]
+   * @returns {Promise<Object>} Cart result from MCP
+   */
+  async updateCart({ cartId, lines }) {
+    const args = {
+      // If cartId is undefined, MCP server will create a new cart
+      cart_id: cartId,
+      lines,
+    };
+
+    const result = await this.callStorefrontTool("update_cart", args);
+    return result;
+  }
+
+  /**
+   * High-level helper:
+   * - Searches the catalog for the given text
+   * - Picks the best matching variant
+   * - Adds it to a cart (existing or new)
+   *
+   * This is the function your "Add ABB Inverter Drives ... to my cart"
+   * agent logic should use.
+   *
+   * @param {Object} params
+   * @param {string} params.productQuery - e.g. "Abb Inverter Drives ACS480-04-050A-4"
+   * @param {number} params.quantity - Quantity to add
+   * @param {string|undefined} params.existingCartId - Existing cart ID, if any
+   * @returns {Promise<Object>} The updated/created cart (including checkout URL)
+   */
+  async addSingleProductToCartFromQuery({
+    productQuery,
+    quantity = 1,
+    existingCartId,
+  }) {
+    // 1. Search the shop catalog by the product text
+    const searchResult = await this.searchShopCatalog(
+      productQuery,
+      "customer adding product to cart from chat"
+    );
+
+    // Adjust this based on the actual schema returned by search_shop_catalog.
+    // Most implementations expose an `items` array with a `variant_id` field.
+    const items = searchResult?.items || searchResult?.results || [];
+    if (!items.length) {
+      throw new Error(
+        `No products found in catalog for query: "${productQuery}"`
+      );
+    }
+
+    // For now, just take the first match. You can improve this
+    // later by scoring, filtering by vendor, etc.
+    const first = items[0];
+
+    // IMPORTANT:
+    // `merchandise_id` MUST be a ProductVariant GID, e.g.
+    // "gid://shopify/ProductVariant/42567741931576"
+    // The Storefront MCP docs say search_shop_catalog returns a "Variant ID".
+    //
+    // Check your actual search_shop_catalog schema via tools/list,
+    // and adjust this field name if needed (e.g. `first.variant_id`).
+    const merchandiseId =
+      first.merchandise_id ||
+      first.variant_id ||
+      first.variantId ||
+      first.default_variant_id;
+
+    if (!merchandiseId) {
+      throw new Error(
+        `search_shop_catalog result did not contain a merchandise/variant ID for query: "${productQuery}"`
+      );
+    }
+
+    // 2. Call update_cart with the correct merchandise_id and quantity
+    const cartResult = await this.updateCart({
+      cartId: existingCartId,
+      lines: [
+        {
+          merchandise_id: merchandiseId,
+          quantity,
+        },
+      ],
+    });
+
+    // cartResult should include the cart object with checkout URL, etc.
+    return cartResult;
+  }
 export default MCPClient;

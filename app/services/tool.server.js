@@ -10,7 +10,7 @@ export function createToolService() {
   const PREFERRED_PRODUCTS_TO_DISPLAY = 12; // Show 12 if available
 
   /**
-   * Helper to fix URLs by prepending shop domain if needed
+   * Helper to fix URLs by prepending shop domain  needed
    */
   const fixUrl = (url, shopDomain) => {
     if (!url) return "";

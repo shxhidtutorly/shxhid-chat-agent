@@ -5,6 +5,7 @@
  * 1. P2025 (Visitor ID errors)
  * 2. invalid_request_error (Tool Use Order/Data Loss)
  * 3. Broken Product URLs & Images (Passes shopDomain to tool processor)
+ * 4. Anthropic 400 "Input should be a valid list" (Proper history formatting)
  */
 
 export async function loader({ request }) {
@@ -35,6 +36,7 @@ export async function loader({ request }) {
       message: "Chat API is running",
       endpoints: {
         chat: "POST /chat",
+        cart: "POST /api/cart",
         history: "GET /chat?history=true&conversation_id=xxx"
       }
     }),
@@ -63,12 +65,14 @@ async function handleHistoryRequest(request, conversationId) {
       let parsedContent = msg.content;
       try {
         const parsed = JSON.parse(msg.content);
-        // If the content is an array (likely rich content with tools), keep it as JSON
         if (Array.isArray(parsed)) {
           parsedContent = parsed;
-        } 
+        } else {
+          // Wrap string/object in text block for consistency
+          parsedContent = [{ type: "text", text: typeof parsed === 'string' ? parsed : JSON.stringify(parsed) }];
+        }
       } catch (e) {
-        parsedContent = msg.content;
+        parsedContent = [{ type: "text", text: msg.content }];
       }
 
       return {
@@ -206,7 +210,6 @@ async function handleChatRequest(request) {
 
 /* ------------------------
   Core chat session - FINAL WORKING VERSION
-  This properly handles the conversation flow for Claude API
   ------------------------ */
 async function handleChatSession({
   request,
@@ -232,7 +235,6 @@ async function handleChatSession({
     MCPClient,
   } = helpers;
 
-  // Check for Anthropic API key
   if (!process.env.ANTHROPIC_API_KEY) {
     stream.sendMessage({ 
       type: "error", 
@@ -244,7 +246,6 @@ async function handleChatSession({
   const claudeService = createClaudeService();
   const toolService = createToolService();
 
-  // Get MCP URL
   const { mcpApiUrl } = await getCustomerAccountUrls(
     shopDomain, 
     conversationId, 
@@ -256,17 +257,16 @@ async function handleChatSession({
   try {
     stream.sendMessage({ type: "id", conversation_id: conversationId });
 
-    // Connect to MCP (best-effort)
-    let storefrontMcpTools = [], customerMcpTools = [];
     try {
-      storefrontMcpTools = await mcpClient.connectToStorefrontServer();
-      customerMcpTools = await mcpClient.connectToCustomerServer();
-      console.log(`Connected to MCP: ${storefrontMcpTools.length + customerMcpTools.length} tools`);
+      // Connect best-effort
+      await mcpClient.connectToStorefrontServer();
+      await mcpClient.connectToCustomerServer();
     } catch (error) {
       console.warn("MCP connection failed, continuing without tools:", error.message);
     }
 
-    // Save user message
+    // 1. Save user message (formatted for Claude)
+    // We save the simple text for readability, but history hydration will wrap it.
     try {
       await saveMessage(conversationId, "user", userMessage, {
         shopDomain,
@@ -276,25 +276,28 @@ async function handleChatSession({
       console.error("Failed to save user message:", dbError);
     }
 
-    // Get conversation history
+    // 2. Load and Format History correctly for Claude 3
     const dbMessages = await getConversationHistory(conversationId);
     let conversationHistory = dbMessages.map((dbMessage) => {
-      let content;
       try {
-        content = JSON.parse(dbMessage.content);
+        const parsed = JSON.parse(dbMessage.content);
+        // If it's already a valid array of blocks, use it
+        if (Array.isArray(parsed)) {
+          return { role: dbMessage.role, content: parsed };
+        }
+        // If it's just a JSON string/object but not array, wrap it
+        return { role: dbMessage.role, content: [{ type: "text", text: JSON.stringify(parsed) }] };
       } catch (e) {
-        content = dbMessage.content;
+        // If it's a plain string (like from earlier saves), wrap in text block
+        return { role: dbMessage.role, content: [{ type: "text", text: dbMessage.content }] };
       }
-      return { role: dbMessage.role, content };
     });
 
-    // Stream from Claude
     let finalMessage = { role: "user", content: userMessage };
     let fullResponseText = "";
     let currentAssistantMessage = null;
 
     while (finalMessage.stop_reason !== "end_turn") {
-      // Reset for each turn
       currentAssistantMessage = null;
       
       finalMessage = await claudeService.streamConversation(
@@ -310,150 +313,130 @@ async function handleChatSession({
           },
 
           onMessage: async (message) => {
-            // ✅ Store the message but DON'T add to history yet
-            // We'll add it after all tool uses are processed
             currentAssistantMessage = message;
-
-            // Extract text content for saving to database and streaming
-            let textContent = "";
-            if (Array.isArray(message.content)) {
-              textContent = message.content
-                .filter((b) => b.type === "text")
-                .map((b) => b.text)
-                .join("\n\n");
-            } else {
-              textContent = message.content;
-            }
 
             const responseTime = Date.now() - startTime;
 
-            // Save message to database (non-blocking) - only if there's text
-            if (textContent.trim()) {
-              saveMessage(conversationId, message.role, textContent, {
-                contentType: "TEXT",
-                responseTimeMs: responseTime,
-                shopDomain,
-                visitorId,
-              }).catch((err) => console.error("Error saving assistant message:", err));
-            }
+            // ✅ CRITICAL: Save the FULL message content (including tool_use blocks)
+            // serialized as JSON. This ensures next turn has context.
+            const serializedContent = JSON.stringify(message.content);
 
-            // Track analytics (non-blocking)
-            const trackingId = visitorId || fingerprintId || conversationId;
+            saveMessage(conversationId, message.role, serializedContent, {
+              contentType: "JSON", // Mark as JSON
+              responseTimeMs: responseTime,
+              shopDomain,
+              visitorId,
+            }).catch((err) => console.error("Error saving assistant message:", err));
+
+            // Analytics
             try {
-              ChatEvents.messageReceived(trackingId, {
+              const textLen = typeof fullResponseText === 'string' ? fullResponseText.length : 0;
+              ChatEvents.messageReceived(visitorId || fingerprintId, {
                 conversationId,
                 responseTimeMs: responseTime,
-                contentLength: textContent.length,
+                contentLength: textLen,
               });
-            } catch (e) {
-              console.warn("Analytics failed:", e);
-            }
+            } catch (e) {}
 
             stream.sendMessage({ type: "message_complete" });
           },
 
-           onToolUse: async (content) => {
-  const toolName = content.name;
-  const toolArgs = content.input;
-  const toolUseId = content.id;
+          onToolUse: async (content) => {
+            const toolName = content.name;
+            const toolArgs = content.input;
+            const toolUseId = content.id;
 
-  const toolUseMessage = `Calling tool: ${toolName} with arguments: ${JSON.stringify(toolArgs)}`;
+            const toolUseMessage = `Calling tool: ${toolName}`;
+            stream.sendMessage({
+              type: 'tool_use',
+              tool_use_message: toolUseMessage
+            });
 
-  stream.sendMessage({
-    type: 'tool_use',
-    tool_use_message: toolUseMessage
-  });
+            // Track
+            try {
+              ChatEvents.toolCalled(visitorId || fingerprintId, {
+                conversationId,
+                toolName,
+                toolArgs,
+              });
+            } catch (e) {}
 
-  const trackingId = visitorId || fingerprintId || conversationId;
-  try {
-    ChatEvents.toolCalled(trackingId, {
-      conversationId,
-      toolName,
-      toolArgs,
-    });
-  } catch (e) {
-    console.warn("Analytics failed:", e);
-  }
+            // Call tool
+            const toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
 
-  // Call the tool
-  const toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
+            // Handle product results specifically for UI
+            if (toolName === "search_shop_catalog" && !toolUseResponse.error) {
+              const products = toolService.processProductSearchResult(toolUseResponse, shopDomain);
+              
+              if (products && products.length > 0) {
+                stream.sendMessage({
+                  type: "product_results",
+                  products: products,
+                  count: products.length
+                });
 
-  // ✅ ENHANCED: Process and send products to frontend
-  if (toolName === "search_shop_catalog" && !toolUseResponse.error) {
-    const products = toolService.processProductSearchResult(toolUseResponse, shopDomain);
-    
-    if (products && products.length > 0) {
-      console.log(`📦 Sending ${products.length} products to frontend`);
-      
-      // Send products to frontend for display
-      stream.sendMessage({
-        type: "product_results",
-        products: products,
-        count: products.length
-      });
+                // Summary for Claude to save tokens
+                if (toolUseResponse.content && toolUseResponse.content.length > 0) {
+                  const summary = toolService.createProductSummary(products);
+                  toolUseResponse.content = [{
+                    type: "text",
+                    text: JSON.stringify({
+                      status: "success",
+                      product_count: summary.product_count,
+                      message: "Products displayed in UI. Briefly acknowledge."
+                    })
+                  }];
+                }
+              }
+            }
 
-      // ✅ CRITICAL: Modify the tool response to prevent Claude from being verbose
-      // Replace the detailed product list with a concise summary
-      if (toolUseResponse.content && toolUseResponse.content.length > 0) {
-        const summary = toolService.createProductSummary(products);
-        toolUseResponse.content = [{
-          type: "text",
-          text: JSON.stringify({
-            status: "success",
-            product_count: summary.product_count,
-            message: "Products have been displayed in the UI with images and add-to-cart buttons. Keep your response very brief - just acknowledge the results in 1-2 sentences maximum."
-          })
-        }];
-      }
-    }
-  }
+            // Update local history for current loop
+            if (currentAssistantMessage) {
+              conversationHistory.push({
+                role: currentAssistantMessage.role,
+                content: currentAssistantMessage.content
+              });
+              currentAssistantMessage = null;
+            }
 
-  // Add assistant message to history FIRST
-  if (currentAssistantMessage) {
-    conversationHistory.push({
-      role: currentAssistantMessage.role,
-      content: currentAssistantMessage.content
-    });
-    currentAssistantMessage = null;
-  }
+            // Prepare result content
+            let resultContent;
+            if (toolUseResponse.error) {
+              resultContent = {
+                type: "tool_result",
+                tool_use_id: toolUseId,
+                content: JSON.stringify({ error: toolUseResponse.error.data || toolUseResponse.error }),
+                is_error: true,
+              };
+              stream.sendMessage({
+                type: "tool_error",
+                tool_name: toolName,
+                error: toolUseResponse.error.data || toolUseResponse.error,
+              });
+            } else {
+              resultContent = {
+                type: "tool_result",
+                tool_use_id: toolUseId,
+                content: toolUseResponse.content || [],
+              };
+            }
 
-  // Then add tool_result to conversation history
-  if (toolUseResponse.error) {
-    const errorContent = {
-      type: "tool_result",
-      tool_use_id: toolUseId,
-      content: JSON.stringify({
-        error: toolUseResponse.error.data || toolUseResponse.error,
-      }),
-      is_error: true,
-    };
+            // ✅ CRITICAL: Save the tool result to DB so history remains valid
+            const toolResultMsg = [resultContent];
+            saveMessage(conversationId, "user", JSON.stringify(toolResultMsg), {
+              contentType: "JSON",
+              toolName: toolName,
+              shopDomain,
+              visitorId
+            }).catch(e => console.error("Failed to save tool result:", e));
 
-    conversationHistory.push({
-      role: "user",
-      content: [errorContent],
-    });
+            conversationHistory.push({
+              role: "user",
+              content: toolResultMsg,
+            });
 
-    stream.sendMessage({
-      type: "tool_error",
-      tool_name: toolName,
-      error: toolUseResponse.error.data || toolUseResponse.error,
-    });
-  } else {
-    const resultContent = {
-      type: "tool_result",
-      tool_use_id: toolUseId,
-      content: toolUseResponse.content || [],
-    };
-
-    conversationHistory.push({
-      role: "user",
-      content: [resultContent],
-    });
-  }
-
-  // Signal new message to client
-  stream.sendMessage({ type: 'new_message' });
-},
+            stream.sendMessage({ type: 'new_message' });
+          },
         
           onContentBlock: (contentBlock) => {
             if (contentBlock.type === "text") {
@@ -466,7 +449,6 @@ async function handleChatSession({
         }
       );
 
-      // ✅ If no tools were used, add the assistant message to history now
       if (currentAssistantMessage) {
         conversationHistory.push({
           role: currentAssistantMessage.role,
@@ -480,44 +462,26 @@ async function handleChatSession({
 
   } catch (error) {
     console.error("Error in chat session:", error);
-    
-    const trackingId = visitorId || fingerprintId || conversationId;
-    try {
-      ChatEvents.errorOccurred(trackingId, {
-        conversationId,
-        error: error.message,
-      });
-    } catch (e) {
-      // Ignore analytics errors
-    }
-
     stream.sendMessage({ 
       type: "error", 
-      error: "Failed to get response from Claude. Please try again." 
+      error: "Failed to get response. Please try again." 
     });
   }
 }
-/* ------------------------
-   Get customer URLs helper
-   ------------------------ */
+
 async function getCustomerAccountUrls(conversationIdOrDomain, conversationId, dbHelpers) {
   try {
     const existing = await dbHelpers.getCustomerAccountUrlsFromDb(conversationId);
     if (existing) return existing;
-
     if (!conversationIdOrDomain) return { mcpApiUrl: null };
-
+    
     const hostname = conversationIdOrDomain.includes('.') 
       ? conversationIdOrDomain 
       : new URL(conversationIdOrDomain).hostname;
 
     const [mcpResponse, openidResponse] = await Promise.all([
-      fetch(`https://${hostname}/.well-known/customer-account-api`)
-        .then((r) => r.json())
-        .catch(() => ({})),
-      fetch(`https://${hostname}/.well-known/openid-configuration`)
-        .then((r) => r.json())
-        .catch(() => ({})),
+      fetch(`https://${hostname}/.well-known/customer-account-api`).then(r => r.json()).catch(() => ({})),
+      fetch(`https://${hostname}/.well-known/openid-configuration`).then(r => r.json()).catch(() => ({})),
     ]);
 
     const response = {
@@ -538,9 +502,6 @@ async function getCustomerAccountUrls(conversationIdOrDomain, conversationId, db
   }
 }
 
-/* ------------------------
-   CORS Headers
-   ------------------------ */
 function getCorsHeaders(request) {
   const origin = request.headers.get("Origin") || "*";
   return {

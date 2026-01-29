@@ -1,5 +1,6 @@
 // app/routes/api.cart.jsx
-import { json } from "@remix-run/node";
+// FIXED: Removed invalid @remix-run/node import
+// FIXED: Uses Response.json() for React Router v7 compatibility
 
 // Handle CORS Preflight
 export function loader({ request }) {
@@ -20,7 +21,6 @@ export async function action({ request }) {
 
   try {
     // 1. Dynamic Imports to prevent "Server-only module" build errors
-    // These modules import db.server, so they must be imported dynamically inside the action
     const { default: MCPClient } = await import("../mcp-client");
     const { getCustomerAccountUrls } = await import("../db.server");
 
@@ -32,7 +32,8 @@ export async function action({ request }) {
     const shopDomain = origin ? new URL(origin).hostname : (body.shopDomain || null);
     
     if (!shopDomain) {
-      return json({ error: "Missing shop domain" }, { status: 400, headers: getCorsHeaders(request) });
+      // Use Response.json instead of json() helper
+      return Response.json({ error: "Missing shop domain" }, { status: 400, headers: getCorsHeaders(request) });
     }
 
     console.log(`🛒 Cart Action: Adding ${quantity} x ${variantId || productQuery} to cart ${cartId || 'new'}`);
@@ -66,12 +67,11 @@ export async function action({ request }) {
     }
 
     // Extract checkout URL and Cart ID from the result
-    // Result structure depends on the MCP tool, typically { cart: { id, checkoutUrl, ... } }
     const cart = result.cart || result;
     const checkoutUrl = cart.checkoutUrl || cart.checkout_url;
     const newCartId = cart.id;
 
-    return json({
+    return Response.json({
       status: "success",
       cartId: newCartId,
       checkoutUrl: checkoutUrl,
@@ -80,7 +80,7 @@ export async function action({ request }) {
 
   } catch (error) {
     console.error("Cart API Error:", error);
-    return json({ 
+    return Response.json({ 
       status: "error", 
       message: error.message || "Failed to add to cart" 
     }, { status: 500, headers: getCorsHeaders(request) });

@@ -1,22 +1,32 @@
-/**
- * UI/UX REWRITE – VISUAL PARITY WITH REFERENCE
- * Backend logic preserved
- */
-(function() {
+(function () {
   'use strict';
 
   const ShopAIChat = {
     state: {
       isOpen: false,
-      history: [],
-      conversationId: sessionStorage.getItem('shopAiConversationId'),
-      isThinking: false
+      isThinking: false,
+      conversationId: sessionStorage.getItem('shopAiConversationId') || null,
+      visitorId: sessionStorage.getItem('shopAiVisitorId') || null,
+      emailCaptured: localStorage.getItem('shopAiEmailCaptured') === 'true',
+      emailPopupShown: sessionStorage.getItem('shopAiEmailPopupShown') === 'true',
+      buffer: '',
+      placeholderIndex: 0,
+      chatHistory: JSON.parse(localStorage.getItem('shopAiChatHistory') || '[]')
     },
+
+    placeholders: [
+      'Ask me anything...',
+      'Suggest me products',
+      'What else would you like to know?',
+      'Need more details?',
+      'Search by SKU or model',
+      'Tell me about your requirements',
+      'Looking for something specific?'
+    ],
 
     elements: {},
 
-    init: function() {
-      // Cache DOM elements
+    init() {
       this.elements = {
         floatingGroup: document.getElementById('shop-ai-floating-group'),
         modal: document.getElementById('shop-ai-modal'),
@@ -27,45 +37,65 @@
         closeBtn: document.getElementById('shop-ai-close-btn'),
         menuBtn: document.getElementById('shop-ai-menu-btn'),
         menuDropdown: document.getElementById('shop-ai-menu'),
-        suggestions: document.getElementById('shop-ai-suggestions')
+        suggestions: document.getElementById('shop-ai-suggestions'),
+        emailOverlay: document.getElementById('shop-ai-email-overlay'),
+        emailInput: document.getElementById('shop-ai-email-input'),
+        emailSubmit: document.getElementById('shop-ai-email-submit'),
+        emailSkip: document.getElementById('shop-ai-email-skip'),
+        emailError: document.getElementById('shop-ai-email-error'),
+        historyPanel: document.getElementById('shop-ai-history-panel'),
+        historyList: document.getElementById('shop-ai-history-list'),
+        backBtn: document.getElementById('shop-ai-back-btn')
       };
 
-      if (!this.elements.floatingGroup) return; // Guard
+      if (!this.elements.modal) return;
 
-      this.setupEventListeners();
-      this.restoreHistory();
+      this.bindEvents();
+      this.startPlaceholderRotation();
+      this.restoreState();
+      this.exposeAPI();
     },
 
-    setupEventListeners: function() {
-      // Floating Buttons
-      const triggers = document.querySelectorAll('[data-trigger]');
-      triggers.forEach(btn => btn.addEventListener('click', () => this.open()));
-
-      // Close & Backdrop
-      this.elements.closeBtn.addEventListener('click', () => this.close());
-      this.elements.backdrop.addEventListener('click', () => this.close());
-
-      // Menu Toggle
-      this.elements.menuBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.elements.menuDropdown.classList.toggle('active');
-      });
-      document.addEventListener('click', () => this.elements.menuDropdown.classList.remove('active'));
-
-      // Menu Actions
-      const menuActions = document.querySelectorAll('.shop-ai-menu-item');
-      menuActions.forEach(action => {
-        action.addEventListener('click', (e) => {
-          const type = e.currentTarget.dataset.action;
-          if(type === 'new') this.startNewChat();
-          if(type === 'end') this.close(); // Simplified for UI
+    bindEvents() {
+      // Floating triggers
+      document.querySelectorAll('[data-trigger]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          this.open();
         });
       });
 
-      // Input Handling
+      // Close handlers
+      this.elements.closeBtn.addEventListener('click', () => this.close());
+      this.elements.backdrop.addEventListener('click', () => this.close());
+
+      // Menu toggle
+      this.elements.menuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const expanded = this.elements.menuDropdown.classList.toggle('active');
+        this.elements.menuBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      });
+
+      document.addEventListener('click', () => {
+        this.elements.menuDropdown.classList.remove('active');
+        this.elements.menuBtn.setAttribute('aria-expanded', 'false');
+      });
+
+      // Menu items
+      this.elements.menuDropdown.querySelectorAll('.shop-ai-menu-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+          const action = e.currentTarget.dataset.action;
+          if (action === 'new') this.startNewChat();
+          if (action === 'history') this.openHistory();
+          if (action === 'end') this.endChat();
+          this.elements.menuDropdown.classList.remove('active');
+        });
+      });
+
+      // Input behavior
       this.elements.input.addEventListener('input', (e) => {
         e.target.style.height = 'auto';
-        e.target.style.height = e.target.scrollHeight + 'px';
+        e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
         const hasText = e.target.value.trim().length > 0;
         this.elements.sendBtn.classList.toggle('active', hasText);
       });
@@ -75,297 +105,540 @@
           e.preventDefault();
           this.handleSubmit();
         }
+        if (e.key === 'Escape') {
+          this.close();
+        }
       });
 
-      this.elements.sendBtn.addEventListener('click', () => this.handleSubmit());
+      this.elements.sendBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.handleSubmit();
+      });
+
+      // Email capture handlers
+      this.elements.emailSubmit.addEventListener('click', () => this.submitEmail());
+      this.elements.emailSkip.addEventListener('click', () => this.skipEmail());
+      this.elements.emailInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          this.submitEmail();
+        }
+      });
+
+      // History handlers
+      this.elements.backBtn.addEventListener('click', () => this.closeHistory());
+
+      // Resize handling
+      let resizeTimeout;
+      window.addEventListener('resize', () => {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => this.adjustModalForContent(), 120);
+      });
     },
 
-    open: function() {
+    startPlaceholderRotation() {
+      setInterval(() => {
+        if (!this.state.isOpen || this.elements.input.value.trim().length > 0) return;
+        
+        this.state.placeholderIndex = (this.state.placeholderIndex + 1) % this.placeholders.length;
+        
+        // Smooth fade transition
+        this.elements.input.style.opacity = '0.5';
+        this.elements.input.style.transition = 'opacity 0.3s ease';
+        
+        setTimeout(() => {
+          this.elements.input.placeholder = this.placeholders[this.state.placeholderIndex];
+          this.elements.input.style.opacity = '1';
+        }, 300);
+      }, 4000);
+    },
+
+    exposeAPI() {
+      window.ShopAIChat = this;
+      if (!window.ShopAIChatAPI) window.ShopAIChatAPI = this;
+    },
+
+    restoreState() {
+      if (this.elements.suggestions) {
+        this.elements.suggestions.classList.add('visible');
+      }
+    },
+
+    open() {
       document.body.classList.add('shop-ai-open');
-      this.elements.floatingGroup.classList.add('hidden');
+      if (this.elements.floatingGroup) this.elements.floatingGroup.classList.add('hidden');
       this.state.isOpen = true;
-      // Focus input after animation
-      setTimeout(() => this.elements.input.focus(), 400);
+      
+      setTimeout(() => this.elements.input.focus(), 320);
+      
+      // Show email popup after 3 seconds if not captured yet
+      if (!this.state.emailCaptured && !this.state.emailPopupShown) {
+        setTimeout(() => {
+          if (this.state.isOpen && this.elements.messages.children.length > 2) {
+            this.showEmailPopup();
+          }
+        }, 3000);
+      }
     },
 
-    close: function() {
+    close() {
       document.body.classList.remove('shop-ai-open');
-      this.elements.floatingGroup.classList.remove('hidden');
+      if (this.elements.floatingGroup) this.elements.floatingGroup.classList.remove('hidden');
       this.state.isOpen = false;
     },
 
-    startNewChat: function() {
-      sessionStorage.removeItem('shopAiConversationId');
-      this.state.conversationId = null;
-      this.elements.messages.innerHTML = '';
-      this.elements.messages.appendChild(this.elements.suggestions); // Move suggestions back
-      this.elements.suggestions.classList.add('visible');
+    showEmailPopup() {
+      this.elements.emailOverlay.classList.add('active');
+      this.state.emailPopupShown = true;
+      sessionStorage.setItem('shopAiEmailPopupShown', 'true');
     },
 
-    handleSubmit: function() {
-      const text = this.elements.input.value.trim();
-      if (!text) return;
+    hideEmailPopup() {
+      this.elements.emailOverlay.classList.remove('active');
+    },
 
-      // Hide suggestions
-      this.elements.suggestions.classList.remove('visible');
+    async submitEmail() {
+      const email = this.elements.emailInput.value.trim();
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      
+      if (!emailRegex.test(email)) {
+        this.elements.emailError.classList.add('visible');
+        return;
+      }
 
-      // Add user message
-      this.addMessage(text, 'user');
+      this.elements.emailError.classList.remove('visible');
+
+      try {
+        // Submit to backend
+        await fetch(window.shopChatConfig.leadsUrl, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            email: email,
+            visitor_id: this.state.visitorId,
+            source: 'chat_popup'
+          })
+        });
+
+        this.state.emailCaptured = true;
+        localStorage.setItem('shopAiEmailCaptured', 'true');
+        this.hideEmailPopup();
+      } catch (err) {
+        console.error('Email submission error:', err);
+        this.hideEmailPopup();
+      }
+    },
+
+    skipEmail() {
+      this.hideEmailPopup();
+    },
+
+    startNewChat() {
+      sessionStorage.removeItem('shopAiConversationId');
+      this.state.conversationId = null;
+      
+      if (this.elements.messages) {
+        this.elements.messages.querySelectorAll('.shop-ai-message, .shop-ai-thinking-container, .shop-ai-product-container').forEach(n => n.remove());
+        
+        if (this.elements.suggestions) {
+          this.elements.messages.appendChild(this.elements.suggestions);
+          this.elements.suggestions.classList.add('visible');
+        }
+      }
+      
+      window.dispatchEvent(new CustomEvent('shop-ai-new-chat', { detail: {} }));
+      this.elements.input.focus();
+    },
+
+    openHistory() {
+      this.elements.historyPanel.classList.add('active');
+      this.renderHistory();
+    },
+
+    closeHistory() {
+      this.elements.historyPanel.classList.remove('active');
+    },
+
+    renderHistory() {
+      if (!this.state.chatHistory.length) {
+        this.elements.historyList.innerHTML = '<p style="text-align:center;color:#666;padding:40px;">No previous chats</p>';
+        return;
+      }
+
+      this.elements.historyList.innerHTML = this.state.chatHistory
+        .reverse()
+        .map((chat, idx) => `
+          <div class="shop-ai-history-item" onclick="ShopAIChat.loadChat(${idx})">
+            <div class="shop-ai-history-item-title">${this.truncate(chat.title, 60)}</div>
+            <div class="shop-ai-history-item-time">${this.formatTime(chat.timestamp)}</div>
+          </div>
+        `)
+        .join('');
+    },
+
+    loadChat(index) {
+      // Load chat from history
+      const chat = this.state.chatHistory[this.state.chatHistory.length - 1 - index];
+      if (!chat) return;
+
+      this.startNewChat();
+      
+      // Re-render messages
+      chat.messages.forEach(msg => {
+        this.addMessage(msg.content, msg.role);
+      });
+
+      this.closeHistory();
+    },
+
+    endChat() {
+      // Save to history before ending
+      const messages = Array.from(this.elements.messages.querySelectorAll('.shop-ai-message'))
+        .map(msg => ({
+          role: msg.classList.contains('user') ? 'user' : 'assistant',
+          content: msg.querySelector('.shop-ai-bubble').textContent
+        }));
+
+      if (messages.length > 0) {
+        const chatRecord = {
+          title: messages[0]?.content || 'Chat',
+          timestamp: Date.now(),
+          messages: messages
+        };
+
+        this.state.chatHistory.push(chatRecord);
+        
+        // Keep only last 20 chats
+        if (this.state.chatHistory.length > 20) {
+          this.state.chatHistory = this.state.chatHistory.slice(-20);
+        }
+
+        localStorage.setItem('shopAiChatHistory', JSON.stringify(this.state.chatHistory));
+      }
+
+      this.startNewChat();
+    },
+
+    handleSubmit() {
+      const message = this.elements.input.value.trim();
+      if (!message || this.state.isThinking) return;
+
+      this.send(message);
       this.elements.input.value = '';
       this.elements.input.style.height = 'auto';
       this.elements.sendBtn.classList.remove('active');
+    },
+
+    send(message) {
+      // Hide suggestions
+      if (this.elements.suggestions) {
+        this.elements.suggestions.classList.remove('visible');
+        this.elements.suggestions.remove();
+      }
+
+      // Add user message
+      this.addMessage(message, 'user');
 
       // Start streaming
-      this.startStream(text);
+      this.startStream(message);
     },
 
-    // Exposed for onclick in HTML
-    send: function(text) {
-      this.elements.input.value = text;
-      this.handleSubmit();
-    },
+    addMessage(content, role) {
+      const msgDiv = document.createElement('div');
+      msgDiv.className = `shop-ai-message ${role}`;
 
-    addMessage: function(content, role) {
-      const div = document.createElement('div');
-      div.className = `shop-ai-message ${role}`;
-      
       const bubble = document.createElement('div');
       bubble.className = 'shop-ai-bubble';
       
       if (role === 'assistant') {
-        // Simple markdown parser
-        let html = content
-          .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-          .replace(/\n/g, '<br>');
-        bubble.innerHTML = html;
+        bubble.innerHTML = this.parseMarkdown(content);
       } else {
         bubble.textContent = content;
       }
 
-      div.appendChild(bubble);
-      this.elements.messages.appendChild(div);
+      msgDiv.appendChild(bubble);
+      this.elements.messages.appendChild(msgDiv);
+      
       this.scrollToBottom();
-      return div;
+      return msgDiv;
     },
 
-    // ---------------------------------------------------------
-    // THINKING UI (3-STAGE ANIMATION)
-    // ---------------------------------------------------------
-    showThinking: function() {
+    parseMarkdown(text) {
+      // Clean up markdown formatting
+      let html = text
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/\n\n/g, '</p><p>')
+        .replace(/\n/g, '<br>');
+
+      // Remove any remaining ** or // or --
+      html = html.replace(/\*\*/g, '').replace(/\/\//g, '').replace(/--/g, '');
+
+      return `<p>${html}</p>`;
+    },
+
+    showThinking() {
       if (this.state.isThinking) return;
       this.state.isThinking = true;
 
       const container = document.createElement('div');
-      container.className = 'shop-ai-thinking-container active';
       container.id = 'shop-ai-thinking-ui';
+      container.className = 'shop-ai-thinking-container';
 
-      // Stage 1: Thought about
       container.innerHTML = `
-        <div class="shop-ai-step current" id="step-1">
-          <div class="shop-ai-step-icon"><div class="shop-ai-spinner"></div></div>
-          <span>Thought about the question</span>
+        <div class="shop-ai-thinking-stages">
+          <div class="shop-ai-stage active" data-stage="1"></div>
+          <div class="shop-ai-stage" data-stage="2"></div>
+          <div class="shop-ai-stage" data-stage="3"></div>
         </div>
-        <div class="shop-ai-step" id="step-2">
-          <div class="shop-ai-step-icon"></div>
-          <span id="step-2-text">Scouting store...</span>
-        </div>
-        <div class="shop-ai-step" id="step-3">
-          <div class="shop-ai-step-icon"></div>
-          <span>Thinking...</span>
-        </div>
+        <div class="shop-ai-thinking-text">Thinking...</div>
       `;
 
       this.elements.messages.appendChild(container);
       this.scrollToBottom();
-      
-      // Simulate progress to stage 2 automatically after 1s
-      setTimeout(() => this.updateThinkingStage(2), 1000);
     },
 
-    updateThinkingStage: function(stage, customText) {
+    updateThinkingStage(stage, text) {
       const ui = document.getElementById('shop-ai-thinking-ui');
       if (!ui) return;
 
-      const s1 = ui.querySelector('#step-1');
-      const s2 = ui.querySelector('#step-2');
-      const s3 = ui.querySelector('#step-3');
+      const stages = ui.querySelectorAll('.shop-ai-stage');
+      const textEl = ui.querySelector('.shop-ai-thinking-text');
 
-      // Checkmark SVG
-      const check = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>`;
-      const spinner = `<div class="shop-ai-spinner"></div>`;
-      const pulse = `<div class="shop-ai-pulse-dot"></div>`;
+      stages.forEach((s, idx) => {
+        if (idx < stage) {
+          s.classList.add('active');
+        } else {
+          s.classList.remove('active');
+        }
+      });
 
-      if (stage === 2) {
-        s1.classList.replace('current', 'done');
-        s1.querySelector('.shop-ai-step-icon').innerHTML = check;
-        
-        s2.classList.add('current');
-        s2.querySelector('.shop-ai-step-icon').innerHTML = spinner;
-        if(customText) s2.querySelector('#step-2-text').textContent = customText;
-      }
-
-      if (stage === 3) {
-        s2.classList.replace('current', 'done');
-        s2.querySelector('.shop-ai-step-icon').innerHTML = check;
-
-        s3.classList.add('current');
-        s3.querySelector('.shop-ai-step-icon').innerHTML = pulse;
-      }
+      if (text) textEl.textContent = text;
     },
 
-    removeThinking: function() {
+    removeThinking() {
       const ui = document.getElementById('shop-ai-thinking-ui');
       if (ui) ui.remove();
       this.state.isThinking = false;
     },
 
-    // ---------------------------------------------------------
-    // PRODUCT RENDERING (ROW-WISE)
-    // ---------------------------------------------------------
-    renderProducts: function(products) {
+    renderProducts(products) {
       if (!products || !products.length) return;
 
       const container = document.createElement('div');
-      container.style.marginBottom = '20px';
+      container.className = 'shop-ai-product-container';
 
-      products.forEach(p => {
+      products.forEach(prod => {
         const card = document.createElement('div');
         card.className = 'shop-ai-product-row';
-        
-        // Image
+
         const img = document.createElement('img');
         img.className = 'shop-ai-prod-img';
-        img.src = p.image_url || '';
-        img.alt = p.title;
+        img.alt = prod.title || 'Product';
+        img.src = prod.image_url || '';
+        img.loading = 'lazy';
 
-        // Details
-        const details = document.createElement('div');
-        details.className = 'shop-ai-prod-info';
-        
+        const info = document.createElement('div');
+        info.className = 'shop-ai-prod-info';
+
         const title = document.createElement('div');
         title.className = 'shop-ai-prod-title';
-        title.textContent = p.title;
+        title.textContent = prod.title || 'Untitled';
 
         const price = document.createElement('div');
         price.className = 'shop-ai-prod-price';
-        // Handle price range object or string
-        let priceTxt = p.price;
-        if(p.price_range) {
-            priceTxt = `${p.price_range.min} ${p.price_range.currency || ''}`;
-        }
-        price.textContent = priceTxt;
+        price.textContent = prod.price || (prod.price_range ? `${prod.price_range.min} ${prod.price_range.currency || ''}` : '');
 
-        const btn = document.createElement('button');
-        btn.className = 'shop-ai-prod-btn';
-        btn.textContent = 'Add to cart';
-        btn.onclick = () => this.send(`Add ${p.title} to my cart`);
+        const actions = document.createElement('div');
+        actions.className = 'shop-ai-prod-actions';
 
-        details.appendChild(title);
-        details.appendChild(price);
-        details.appendChild(btn);
+        // Add to cart button
+        const addBtn = document.createElement('button');
+        addBtn.className = 'shop-ai-prod-btn';
+        addBtn.textContent = 'Add to cart';
+        addBtn.onclick = (e) => {
+          e.stopPropagation();
+          window.dispatchEvent(new CustomEvent('shop-ai-add-to-cart', { detail: { product: prod } }));
+          
+          // Visual feedback
+          addBtn.textContent = '✓ Added';
+          addBtn.style.background = '#10b981';
+          setTimeout(() => {
+            addBtn.textContent = 'Add to cart';
+            addBtn.style.background = '';
+          }, 2000);
+        };
+
+        // View product button
+        const viewBtn = document.createElement('button');
+        viewBtn.className = 'shop-ai-prod-btn shop-ai-prod-btn-view';
+        viewBtn.textContent = 'View';
+        viewBtn.onclick = (e) => {
+          e.stopPropagation();
+          if (prod.url) {
+            window.open(prod.url, '_blank');
+          }
+        };
+
+        actions.appendChild(addBtn);
+        if (prod.url) actions.appendChild(viewBtn);
+
+        info.appendChild(title);
+        info.appendChild(price);
+        info.appendChild(actions);
 
         card.appendChild(img);
-        card.appendChild(details);
+        card.appendChild(info);
         container.appendChild(card);
       });
 
       this.elements.messages.appendChild(container);
-      this.scrollToBottom();
+      setTimeout(() => this.scrollToBottom(), 100);
     },
 
-    // ---------------------------------------------------------
-    // API & STREAMING
-    // ---------------------------------------------------------
-    startStream: async function(userMessage) {
+    async startStream(userMessage) {
       this.showThinking();
 
       try {
-        const response = await fetch(window.shopChatConfig.apiUrl, {
+        const resp = await fetch(window.shopChatConfig.apiUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
             message: userMessage,
             conversation_id: this.state.conversationId,
-            prompt_type: 'standardAssistant'
+            prompt_type: window.shopChatConfig.promptType || 'standardAssistant'
           })
         });
 
-        const reader = response.body.getReader();
+        if (!resp.ok) throw new Error('Network error');
+
+        const reader = resp.body.getReader();
         const decoder = new TextDecoder();
+        let currentAssistantMsg = null;
         let buffer = '';
-        let currentMsg = null;
+        let fullText = '';
 
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-
+          
           buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n\n');
-          buffer = lines.pop() || '';
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop() || '';
 
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = JSON.parse(line.slice(6));
-              
-              // Handle Types
-              if (data.type === 'id') {
+          for (const chunk of parts) {
+            const line = chunk.trim();
+            if (!line) continue;
+            
+            const jsonStr = line.startsWith('data:') ? line.slice(5).trim() : line;
+            let data;
+            try { data = JSON.parse(jsonStr); } catch (err) { continue; }
+
+            if (data.type === 'id') {
+              if (data.conversation_id) {
                 this.state.conversationId = data.conversation_id;
                 sessionStorage.setItem('shopAiConversationId', data.conversation_id);
               }
+            }
+
+            if (data.type === 'tool_use') {
+              const toolMsg = data.tool_use_message || '';
+              const short = toolMsg.includes('search') ? 'Searching products...' : 
+                           toolMsg.includes('cart') ? 'Updating cart...' : 
+                           'Scouting store...';
+              this.updateThinkingStage(2, short);
+            }
+
+            if (data.type === 'product_results') {
+              this.removeThinking();
+              this.renderProducts(data.products || []);
+            }
+
+            if (data.type === 'chunk') {
+              if (this.state.isThinking) {
+                this.updateThinkingStage(3, 'Preparing response...');
+                await new Promise(r => setTimeout(r, 300));
+                this.removeThinking();
+              }
               
-              if (data.type === 'tool_use') {
-                // Parse tool name for effect
-                let toolName = "Scouting store...";
-                if(data.tool_use_message.includes("search")) toolName = "Searching catalog...";
-                if(data.tool_use_message.includes("cart")) toolName = "Updating cart...";
-                this.updateThinkingStage(2, toolName);
+              // Accumulate full text before displaying
+              fullText += data.chunk;
+              
+              if (!currentAssistantMsg) {
+                currentAssistantMsg = this.addMessage('', 'assistant');
               }
+              
+              const bubble = currentAssistantMsg.querySelector('.shop-ai-bubble');
+              bubble.innerHTML = this.parseMarkdown(fullText);
+              this.scrollToBottom();
+            }
 
-              if (data.type === 'product_results') {
-                this.removeThinking(); // Stop thinking before showing products
-                this.renderProducts(data.products);
-              }
+            if (data.type === 'message_complete' || data.type === 'end_turn') {
+              this.removeThinking();
+              currentAssistantMsg = null;
+              fullText = '';
+            }
 
-              if (data.type === 'chunk') {
-                if (this.state.isThinking) {
-                  this.updateThinkingStage(3);
-                  // Brief delay to show "Thinking" before text appears
-                  this.removeThinking();
-                }
-
-                if (!currentMsg) {
-                  currentMsg = this.addMessage('', 'assistant');
-                }
-                const bubble = currentMsg.querySelector('.shop-ai-bubble');
-                // Append text (simple stream)
-                bubble.innerHTML += data.chunk.replace(/\n/g, '<br>');
-                this.scrollToBottom();
-              }
+            if (data.type === 'error' || data.type === 'auth_required') {
+              this.removeThinking();
+              this.addMessage(data.error || 'An error occurred', 'assistant');
             }
           }
         }
+
+        this.removeThinking();
       } catch (err) {
         this.removeThinking();
-        this.addMessage("Sorry, I encountered an error. Please try again.", 'assistant');
+        this.addMessage('Sorry, there was an error. Please try again.', 'assistant');
       }
     },
 
-    scrollToBottom: function() {
-      this.elements.messages.scrollTop = this.elements.messages.scrollHeight;
+    adjustModalForContent() {
+      // Ensure modal height accommodates content
+      if (!this.elements.modal || !this.elements.messages) return;
+      
+      requestAnimationFrame(() => this.scrollToBottom());
     },
 
-    restoreHistory: function() {
-      // Basic placeholder - logic would go here to fetch from API if needed
+    scrollToBottom() {
+      if (!this.elements.messages) return;
+      this.elements.messages.scrollTop = this.elements.messages.scrollHeight + 200;
+    },
+
+    truncate(text, length) {
+      return text.length > length ? text.substring(0, length) + '...' : text;
+    },
+
+    formatTime(timestamp) {
+      const date = new Date(timestamp);
+      const now = new Date();
+      const diff = now - date;
+      
+      const minutes = Math.floor(diff / 60000);
+      const hours = Math.floor(diff / 3600000);
+      const days = Math.floor(diff / 86400000);
+      
+      if (minutes < 60) return `${minutes} minutes ago`;
+      if (hours < 24) return `${hours} hours ago`;
+      if (days < 7) return `${days} days ago`;
+      return date.toLocaleDateString();
     }
   };
 
   // Expose global
   window.ShopAIChat = ShopAIChat;
-  
+
   // Initialize
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => ShopAIChat.init());
   } else {
     ShopAIChat.init();
   }
+
+  // Escape key handler
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && ShopAIChat && ShopAIChat.state && ShopAIChat.state.isOpen) {
+      ShopAIChat.close();
+    }
+  });
 })();

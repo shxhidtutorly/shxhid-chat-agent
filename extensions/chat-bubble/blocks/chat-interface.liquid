@@ -3,32 +3,33 @@
 
 <style>
   /* ============================================
-     CORE THEME & RESET
+     MODERN THEME - BLACK, WHITE, LIGHT ORANGE
      ============================================ */
-  :root {
-    --shop-ai-primary: #7c6bf0;
-    --shop-ai-gradient: linear-gradient(135deg, #8B7FD8 0%, #6B5FCE 100%);
+  :root{
+    --shop-ai-primary: #FF9D5C;
+    --shop-ai-primary-dark: #FF8534;
+    --shop-ai-gradient: linear-gradient(135deg, #FF9D5C 0%, #FF8534 100%);
     --shop-ai-bg: #ffffff;
     --shop-ai-text: #1a1a1a;
-    --shop-ai-text-subtle: #6b7280;
-    --shop-ai-border: #e5e7eb;
-    --shop-ai-radius-lg: 24px;
-    --shop-ai-radius-md: 16px;
-    --shop-ai-radius-sm: 12px;
-    --shop-ai-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
-    --shop-ai-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --shop-ai-text-light: #666666;
+    --shop-ai-border: rgba(0,0,0,0.08);
+    --shop-ai-glass: rgba(255,255,255,0.8);
+    --shop-ai-shadow: 0 20px 60px rgba(0,0,0,0.12);
+    --shop-ai-shadow-sm: 0 4px 12px rgba(0,0,0,0.06);
+    --shop-ai-radius: 24px;
+    --shop-ai-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
 
-  .shop-ai-reset * {
+  .shop-ai-reset *{
     box-sizing: border-box;
     font-family: var(--shop-ai-font);
     -webkit-font-smoothing: antialiased;
   }
 
   /* ============================================
-     FLOATING LAUNCHER (BOTTOM RIGHT)
+     FLOATING LAUNCHER
      ============================================ */
-  .shop-ai-floating-group {
+  .shop-ai-floating-group{
     position: fixed;
     bottom: 24px;
     right: 24px;
@@ -37,81 +38,81 @@
     align-items: flex-end;
     gap: 12px;
     z-index: 999990;
-    transition: transform 0.3s ease, opacity 0.3s ease;
+    transition: transform 0.3s ease, opacity 0.25s ease;
   }
-
-  .shop-ai-floating-group.hidden {
+  
+  .shop-ai-floating-group.hidden{
     transform: translateY(20px);
     opacity: 0;
     pointer-events: none;
   }
 
-  .shop-ai-pill-btn {
+  .shop-ai-pill-btn{
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 12px 20px;
-    border-radius: 100px;
-    font-size: 14px;
+    padding: 14px 24px;
+    border-radius: 999px;
+    font-size: 15px;
     font-weight: 600;
     cursor: pointer;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    box-shadow: var(--shop-ai-shadow-sm);
+    transition: all 0.2s ease;
     border: none;
-    opacity: 0;
-    animation: shopAiSlideUp 0.4s ease forwards;
-  }
-
-  .shop-ai-pill-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 16px rgba(0,0,0,0.15);
-  }
-
-  /* Secondary Buttons (White) */
-  .shop-ai-btn-secondary {
     background: white;
-    color: var(--shop-ai-text);
-    border: 1px solid rgba(0,0,0,0.05);
+  }
+  
+  .shop-ai-pill-btn svg{
+    width: 20px;
+    height: 20px;
+  }
+  
+  .shop-ai-pill-btn:hover{
+    transform: translateY(-3px);
+    box-shadow: var(--shop-ai-shadow);
   }
 
-  /* Primary Button (Purple Gradient) */
-  .shop-ai-btn-primary {
+  .shop-ai-btn-primary{
     background: var(--shop-ai-gradient);
-    color: white;
-    padding: 14px 24px;
+    color: #fff;
   }
-
-  .shop-ai-pill-btn svg {
-    width: 18px;
-    height: 18px;
+  
+  .shop-ai-btn-secondary{
+    background: #fff;
+    color: var(--shop-ai-text);
+    border: 1px solid var(--shop-ai-border);
   }
 
   /* ============================================
-     MODAL CONTAINER & BACKDROP
+     BACKDROP & MODAL
      ============================================ */
-  .shop-ai-backdrop {
+  .shop-ai-backdrop{
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.3);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(8px);
     z-index: 999998;
     opacity: 0;
     visibility: hidden;
-    transition: opacity 0.3s ease;
+    transition: all 0.3s ease;
+  }
+  
+  body.shop-ai-open .shop-ai-backdrop{
+    opacity: 1;
+    visibility: visible;
   }
 
-  .shop-ai-modal {
+  .shop-ai-modal{
     position: fixed;
     top: 50%;
     left: 50%;
-    transform: translate(-50%, -48%) scale(0.96);
-    width: 90%;
-    max-width: 680px;
-    height: 85vh;
-    max-height: 800px;
-    background: white;
-    border-radius: var(--shop-ai-radius-lg);
+    transform: translate(-50%, -48%) scale(0.95);
+    width: 92%;
+    max-width: 720px;
+    height: 75vh;
+    max-height: 90vh;
+    background: #ffffff;
+    border-radius: var(--shop-ai-radius);
     box-shadow: var(--shop-ai-shadow);
     z-index: 999999;
     display: flex;
@@ -120,533 +121,971 @@
     opacity: 0;
     visibility: hidden;
     transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    border: 1px solid var(--shop-ai-border);
   }
 
-  body.shop-ai-open .shop-ai-backdrop {
-    opacity: 1;
-    visibility: visible;
-  }
-
-  body.shop-ai-open .shop-ai-modal {
+  body.shop-ai-open .shop-ai-modal{
     opacity: 1;
     visibility: visible;
     transform: translate(-50%, -50%) scale(1);
   }
 
   /* ============================================
-     HEADER
+     HEADER - TRANSLUCENT TEXT ON BORDER
      ============================================ */
-  .shop-ai-header {
-    background: var(--shop-ai-gradient);
-    padding: 20px 24px;
-    color: white;
+  .shop-ai-header{
+    position: relative;
+    padding: 0;
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-shrink: 0;
-  }
-
-  .shop-ai-header-content h3 {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-    color: white;
-  }
-
-  .shop-ai-status {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    opacity: 0.9;
-    margin-top: 4px;
-  }
-
-  .shop-ai-dot {
-    width: 8px;
-    height: 8px;
-    background: #4ade80;
-    border-radius: 50%;
-    box-shadow: 0 0 8px rgba(74, 222, 128, 0.6);
-  }
-
-  .shop-ai-header-actions {
-    display: flex;
-    gap: 8px;
-  }
-
-  .shop-ai-icon-btn {
-    background: rgba(255, 255, 255, 0.15);
-    border: none;
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    color: white;
-    cursor: pointer;
-    transition: background 0.2s;
+    min-height: 100px;
+    border-bottom: 1px solid transparent;
+    background: linear-gradient(180deg, rgba(255,157,92,0.03) 0%, rgba(255,255,255,0) 100%);
+  }
+  
+  .shop-ai-header::before{
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, 
+      transparent 0%, 
+      rgba(255,157,92,0.3) 20%, 
+      rgba(255,133,52,0.5) 50%, 
+      rgba(255,157,92,0.3) 80%, 
+      transparent 100%);
+    opacity: 0.8;
   }
 
-  .shop-ai-icon-btn:hover {
-    background: rgba(255, 255, 255, 0.25);
+  .shop-ai-header h3{
+    margin: 0;
+    font-size: 22px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #FF9D5C 0%, #FF8534 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    position: relative;
+    z-index: 2;
+    letter-spacing: -0.5px;
+  }
+
+  /* Header actions - minimalist 3-dot menu */
+  .shop-ai-header-actions{
+    position: absolute;
+    right: 20px;
+    top: 20px;
+    display: flex;
+    gap: 8px;
+    z-index: 10;
+  }
+  
+  .shop-ai-icon-btn{
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.04);
+    border: 1px solid var(--shop-ai-border);
+    color: var(--shop-ai-text);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  
+  .shop-ai-icon-btn:hover{
+    background: rgba(255,157,92,0.1);
+    transform: translateY(-2px);
+  }
+
+  .shop-ai-menu-btn{
+    position: relative;
+  }
+  
+  .shop-ai-menu-btn svg{
+    width: 4px;
+    height: 4px;
+  }
+  
+  /* 3-dot icon */
+  .shop-ai-3dot-icon{
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    align-items: center;
+  }
+  
+  .shop-ai-3dot-icon span{
+    width: 4px;
+    height: 4px;
+    background: var(--shop-ai-text);
+    border-radius: 50%;
+    opacity: 0.6;
+  }
+
+  /* Dropdown menu */
+  .shop-ai-menu-dropdown{
+    position: absolute;
+    top: 48px;
+    right: 0;
+    background: white;
+    border: 1px solid var(--shop-ai-border);
+    border-radius: 12px;
+    box-shadow: var(--shop-ai-shadow);
+    min-width: 200px;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-10px);
+    transition: all 0.25s ease;
+    overflow: hidden;
+    z-index: 1000;
+  }
+  
+  .shop-ai-menu-dropdown.active{
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+  }
+  
+  .shop-ai-menu-item{
+    width: 100%;
+    padding: 14px 18px;
+    border: none;
+    background: transparent;
+    text-align: left;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--shop-ai-text);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  
+  .shop-ai-menu-item:hover{
+    background: rgba(255,157,92,0.08);
+  }
+  
+  .shop-ai-menu-item.danger{
+    color: #ef4444;
   }
 
   /* ============================================
-     CHAT AREA
+     MESSAGES AREA
      ============================================ */
-  .shop-ai-messages {
+  .shop-ai-messages{
     flex: 1;
     overflow-y: auto;
     padding: 24px;
     display: flex;
     flex-direction: column;
-    gap: 20px;
-    background: #fff;
+    gap: 16px;
+    background: transparent;
     scroll-behavior: smooth;
   }
 
-  /* Assistant Message */
-  .shop-ai-message.assistant {
+  .shop-ai-message{
+    display: flex;
+    flex-direction: column;
+    animation: messageSlide 0.3s ease;
+  }
+  
+  @keyframes messageSlide{
+    from{
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to{
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* User message - clean text, no bubble */
+  .shop-ai-message.user{
+    align-self: flex-end;
+    max-width: 75%;
+  }
+  
+  .shop-ai-message.user .shop-ai-bubble{
+    padding: 0;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    color: var(--shop-ai-text);
+    font-size: 15px;
+    font-weight: 500;
+    text-align: right;
+  }
+
+  /* Assistant message - light bubble */
+  .shop-ai-message.assistant{
     align-self: flex-start;
     max-width: 85%;
   }
-
-  .shop-ai-bubble {
-    padding: 0;
+  
+  .shop-ai-message.assistant .shop-ai-bubble{
+    padding: 16px 18px;
+    background: rgba(0,0,0,0.02);
+    border: 1px solid var(--shop-ai-border);
+    border-radius: 18px;
+    border-top-left-radius: 4px;
     color: var(--shop-ai-text);
     font-size: 15px;
     line-height: 1.6;
   }
+
+  /* Clean markdown formatting */
+  .shop-ai-bubble p{
+    margin: 0 0 12px 0;
+  }
   
-  /* Remove gray background for plain text, keep it clean */
-  .shop-ai-bubble p {
-    margin: 0 0 10px 0;
+  .shop-ai-bubble p:last-child{
+    margin-bottom: 0;
   }
-  .shop-ai-bubble p:last-child { margin: 0; }
-
-  /* User Message */
-  .shop-ai-message.user {
-    align-self: flex-end;
-    max-width: 80%;
-  }
-
-  .shop-ai-message.user .shop-ai-bubble {
-    background: #f3f4f6;
-    padding: 12px 18px;
-    border-radius: 18px;
-    border-bottom-right-radius: 4px;
+  
+  .shop-ai-bubble strong{
+    font-weight: 600;
     color: var(--shop-ai-text);
+  }
+  
+  .shop-ai-bubble a{
+    color: var(--shop-ai-primary);
+    text-decoration: none;
   }
 
   /* ============================================
-     SUGGESTIONS (First View)
+     SUGGESTIONS - INDUSTRIAL PRODUCTS
      ============================================ */
-  .shop-ai-suggestions {
-    margin-top: auto; /* Push to bottom of empty chat */
-    display: none;
+  .shop-ai-suggestions{
+    display: block;
+    margin-top: auto;
+    opacity: 0;
+    animation: fadeIn 0.5s ease forwards;
+    animation-delay: 0.2s;
   }
   
-  .shop-ai-suggestions.visible {
-    display: block;
-    animation: shopAiFadeIn 0.5s ease;
+  @keyframes fadeIn{
+    to{
+      opacity: 1;
+    }
   }
-
-  .shop-ai-sugg-title {
+  
+  .shop-ai-suggestions.visible{
+    opacity: 1;
+  }
+  
+  .shop-ai-sugg-title{
     font-size: 12px;
     text-transform: uppercase;
-    color: #9ca3af;
-    font-weight: 600;
-    margin-bottom: 12px;
+    color: var(--shop-ai-text-light);
+    font-weight: 700;
     letter-spacing: 0.5px;
+    margin-bottom: 14px;
   }
-
-  .shop-ai-sugg-list {
+  
+  .shop-ai-sugg-list{
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
   }
-
-  .shop-ai-sugg-item {
-    background: white;
-    border: 1px solid var(--shop-ai-border);
-    padding: 12px 16px;
-    border-radius: 12px;
-    font-size: 14px;
+  
+  .shop-ai-sugg-item{
     display: flex;
     align-items: center;
     gap: 12px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: white;
+    border: 1px solid var(--shop-ai-border);
     cursor: pointer;
     transition: all 0.2s ease;
+    font-size: 14px;
+    font-weight: 500;
     color: var(--shop-ai-text);
   }
-
-  .shop-ai-sugg-item:hover {
-    background: #f9fafb;
-    border-color: #d1d5db;
-    transform: translateX(4px);
-  }
-
-  .shop-ai-sugg-item svg {
-    color: var(--shop-ai-text-subtle);
-    width: 16px;
-  }
-
-  /* ============================================
-     PRODUCT CARDS (ROW LAYOUT)
-     ============================================ */
-  .shop-ai-product-row {
-    display: flex;
-    gap: 16px;
-    background: #ffffff;
-    border: 1px solid var(--shop-ai-border);
-    border-radius: 16px;
-    padding: 12px;
-    margin-top: 12px;
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-    align-items: center;
-  }
-
-  .shop-ai-product-row:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 20px rgba(0,0,0,0.06);
-    border-color: #d1d5db;
-  }
-
-  .shop-ai-prod-img {
-    width: 80px;
-    height: 80px;
-    border-radius: 10px;
-    object-fit: cover;
-    background: #f3f4f6;
+  
+  .shop-ai-sugg-item svg{
+    width: 18px;
+    height: 18px;
+    color: var(--shop-ai-primary);
     flex-shrink: 0;
   }
-
-  .shop-ai-prod-info {
-    flex: 1;
-    min-width: 0; /* Text truncation fix */
+  
+  .shop-ai-sugg-item:hover{
+    transform: translateX(6px);
+    border-color: var(--shop-ai-primary);
+    box-shadow: var(--shop-ai-shadow-sm);
   }
 
-  .shop-ai-prod-title {
-    font-size: 14px;
-    font-weight: 600;
-    margin: 0 0 4px 0;
-    color: var(--shop-ai-text);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  /* ============================================
+     PRODUCT DISPLAY - ROW LAYOUT
+     ============================================ */
+  .shop-ai-product-container{
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    animation: fadeInUp 0.4s ease;
   }
-
-  .shop-ai-prod-price {
-    font-size: 13px;
-    color: var(--shop-ai-text-subtle);
-    margin-bottom: 8px;
+  
+  @keyframes fadeInUp{
+    from{
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to{
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
-
-  .shop-ai-prod-btn {
+  
+  .shop-ai-product-row{
+    display: flex;
+    gap: 16px;
     background: white;
     border: 1px solid var(--shop-ai-border);
-    padding: 6px 12px;
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 600;
+    border-radius: 14px;
+    padding: 14px;
+    align-items: center;
+    transition: all 0.25s ease;
     cursor: pointer;
-    transition: all 0.2s;
   }
-
-  .shop-ai-prod-btn:hover {
-    background: var(--shop-ai-text);
-    color: white;
-    border-color: var(--shop-ai-text);
+  
+  .shop-ai-product-row:hover{
+    transform: translateY(-4px);
+    box-shadow: var(--shop-ai-shadow);
+    border-color: var(--shop-ai-primary);
   }
-
-  /* ============================================
-     THINKING STATE (MULTI-STAGE)
-     ============================================ */
-  .shop-ai-thinking-container {
-    background: #f9fafb;
-    border: 1px solid #f3f4f6;
-    border-radius: 16px;
-    border-bottom-left-radius: 4px;
-    padding: 16px;
-    width: fit-content;
-    min-width: 220px;
-    display: none; /* Hidden by default */
+  
+  .shop-ai-prod-img{
+    width: 90px;
+    height: 90px;
+    border-radius: 10px;
+    object-fit: cover;
+    background: #f5f5f5;
+    flex-shrink: 0;
   }
-
-  .shop-ai-thinking-container.active {
-    display: block;
-    animation: shopAiFadeIn 0.3s ease;
+  
+  .shop-ai-prod-info{
+    flex: 1;
+    min-width: 0;
   }
-
-  .shop-ai-step {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 13px;
-    color: #9ca3af;
-    margin-bottom: 8px;
-    opacity: 0.5;
-    transition: all 0.3s ease;
-  }
-
-  .shop-ai-step:last-child { margin-bottom: 0; }
-
-  .shop-ai-step.current {
-    color: var(--shop-ai-text);
-    opacity: 1;
-    font-weight: 500;
-  }
-
-  .shop-ai-step.done {
-    color: #6b7280;
-    opacity: 1;
-    text-decoration: line-through;
-  }
-
-  .shop-ai-step-icon {
-    width: 14px;
-    height: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  /* Animations for icons */
-  .shop-ai-spinner {
-    width: 12px;
-    height: 12px;
-    border: 2px solid #e5e7eb;
-    border-top-color: var(--shop-ai-primary);
-    border-radius: 50%;
-    animation: shopAiSpin 0.8s linear infinite;
-  }
-
-  .shop-ai-pulse-dot {
-    width: 6px;
-    height: 6px;
-    background: var(--shop-ai-primary);
-    border-radius: 50%;
-    animation: shopAiPulse 1s infinite;
-  }
-
-  /* ============================================
-     INPUT AREA
-     ============================================ */
-  .shop-ai-input-area {
-    padding: 16px 24px 24px;
-    background: white;
-    border-top: 1px solid var(--shop-ai-border);
-  }
-
-  .shop-ai-input-wrapper {
-    position: relative;
-    background: #f3f4f6;
-    border-radius: 28px;
-    padding: 4px;
-    transition: background 0.2s, box-shadow 0.2s;
-  }
-
-  .shop-ai-input-wrapper:focus-within {
-    background: white;
-    box-shadow: 0 0 0 2px var(--shop-ai-primary);
-  }
-
-  textarea.shop-ai-textarea {
-    width: 100%;
-    border: none;
-    background: transparent;
-    padding: 12px 50px 12px 16px;
+  
+  .shop-ai-prod-title{
     font-size: 15px;
-    line-height: 1.4;
-    resize: none;
-    max-height: 120px;
-    outline: none;
+    font-weight: 700;
     color: var(--shop-ai-text);
+    margin-bottom: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-
-  .shop-ai-send-btn {
-    position: absolute;
-    right: 6px;
-    bottom: 6px;
-    width: 36px;
-    height: 36px;
-    background: transparent;
-    border: none;
-    border-radius: 50%;
-    color: #9ca3af;
-    cursor: pointer;
+  
+  .shop-ai-prod-price{
+    font-size: 14px;
+    color: var(--shop-ai-primary);
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  
+  .shop-ai-prod-actions{
     display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s;
+    gap: 10px;
   }
-
-  .shop-ai-send-btn.active {
+  
+  .shop-ai-prod-btn{
     background: var(--shop-ai-gradient);
     color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  
+  .shop-ai-prod-btn:hover{
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(255,157,92,0.3);
+  }
+  
+  .shop-ai-prod-btn-view{
+    background: transparent;
+    color: var(--shop-ai-text);
+    border: 1px solid var(--shop-ai-border);
   }
 
   /* ============================================
-     MENU
+     THINKING UI - MODERN GLASSY
      ============================================ */
-  .shop-ai-menu-dropdown {
-    position: absolute;
-    top: 60px;
-    right: 20px;
+  .shop-ai-thinking-container{
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    background: rgba(255,255,255,0.6);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,157,92,0.2);
+    border-radius: 16px;
+    animation: thinkingPulse 2s ease infinite;
+  }
+  
+  @keyframes thinkingPulse{
+    0%, 100%{
+      box-shadow: 0 0 0 0 rgba(255,157,92,0.4);
+    }
+    50%{
+      box-shadow: 0 0 0 8px rgba(255,157,92,0);
+    }
+  }
+  
+  .shop-ai-thinking-stages{
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  
+  .shop-ai-stage{
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.1);
+    transition: all 0.3s ease;
+  }
+  
+  .shop-ai-stage.active{
+    background: var(--shop-ai-gradient);
+    animation: stagePulse 1s ease infinite;
+  }
+  
+  @keyframes stagePulse{
+    0%, 100%{
+      transform: scale(1);
+    }
+    50%{
+      transform: scale(1.3);
+    }
+  }
+  
+  .shop-ai-thinking-text{
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--shop-ai-text-light);
+  }
+
+  /* ============================================
+     INPUT AREA - CHATGPT STYLE
+     ============================================ */
+  .shop-ai-input-area{
+    padding: 20px 24px;
+    border-top: 1px solid var(--shop-ai-border);
     background: white;
-    border-radius: 12px;
-    box-shadow: 0 10px 25px rgba(0,0,0,0.15);
-    width: 200px;
-    padding: 8px;
-    opacity: 0;
-    visibility: hidden;
-    transform: translateY(10px);
+  }
+  
+  .shop-ai-input-wrapper{
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    padding: 12px 16px;
+    background: white;
+    border: 2px solid var(--shop-ai-border);
+    border-radius: 16px;
     transition: all 0.2s ease;
-    z-index: 1000000;
   }
-
-  .shop-ai-menu-dropdown.active {
-    opacity: 1;
-    visibility: visible;
-    transform: translateY(0);
+  
+  .shop-ai-input-wrapper:focus-within{
+    border-color: var(--shop-ai-primary);
+    box-shadow: 0 0 0 3px rgba(255,157,92,0.1);
   }
-
-  .shop-ai-menu-item {
+  
+  .shop-ai-textarea{
+    flex: 1;
+    border: none;
+    outline: none;
+    resize: none;
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--shop-ai-text);
+    font-family: var(--shop-ai-font);
+    max-height: 120px;
+    background: transparent;
+  }
+  
+  .shop-ai-textarea::placeholder{
+    color: var(--shop-ai-text-light);
+    opacity: 0.6;
+  }
+  
+  .shop-ai-send-btn{
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: var(--shop-ai-gradient);
+    border: none;
+    color: white;
     display: flex;
     align-items: center;
-    gap: 10px;
-    width: 100%;
-    padding: 10px 12px;
-    border: none;
-    background: transparent;
-    border-radius: 8px;
+    justify-content: center;
     cursor: pointer;
-    font-size: 14px;
-    color: var(--shop-ai-text);
-    text-align: left;
+    transition: all 0.2s ease;
+    opacity: 0.5;
+    pointer-events: none;
+  }
+  
+  .shop-ai-send-btn.active{
+    opacity: 1;
+    pointer-events: auto;
+  }
+  
+  .shop-ai-send-btn:hover{
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(255,157,92,0.4);
+  }
+  
+  .shop-ai-send-btn svg{
+    width: 18px;
+    height: 18px;
   }
 
-  .shop-ai-menu-item:hover { background: #f3f4f6; }
-  .shop-ai-menu-item.danger { color: #ef4444; }
+  /* ============================================
+     EMAIL CAPTURE POPUP
+     ============================================ */
+  .shop-ai-email-overlay{
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.3s ease;
+  }
+  
+  .shop-ai-email-overlay.active{
+    opacity: 1;
+    visibility: visible;
+  }
+  
+  .shop-ai-email-popup{
+    background: white;
+    border-radius: 20px;
+    padding: 36px 32px;
+    max-width: 420px;
+    width: 90%;
+    box-shadow: var(--shop-ai-shadow);
+    animation: popupSlide 0.4s ease;
+    text-align: center;
+  }
+  
+  @keyframes popupSlide{
+    from{
+      opacity: 0;
+      transform: translateY(20px) scale(0.95);
+    }
+    to{
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  
+  .shop-ai-email-icon{
+    width: 64px;
+    height: 64px;
+    margin: 0 auto 20px;
+    background: var(--shop-ai-gradient);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .shop-ai-email-icon svg{
+    width: 32px;
+    height: 32px;
+    color: white;
+  }
+  
+  .shop-ai-email-title{
+    font-size: 24px;
+    font-weight: 700;
+    margin: 0 0 10px 0;
+    color: var(--shop-ai-text);
+  }
+  
+  .shop-ai-email-subtitle{
+    font-size: 15px;
+    color: var(--shop-ai-text-light);
+    margin: 0 0 24px 0;
+  }
+  
+  .shop-ai-email-input-wrapper{
+    position: relative;
+    margin-bottom: 16px;
+  }
+  
+  .shop-ai-email-input{
+    width: 100%;
+    padding: 14px 18px;
+    border: 2px solid var(--shop-ai-border);
+    border-radius: 12px;
+    font-size: 15px;
+    outline: none;
+    transition: all 0.2s ease;
+  }
+  
+  .shop-ai-email-input:focus{
+    border-color: var(--shop-ai-primary);
+  }
+  
+  .shop-ai-email-error{
+    color: #ef4444;
+    font-size: 13px;
+    margin-top: 8px;
+    display: none;
+  }
+  
+  .shop-ai-email-error.visible{
+    display: block;
+  }
+  
+  .shop-ai-email-submit{
+    width: 100%;
+    padding: 14px;
+    background: var(--shop-ai-gradient);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin-bottom: 12px;
+  }
+  
+  .shop-ai-email-submit:hover{
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(255,157,92,0.3);
+  }
+  
+  .shop-ai-email-skip{
+    background: transparent;
+    color: var(--shop-ai-text-light);
+    border: none;
+    padding: 10px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  
+  .shop-ai-email-skip:hover{
+    color: var(--shop-ai-text);
+  }
 
   /* ============================================
-     ANIMATIONS & RESPONSIVE
+     HISTORY PANEL
      ============================================ */
-  @keyframes shopAiSlideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-  @keyframes shopAiFadeIn { from { opacity: 0; } to { opacity: 1; } }
-  @keyframes shopAiSpin { to { transform: rotate(360deg); } }
-  @keyframes shopAiPulse { 0% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.2); opacity: 0.7; } 100% { transform: scale(1); opacity: 1; } }
+  .shop-ai-history-panel{
+    position: absolute;
+    inset: 0;
+    background: white;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+  }
+  
+  .shop-ai-history-panel.active{
+    transform: translateX(0);
+  }
+  
+  .shop-ai-history-header{
+    padding: 24px;
+    border-bottom: 1px solid var(--shop-ai-border);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  
+  .shop-ai-history-header h3{
+    font-size: 18px;
+    font-weight: 700;
+    margin: 0;
+  }
+  
+  .shop-ai-back-btn{
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.04);
+    border: 1px solid var(--shop-ai-border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  
+  .shop-ai-back-btn:hover{
+    background: rgba(255,157,92,0.1);
+  }
+  
+  .shop-ai-history-list{
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+  
+  .shop-ai-history-item{
+    padding: 16px;
+    border: 1px solid var(--shop-ai-border);
+    border-radius: 12px;
+    margin-bottom: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  
+  .shop-ai-history-item:hover{
+    border-color: var(--shop-ai-primary);
+    transform: translateX(6px);
+  }
+  
+  .shop-ai-history-item-title{
+    font-weight: 600;
+    margin-bottom: 4px;
+    color: var(--shop-ai-text);
+  }
+  
+  .shop-ai-history-item-time{
+    font-size: 13px;
+    color: var(--shop-ai-text-light);
+  }
 
-  @media (max-width: 768px) {
-    .shop-ai-modal {
+  /* ============================================
+     MOBILE RESPONSIVE
+     ============================================ */
+  @media (max-width: 768px){
+    .shop-ai-modal{
       width: 100%;
       height: 100%;
       max-width: none;
       max-height: none;
+      border-radius: 0;
       top: 0;
       left: 0;
       transform: translateY(100%);
-      border-radius: 0;
     }
-    body.shop-ai-open .shop-ai-modal {
+    
+    body.shop-ai-open .shop-ai-modal{
       transform: translateY(0);
     }
-    .shop-ai-header { padding-top: max(20px, env(safe-area-inset-top)); }
+    
+    .shop-ai-header{
+      padding-top: max(20px, env(safe-area-inset-top));
+    }
+    
+    .shop-ai-product-row{
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    
+    .shop-ai-prod-img{
+      width: 100%;
+      height: 180px;
+    }
   }
 </style>
 
-<div class="shop-ai-reset">
+<div class="shop-ai-reset" aria-hidden="false">
+  <!-- Floating Launcher -->
   <div class="shop-ai-floating-group" id="shop-ai-floating-group">
-    <button class="shop-ai-pill-btn shop-ai-btn-secondary" style="animation-delay: 0.1s" data-trigger="chat">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
-      Chat with our AI
+    <button class="shop-ai-pill-btn shop-ai-btn-secondary" data-trigger="chat" aria-label="Chat with AI">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+      </svg>
+      Chat with AI
     </button>
-    <button class="shop-ai-pill-btn shop-ai-btn-secondary" style="animation-delay: 0.2s" data-trigger="help">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-      Help me choose
-    </button>
-    <button class="shop-ai-pill-btn shop-ai-btn-primary" style="animation-delay: 0.3s" data-trigger="ask">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L13.5 8.5L20 10L13.5 11.5L12 18L10.5 11.5L4 10L10.5 8.5L12 2Z"/></svg>
-      Ask our AI
+
+    <button class="shop-ai-pill-btn shop-ai-btn-primary" data-trigger="ask" aria-label="Ask AI">
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2L13.5 8.5L20 10L13.5 11.5L12 18L10.5 11.5L4 10L10.5 8.5L12 2Z"/>
+      </svg>
+      Ask AI
     </button>
   </div>
 
+  <!-- Backdrop -->
   <div class="shop-ai-backdrop" id="shop-ai-backdrop"></div>
-  <div class="shop-ai-modal" id="shop-ai-modal">
-    
+
+  <!-- Main Modal -->
+  <div class="shop-ai-modal" id="shop-ai-modal" role="dialog" aria-modal="true" aria-label="AI Assistant">
+    <!-- Header -->
     <div class="shop-ai-header">
-      <div class="shop-ai-header-content">
-        <h3>Hi, how can I help you?</h3>
-        <div class="shop-ai-status">
-          <div class="shop-ai-dot"></div> Online now
-        </div>
-      </div>
+      <h3>Hi, how can I help you?</h3>
+      
       <div class="shop-ai-header-actions">
-        <button class="shop-ai-icon-btn" id="shop-ai-menu-btn">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+        <button class="shop-ai-icon-btn shop-ai-menu-btn" id="shop-ai-menu-btn" aria-label="Menu">
+          <div class="shop-ai-3dot-icon">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
         </button>
-        <button class="shop-ai-icon-btn" id="shop-ai-close-btn">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        <button class="shop-ai-icon-btn" id="shop-ai-close-btn" aria-label="Close">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
         </button>
       </div>
     </div>
 
+    <!-- Dropdown Menu -->
     <div class="shop-ai-menu-dropdown" id="shop-ai-menu">
       <button class="shop-ai-menu-item" data-action="new">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
-        Start a new chat
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+        </svg>
+        New chat
       </button>
       <button class="shop-ai-menu-item" data-action="history">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>
-        View recent chats
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12,6 12,12 16,14"/>
+        </svg>
+        Previous chats
       </button>
       <button class="shop-ai-menu-item danger" data-action="end">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="15" y1="9" x2="9" y2="15"/>
+          <line x1="9" y1="9" x2="15" y2="15"/>
+        </svg>
         End chat
       </button>
     </div>
 
+    <!-- Email Capture Overlay -->
+    <div class="shop-ai-email-overlay" id="shop-ai-email-overlay">
+      <div class="shop-ai-email-popup">
+        <div class="shop-ai-email-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+            <polyline points="22,6 12,13 2,6"/>
+          </svg>
+        </div>
+        <h3 class="shop-ai-email-title">Stay Connected</h3>
+        <p class="shop-ai-email-subtitle">Get exclusive offers and product updates</p>
+        <div class="shop-ai-email-input-wrapper">
+          <input 
+            type="email" 
+            class="shop-ai-email-input" 
+            id="shop-ai-email-input"
+            placeholder="Enter your email..."
+            autocomplete="email"
+          />
+          <p class="shop-ai-email-error" id="shop-ai-email-error">Please enter a valid email</p>
+        </div>
+        <button class="shop-ai-email-submit" id="shop-ai-email-submit">Continue</button>
+        <button class="shop-ai-email-skip" id="shop-ai-email-skip">Skip for now</button>
+      </div>
+    </div>
+
+    <!-- Messages Area -->
     <div class="shop-ai-messages" id="shop-ai-messages">
-      
+      <!-- Suggestions -->
       <div class="shop-ai-suggestions visible" id="shop-ai-suggestions">
-        <div class="shop-ai-sugg-title">Suggestions</div>
+        <div class="shop-ai-sugg-title">How can I assist you?</div>
         <div class="shop-ai-sugg-list">
-          <button class="shop-ai-sugg-item" onclick="ShopAIChat.send('What snowboards are currently in stock?')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-            What snowboards are currently in stock?
+          <button class="shop-ai-sugg-item" onclick="ShopAIChat.send('Show me circuit breakers for industrial applications')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.35-4.35"/>
+            </svg>
+            Show me circuit breakers for industrial applications
           </button>
-          <button class="shop-ai-sugg-item" onclick="ShopAIChat.send('Show me snowboards for videography')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/></svg>
-            Show me snowboards for videography
+
+          <button class="shop-ai-sugg-item" onclick="ShopAIChat.send('I need pneumatic components for manufacturing')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.35-4.35"/>
+            </svg>
+            I need pneumatic components for manufacturing
           </button>
-          <button class="shop-ai-sugg-item" onclick="ShopAIChat.send('Where can I find privacy info?')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-            Where can I find privacy info?
+
+          <button class="shop-ai-sugg-item" onclick="ShopAIChat.send('Help me find the right inverter drive')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.35-4.35"/>
+            </svg>
+            Help me find the right inverter drive
+          </button>
+
+          <button class="shop-ai-sugg-item" onclick="ShopAIChat.send('Do you have SKU: ')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="2" width="20" height="20" rx="5"/>
+              <path d="M16 11.37A4 4 0 1 1 12.63 8"/>
+            </svg>
+            Search by SKU or model number
           </button>
         </div>
       </div>
-
     </div>
 
+    <!-- Input Area -->
     <div class="shop-ai-input-area">
       <div class="shop-ai-input-wrapper">
-        <textarea class="shop-ai-textarea" id="shop-ai-input" placeholder="Need more details?" rows="1"></textarea>
-        <button class="shop-ai-send-btn" id="shop-ai-send-btn">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
+        <textarea 
+          class="shop-ai-textarea" 
+          id="shop-ai-input" 
+          placeholder="Ask me anything..."
+          rows="1"
+        ></textarea>
+        <button class="shop-ai-send-btn" id="shop-ai-send-btn" aria-label="Send">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 2L11 13"/>
+            <path d="M22 2L15 22L11 13L2 9L22 2Z"/>
+          </svg>
         </button>
       </div>
     </div>
 
+    <!-- History Panel -->
+    <div class="shop-ai-history-panel" id="shop-ai-history-panel">
+      <div class="shop-ai-history-header">
+        <button class="shop-ai-back-btn" id="shop-ai-back-btn" aria-label="Back">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15,18 9,12 15,6"/>
+          </svg>
+        </button>
+        <h3>Previous Chats</h3>
+      </div>
+      <div class="shop-ai-history-list" id="shop-ai-history-list">
+        <!-- History items populated by JS -->
+      </div>
+    </div>
   </div>
 </div>
 
 <script src="{{ 'chat.js' | asset_url }}" defer></script>
+
 <script>
   window.shopChatConfig = {
     apiUrl: '{{ shop.url }}/apps/shop-chat/chat',
-    shopId: '{{ shop.id }}'
+    leadsUrl: '{{ shop.url }}/apps/shop-chat/leads',
+    shopId: '{{ shop.id }}',
+    promptType: 'standardAssistant',
+    welcomeMessage: '{{ settings.welcome_message }}'
   };
 </script>
 
@@ -655,28 +1094,8 @@
   "name": "AI Chat Assistant",
   "target": "body",
   "settings": [
-    {
-      "type": "text",
-      "id": "chat_title",
-      "label": "Chat Title",
-      "default": "AI Assistant"
-    },
-    {
-      "type": "text",
-      "id": "welcome_message",
-      "label": "Welcome Message",
-      "default": "Hi! How can I help you today?"
-    },
-    {
-      "type": "select",
-      "id": "system_prompt",
-      "label": "System Prompt",
-      "options": [
-        {"value": "standardAssistant", "label": "Standard Assistant"},
-        {"value": "enthusiasticAssistant", "label": "Enthusiastic Assistant"}
-      ],
-      "default": "standardAssistant"
-    }
+    {"type":"text","id":"chat_title","label":"Chat Title","default":"AI Assistant"},
+    {"type":"text","id":"welcome_message","label":"Welcome Message","default":"Hi! How can I help you today?"}
   ]
 }
 {% endschema %}

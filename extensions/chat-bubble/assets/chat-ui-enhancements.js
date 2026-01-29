@@ -1,6 +1,6 @@
 /* ============================================
    PREMIUM SHOPIFY AI CHAT - ENHANCED UI LOGIC
-   Features: Direct cart addition, 10+ products, toast notifications
+   Features: Backend MCP Cart Integration, Checkout URL, 10+ products
    ============================================ */
 
 (function() {
@@ -23,7 +23,8 @@
       dropdownMenu: '.shop-ai-dropdown-menu',
       historyPanel: '.shop-ai-history-panel',
       historyList: '.shop-ai-history-list',
-      backBtn: '.shop-ai-back-btn'
+      backBtn: '.shop-ai-back-btn',
+      checkoutBtnContainer: '.shop-ai-checkout-container' // New
     },
     classes: {
       active: 'active',
@@ -32,8 +33,10 @@
       closing: 'closing',
       chatOpen: 'shop-ai-chat-open'
     },
-    storageKey: 'shop-ai-chat-history',
-    maxProductsToDisplay: 10 // Display minimum 10 products
+    // Derive backend cart URL relative to chat API, assuming standard structure
+    // If chat is at /chat, cart is at /api/cart
+    cartApiUrl: (window.shopChatConfig?.apiUrl || '/chat').replace('/chat', '/api/cart'),
+    maxProductsToDisplay: 12 
   };
 
   // ============================================
@@ -45,7 +48,9 @@
     isMenuOpen: false,
     isHistoryOpen: false,
     chatHistory: [],
-    currentProducts: []
+    currentProducts: [],
+    mcpCartId: localStorage.getItem('shopAiMcpCartId') || null, // Persist backend cart ID
+    checkoutUrl: null
   };
 
   let elements = {};
@@ -59,7 +64,6 @@
     window.addEventListener('resize', setViewportHeight);
     
     cacheElements();
-    loadChatHistory();
     injectUIElements();
     bindEvents();
     
@@ -95,11 +99,13 @@
     const container = elements.container;
     if (!container) return;
 
+    // ... (Existing floating buttons logic) ...
     if (!elements.floatingGroup) {
       container.insertAdjacentHTML('afterbegin', createFloatingButtonsHTML());
       elements.floatingGroup = container.querySelector(CONFIG.selectors.floatingGroup);
     }
 
+    // ... (Existing chat window logic) ...
     if (!elements.chatWindow) {
       container.insertAdjacentHTML('beforeend', createChatWindowHTML());
       elements.chatWindow = container.querySelector(CONFIG.selectors.chatWindow);
@@ -109,6 +115,16 @@
       elements.closeBtn = elements.chatWindow.querySelector(CONFIG.selectors.closeBtn);
     }
     
+    // Add Checkout Button Container if missing
+    if (!elements.chatWindow.querySelector('.shop-ai-checkout-container')) {
+        const inputArea = elements.chatWindow.querySelector('.shop-ai-chat-input');
+        const checkoutDiv = document.createElement('div');
+        checkoutDiv.className = 'shop-ai-checkout-container';
+        // Insert before input area
+        inputArea.parentNode.insertBefore(checkoutDiv, inputArea);
+    }
+    
+    // ... (Existing menu logic) ...
     const headerActions = elements.chatWindow.querySelector('.shop-ai-header-actions');
     if (headerActions && !headerActions.querySelector('.shop-ai-menu-btn')) {
       headerActions.insertAdjacentHTML('afterbegin', createMenuButtonHTML());
@@ -116,17 +132,9 @@
       elements.menuBtn = headerActions.querySelector('.shop-ai-menu-btn');
       elements.dropdownMenu = headerActions.querySelector(CONFIG.selectors.dropdownMenu);
     }
-
-    if (!elements.historyPanel) {
-      elements.chatWindow.insertAdjacentHTML('beforeend', createHistoryPanelHTML());
-      elements.historyPanel = elements.chatWindow.querySelector(CONFIG.selectors.historyPanel);
-      elements.historyList = elements.chatWindow.querySelector(CONFIG.selectors.historyList);
-      elements.backBtn = elements.chatWindow.querySelector(CONFIG.selectors.backBtn);
-    }
   }
 
-  // --- HTML TEMPLATES ---
-
+  // --- HTML TEMPLATES (Reuse existing ones, just ensure consistency) ---
   function createFloatingButtonsHTML() {
     return `
       <div class="shop-ai-floating-group">
@@ -137,12 +145,7 @@
           <span>Chat with AI</span>
         </button>
         <button class="shop-ai-primary-btn" data-action="open-chat">
-          <span class="shop-ai-sparkle-icon">
-            <svg viewBox="0 0 24 24" fill="none">
-              <path class="shop-ai-sparkle-main" d="M12 2L13.5 8.5L20 10L13.5 11.5L12 18L10.5 11.5L4 10L10.5 8.5L12 2Z" fill="currentColor"/>
-              <path class="shop-ai-sparkle-small-1" d="M19 14L19.5 16.5L22 17L19.5 17.5L19 20L18.5 17.5L16 17L18.5 16.5L19 14Z" fill="currentColor"/>
-            </svg>
-          </span>
+          <span class="shop-ai-sparkle-icon">✨</span>
           <span>Ask our AI</span>
         </button>
       </div>
@@ -153,78 +156,38 @@
     return `
       <div class="shop-ai-chat-window">
         <div class="shop-ai-chat-header">
-          <div class="shop-ai-header-left">
-            <div class="shop-ai-avatar">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/>
-                <path d="M12 6v6l4 2"/>
-              </svg>
-            </div>
-            <div class="shop-ai-header-info">
-              <h3>Shopping Assistant</h3>
-              <p><span class="shop-ai-status-dot"></span> Online now</p>
-            </div>
-          </div>
-          <div class="shop-ai-header-actions">
-            <button class="shop-ai-header-btn shop-ai-chat-close" data-action="close-chat">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-              </svg>
-            </button>
-          </div>
+           <div class="shop-ai-header-left">
+             <div class="shop-ai-header-info">
+               <h3>Shopping Assistant</h3>
+               <p><span class="shop-ai-status-dot"></span> Online now</p>
+             </div>
+           </div>
+           <div class="shop-ai-header-actions">
+             <button class="shop-ai-header-btn shop-ai-chat-close" data-action="close-chat">✕</button>
+           </div>
         </div>
-
         <div class="shop-ai-chat-messages">
           <div class="shop-ai-message assistant">
-            Hello! 👋 I can help you find products, check availability, or answer questions. What are you looking for today?
+            Hello! 👋 I can help you find products and create a cart for you.
           </div>
         </div>
-
         <div class="shop-ai-chat-input">
           <div class="shop-ai-input-wrapper">
             <input type="text" placeholder="Ask me anything..." />
-            <button class="shop-ai-send-btn" data-action="send-message">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="22" y1="2" x2="11" y2="13"></line>
-                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-              </svg>
-            </button>
+            <button class="shop-ai-send-btn" data-action="send-message">➤</button>
           </div>
-        </div>
-
-        <div class="shop-ai-status-footer">
-          <span class="shop-ai-status-pill">Ready to help</span>
         </div>
       </div>
     `;
   }
-
-  function createMenuButtonHTML() {
-    return `<button class="shop-ai-header-btn shop-ai-menu-btn" data-action="toggle-menu"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg></button>`;
-  }
-
+  
+  function createMenuButtonHTML() { return `<button class="shop-ai-header-btn shop-ai-menu-btn" data-action="toggle-menu">⋮</button>`; }
+  
   function createDropdownMenuHTML() {
     return `
       <div class="shop-ai-dropdown-menu">
         <button class="shop-ai-menu-item" data-action="new-chat"><span>Start new chat</span></button>
-        <button class="shop-ai-menu-item" data-action="show-history"><span>History</span></button>
-        <div style="height:1px;background:var(--border-color);margin:4px 0"></div>
         <button class="shop-ai-menu-item danger" data-action="close-chat"><span>Close</span></button>
-      </div>
-    `;
-  }
-
-  function createHistoryPanelHTML() {
-    return `
-      <div class="shop-ai-history-panel">
-        <div class="shop-ai-history-header">
-          <button class="shop-ai-back-btn" data-action="hide-history">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
-          </button>
-          <h3>Recent Chats</h3>
-        </div>
-        <div class="shop-ai-history-list"></div>
       </div>
     `;
   }
@@ -235,7 +198,6 @@
   
   function bindEvents() {
     document.addEventListener('click', handleClick);
-    
     if (elements.inputField) {
       elements.inputField.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') handleSendMessage();
@@ -246,11 +208,7 @@
   function handleClick(e) {
     const target = e.target.closest('[data-action]');
     if (!target) {
-      if (state.isMenuOpen && elements.dropdownMenu && 
-          !elements.dropdownMenu.contains(e.target) && 
-          !elements.menuBtn.contains(e.target)) {
-        closeMenu();
-      }
+      if (state.isMenuOpen && elements.dropdownMenu && !elements.dropdownMenu.contains(e.target)) closeMenu();
       return;
     }
 
@@ -260,11 +218,10 @@
       case 'close-chat': closeChat(); break;
       case 'toggle-menu': toggleMenu(); break;
       case 'new-chat': startNewChat(); break;
-      case 'show-history': showHistory(); break;
-      case 'hide-history': hideHistory(); break;
       case 'send-message': handleSendMessage(); break;
       case 'add-to-cart': handleAddToCart(target); break;
       case 'view-product': handleViewProduct(target); break;
+      case 'checkout': handleCheckout(); break; // New
     }
   }
 
@@ -274,37 +231,16 @@
   
   function openChat() {
     state.isOpen = true;
-    if (elements.chatWindow) {
-      elements.chatWindow.classList.add(CONFIG.classes.active, CONFIG.classes.visible);
-      elements.chatWindow.classList.remove(CONFIG.classes.closing);
-    }
-    
-    if (elements.floatingGroup) {
-      elements.floatingGroup.classList.add(CONFIG.classes.hidden);
-    }
-
+    if (elements.chatWindow) elements.chatWindow.classList.add(CONFIG.classes.active, CONFIG.classes.visible);
+    if (elements.floatingGroup) elements.floatingGroup.classList.add(CONFIG.classes.hidden);
     setTimeout(() => elements.inputField?.focus(), 300);
   }
 
   function closeChat() {
     state.isOpen = false;
     closeMenu();
-    hideHistory();
-    
-    if (elements.chatWindow) {
-      elements.chatWindow.classList.add(CONFIG.classes.closing);
-      elements.chatWindow.classList.remove(CONFIG.classes.active);
-    }
-
-    setTimeout(() => {
-      if (elements.chatWindow) {
-        elements.chatWindow.classList.remove(CONFIG.classes.closing, CONFIG.classes.visible);
-      }
-      if (elements.floatingGroup) {
-        elements.floatingGroup.classList.remove(CONFIG.classes.hidden);
-        showFloatingButtons();
-      }
-    }, 300);
+    if (elements.chatWindow) elements.chatWindow.classList.remove(CONFIG.classes.active, CONFIG.classes.visible);
+    if (elements.floatingGroup) elements.floatingGroup.classList.remove(CONFIG.classes.hidden);
   }
 
   function toggleMenu() {
@@ -319,56 +255,35 @@
 
   function showFloatingButtons() {
     const btns = document.querySelectorAll('.shop-ai-secondary-btn, .shop-ai-primary-btn');
-    btns.forEach((btn, i) => {
-      btn.classList.remove(CONFIG.classes.visible);
-      setTimeout(() => btn.classList.add(CONFIG.classes.visible), i * 100);
-    });
+    btns.forEach(btn => btn.classList.add(CONFIG.classes.visible));
   }
 
   // ============================================
-  // MESSAGING & PRODUCT DISPLAY
+  // MESSAGING
   // ============================================
 
   function handleSendMessage() {
     const text = elements.inputField.value.trim();
     if (!text) return;
-
-    addMessage(text, 'user');
+    
+    // Existing chat.js handles the message sending logic via ShopAIChat object
+    // We just trigger it here to ensure UI sync
+    if (window.ShopAIChat && window.ShopAIChat.send) {
+        window.ShopAIChat.send(text);
+    }
+    
     elements.inputField.value = '';
-
-    showThinkingShimmer();
-
-    // TODO: Replace with actual API call
-    setTimeout(() => {
-      removeThinkingShimmer();
-      
-      // Mock product response
-      const mockProducts = generateMockProducts(12);
-      displayProducts(mockProducts);
-      
-      addMessage("I found 12 products that match your search. Browse them above and click 'Add to Cart' to purchase.", 'assistant');
-    }, 1500);
-  }
-
-  function addMessage(text, type) {
-    const div = document.createElement('div');
-    div.className = `shop-ai-message ${type}`;
-    div.innerHTML = text.replace(/\n/g, '<br>');
-    elements.messagesContainer.appendChild(div);
-    scrollToBottom();
   }
 
   // ============================================
-  // PRODUCT DISPLAY - NEW FUNCTION
+  // PRODUCT DISPLAY & CART LOGIC
   // ============================================
 
-  function displayProducts(products) {
+  // Exposed method called by chat.js when "product_results" event arrives
+  window.ShopAIChat.displayProducts = function(products) {
     if (!products || products.length === 0) return;
 
-    // Limit to CONFIG.maxProductsToDisplay
     const displayProducts = products.slice(0, CONFIG.maxProductsToDisplay);
-    state.currentProducts = displayProducts;
-
     const gridDiv = document.createElement('div');
     gridDiv.className = 'shop-ai-product-grid';
     
@@ -377,265 +292,137 @@
       gridDiv.appendChild(card);
     });
 
-    elements.messagesContainer.appendChild(gridDiv);
-    scrollToBottom();
-  }
+    // Append to messages
+    const msgs = document.querySelector(CONFIG.selectors.messagesContainer);
+    if (msgs) {
+        msgs.appendChild(gridDiv);
+        msgs.scrollTop = msgs.scrollHeight;
+    }
+  };
 
   function createProductCard(product, index) {
     const card = document.createElement('div');
     card.className = 'shop-ai-product-card';
-    card.dataset.productId = product.id;
-    card.dataset.variantId = product.variantId || '';
-    
     card.innerHTML = `
-      <img 
-        src="${product.image_url || '/placeholder.jpg'}" 
-        alt="${product.title}"
-        class="shop-ai-product-image"
-        loading="lazy"
-      />
+      <img src="${product.image_url || ''}" alt="${product.title}" class="shop-ai-product-image" loading="lazy" />
       <div class="shop-ai-product-info">
         <h4 class="shop-ai-product-title">${product.title}</h4>
-        <div class="shop-ai-product-price">${product.price || 'Price not available'}</div>
+        <div class="shop-ai-product-price">${product.price || ''}</div>
         <div class="shop-ai-product-actions">
-          <button 
-            class="shop-ai-product-btn shop-ai-product-btn-primary" 
+          <button class="shop-ai-product-btn shop-ai-product-btn-primary" 
             data-action="add-to-cart"
-            data-product-id="${product.id}"
-            data-variant-id="${product.variantId || ''}"
-            data-product-title="${product.title}"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/>
-              <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
-            </svg>
+            data-variant-id="${product.variantId}" 
+            data-product-title="${product.title}">
             Add to Cart
           </button>
-          ${product.url ? `
-          <button 
-            class="shop-ai-product-btn shop-ai-product-btn-secondary" 
-            data-action="view-product"
-            data-product-url="${product.url}"
-          >
-            View
-          </button>
-          ` : ''}
+          ${product.url ? `<button class="shop-ai-product-btn shop-ai-product-btn-secondary" data-action="view-product" data-product-url="${product.url}">View</button>` : ''}
         </div>
       </div>
     `;
-    
     return card;
   }
 
   // ============================================
-  // CART OPERATIONS - DIRECT API CALLS
+  // BACKEND CART OPERATIONS
   // ============================================
 
   async function handleAddToCart(button) {
     const variantId = button.dataset.variantId;
-    const productTitle = button.dataset.productTitle;
+    const title = button.dataset.productTitle;
     
     if (!variantId) {
-      showToast('Unable to add product. Missing variant information.', 'error');
+      showToast('Cannot add: Missing variant ID.', 'error');
       return;
     }
 
-    // Show loading state
     const originalText = button.innerHTML;
     button.disabled = true;
-    button.innerHTML = `
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation: spin 1s linear infinite;">
-        <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
-        <path d="M12 2a10 10 0 0 1 10 10" stroke-opacity="1"/>
-      </svg>
-      Adding...
-    `;
+    button.innerHTML = 'Adding...';
 
     try {
-      // Extract numeric variant ID if it's a Shopify GID
-      let numericVariantId = variantId;
-      if (typeof variantId === 'string' && variantId.includes('gid://shopify/ProductVariant/')) {
-        numericVariantId = variantId.replace('gid://shopify/ProductVariant/', '');
-      }
+        // CALL BACKEND API to use Storefront MCP
+        const response = await fetch(CONFIG.cartApiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                variantId: variantId,
+                quantity: 1,
+                cartId: state.mcpCartId, // Send existing MCP cart ID if we have one
+                conversationId: sessionStorage.getItem('shopAiConversationId')
+            })
+        });
 
-      // Call Shopify AJAX Cart API
-      const response = await fetch('/cart/add.js', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          items: [{
-            id: numericVariantId,
-            quantity: 1
-          }]
-        })
-      });
+        const data = await response.json();
 
-      if (!response.ok) {
-        throw new Error('Failed to add to cart');
-      }
+        if (data.status === 'success') {
+            showToast(`${title} added to cart!`);
+            
+            // Save Cart ID for future adds
+            if (data.cartId) {
+                state.mcpCartId = data.cartId;
+                localStorage.setItem('shopAiMcpCartId', data.cartId);
+            }
 
-      const data = await response.json();
-      
-      // Success! Show toast notification
-      showToast(`${productTitle} added to cart!`, 'success');
-      
-      // Update cart count if there's a cart counter on the page
-      updateCartCount();
-      
-      // Reset button
-      button.disabled = false;
-      button.innerHTML = originalText;
-      
+            // Enable Checkout Button
+            if (data.checkoutUrl) {
+                state.checkoutUrl = data.checkoutUrl;
+                updateCheckoutButton(data.checkoutUrl);
+            }
+        } else {
+            throw new Error(data.message || 'Error adding to cart');
+        }
     } catch (error) {
-      console.error('Error adding to cart:', error);
-      showToast('Failed to add product to cart. Please try again.', 'error');
-      
-      // Reset button
-      button.disabled = false;
-      button.innerHTML = originalText;
+        console.error('Cart error:', error);
+        showToast('Failed to add to cart. ' + error.message, 'error');
+    } finally {
+        button.disabled = false;
+        button.innerHTML = originalText;
+    }
+  }
+
+  function updateCheckoutButton(url) {
+    const container = document.querySelector('.shop-ai-checkout-container');
+    if (container) {
+        container.innerHTML = `
+            <button class="shop-ai-checkout-btn" data-action="checkout">
+               Checkout Now (MCP Cart)
+            </button>
+        `;
+        container.style.display = 'block';
+    }
+  }
+
+  function handleCheckout() {
+    if (state.checkoutUrl) {
+        window.open(state.checkoutUrl, '_blank');
     }
   }
 
   function handleViewProduct(button) {
-    const productUrl = button.dataset.productUrl;
-    if (productUrl) {
-      window.open(productUrl, '_blank');
-    }
+    const url = button.dataset.productUrl;
+    if (url) window.open(url, '_blank');
   }
 
-  async function updateCartCount() {
-    try {
-      const response = await fetch('/cart.js');
-      const cart = await response.json();
-      
-      // Update cart count elements (common selectors)
-      const cartCounters = document.querySelectorAll('[data-cart-count], .cart-count, #CartCount');
-      cartCounters.forEach(counter => {
-        counter.textContent = cart.item_count;
-      });
-    } catch (error) {
-      console.error('Error updating cart count:', error);
-    }
+  function startNewChat() {
+     const msgs = document.querySelector(CONFIG.selectors.messagesContainer);
+     if (msgs) msgs.innerHTML = '<div class="shop-ai-message assistant">Started new chat.</div>';
+     state.mcpCartId = null;
+     state.checkoutUrl = null;
+     const co = document.querySelector('.shop-ai-checkout-container');
+     if(co) co.style.display = 'none';
+     localStorage.removeItem('shopAiMcpCartId');
+     if (window.ShopAIChat && window.ShopAIChat.startNewChat) window.ShopAIChat.startNewChat();
   }
 
-  // ============================================
-  // TOAST NOTIFICATIONS
-  // ============================================
-
-  function showToast(message, type = 'success') {
-    // Remove existing toasts
-    const existingToasts = document.querySelectorAll('.shop-ai-toast');
-    existingToasts.forEach(toast => toast.remove());
-
+  function showToast(msg, type='success') {
     const toast = document.createElement('div');
     toast.className = `shop-ai-toast ${type}`;
-    
-    const icon = type === 'success' 
-      ? '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>'
-      : '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
-    
-    toast.innerHTML = `
-      <div class="shop-ai-toast-icon" style="color: ${type === 'success' ? 'var(--success-color)' : 'var(--danger-color)'};">
-        ${icon}
-      </div>
-      <div class="shop-ai-toast-text">${message}</div>
-    `;
-    
+    toast.textContent = msg;
     document.body.appendChild(toast);
-    
-    // Auto-remove after 3 seconds
-    setTimeout(() => {
-      toast.style.animation = 'toastSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) reverse';
-      setTimeout(() => toast.remove(), 300);
-    }, 3000);
+    setTimeout(() => toast.remove(), 3000);
   }
 
-  // ============================================
-  // SHIMMER EFFECT
-  // ============================================
-
-  function showThinkingShimmer() {
-    if (elements.messagesContainer.querySelector('.shop-ai-typing-shimmer')) return;
-
-    const shimmerDiv = document.createElement('div');
-    shimmerDiv.className = 'shop-ai-typing-shimmer';
-    shimmerDiv.innerHTML = `<span class="shop-ai-shimmer-text">AI is thinking...</span>`;
-    
-    elements.messagesContainer.appendChild(shimmerDiv);
-    scrollToBottom();
-  }
-
-  function removeThinkingShimmer() {
-    const shimmer = elements.messagesContainer.querySelector('.shop-ai-typing-shimmer');
-    if (shimmer) shimmer.remove();
-  }
-
-  function scrollToBottom() {
-    if (elements.messagesContainer) {
-      elements.messagesContainer.scrollTop = elements.messagesContainer.scrollHeight;
-    }
-  }
-
-  // ============================================
-  // MOCK DATA (Replace with actual API)
-  // ============================================
-
-  function generateMockProducts(count) {
-    const products = [];
-    for (let i = 1; i <= count; i++) {
-      products.push({
-        id: `product-${i}`,
-        variantId: `${40000000 + i}`,
-        title: `Premium Product ${i}`,
-        price: `$${(Math.random() * 100 + 20).toFixed(2)}`,
-        image_url: `https://picsum.photos/seed/${i}/400/400`,
-        url: `/products/product-${i}`
-      });
-    }
-    return products;
-  }
-
-  // ============================================
-  // HISTORY (Stub)
-  // ============================================
-
-  function showHistory() { 
-    state.isHistoryOpen = true; 
-    elements.historyPanel?.classList.add(CONFIG.classes.active); 
-  }
-  
-  function hideHistory() { 
-    state.isHistoryOpen = false; 
-    elements.historyPanel?.classList.remove(CONFIG.classes.active); 
-  }
-  
-  function startNewChat() {
-    elements.messagesContainer.innerHTML = '<div class="shop-ai-message assistant">Starting fresh! How can I help you today?</div>';
-    state.currentProducts = [];
-    closeMenu();
-  }
-  
-  function loadChatHistory() { 
-    // Load from localStorage or API
-  }
-
-  // ============================================
-  // PUBLIC API
-  // ============================================
-
-  window.ShopAIChat = { 
-    open: openChat, 
-    close: closeChat,
-    displayProducts: displayProducts,
-    showToast: showToast
-  };
-
-  // ============================================
-  // INITIALIZE
-  // ============================================
-
+  // Init
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
@@ -643,13 +430,3 @@
   }
 
 })();
-
-// Add spin animation for loading state
-const style = document.createElement('style');
-style.textContent = `
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-`;
-document.head.appendChild(style);

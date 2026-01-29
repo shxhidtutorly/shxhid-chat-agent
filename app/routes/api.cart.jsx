@@ -1,9 +1,7 @@
 // app/routes/api.cart.jsx
 import { json } from "@remix-run/node";
-import MCPClient from "../mcp-client";
-import { getCustomerAccountUrls } from "../db.server";
 
-// Handle CORS
+// Handle CORS Preflight
 export function loader({ request }) {
   if (request.method === "OPTIONS") {
     return new Response(null, {
@@ -15,11 +13,17 @@ export function loader({ request }) {
 }
 
 export async function action({ request }) {
+  // Handle CORS Preflight
   if (request.method === "OPTIONS") {
     return new Response(null, { headers: getCorsHeaders(request) });
   }
 
   try {
+    // 1. Dynamic Imports to prevent "Server-only module" build errors
+    // These modules import db.server, so they must be imported dynamically inside the action
+    const { default: MCPClient } = await import("../mcp-client");
+    const { getCustomerAccountUrls } = await import("../db.server");
+
     const body = await request.json();
     const { productQuery, variantId, quantity = 1, cartId, conversationId } = body;
     
@@ -34,9 +38,7 @@ export async function action({ request }) {
     console.log(`🛒 Cart Action: Adding ${quantity} x ${variantId || productQuery} to cart ${cartId || 'new'}`);
 
     // Initialize MCP Client
-    // We need the MCP endpoint URL
-    const dbMod = await import("../db.server");
-    const urls = await dbMod.getCustomerAccountUrls(shopDomain, conversationId || "default");
+    const urls = await getCustomerAccountUrls(shopDomain, conversationId || "default");
     const mcpApiUrl = urls?.mcpApiUrl;
 
     const client = new MCPClient(shopDomain, conversationId || "cart_action", null, mcpApiUrl);
@@ -63,7 +65,8 @@ export async function action({ request }) {
       throw new Error("Must provide variantId or productQuery");
     }
 
-    // Extract checkout URL and Cart ID
+    // Extract checkout URL and Cart ID from the result
+    // Result structure depends on the MCP tool, typically { cart: { id, checkoutUrl, ... } }
     const cart = result.cart || result;
     const checkoutUrl = cart.checkoutUrl || cart.checkout_url;
     const newCartId = cart.id;

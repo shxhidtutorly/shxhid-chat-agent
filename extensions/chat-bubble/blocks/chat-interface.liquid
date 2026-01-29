@@ -907,7 +907,6 @@
 </style>
 
 <div class="shop-ai-reset" aria-hidden="false">
-  <!-- Floating Launcher -->
   <div class="shop-ai-floating-group" id="shop-ai-floating-group">
     <button class="shop-ai-pill-btn shop-ai-btn-secondary" data-trigger="chat" aria-label="Chat with AI">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -924,12 +923,9 @@
     </button>
   </div>
 
-  <!-- Backdrop -->
   <div class="shop-ai-backdrop" id="shop-ai-backdrop"></div>
 
-  <!-- Main Modal -->
   <div class="shop-ai-modal" id="shop-ai-modal" role="dialog" aria-modal="true" aria-label="AI Assistant">
-    <!-- Header -->
     <div class="shop-ai-header">
       <h3>Hi, how can I help you?</h3>
       
@@ -950,7 +946,6 @@
       </div>
     </div>
 
-    <!-- Dropdown Menu -->
     <div class="shop-ai-menu-dropdown" id="shop-ai-menu">
       <button class="shop-ai-menu-item" data-action="new">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
@@ -975,7 +970,6 @@
       </button>
     </div>
 
-    <!-- Email Capture Overlay -->
     <div class="shop-ai-email-overlay" id="shop-ai-email-overlay">
       <div class="shop-ai-email-popup">
         <div class="shop-ai-email-icon">
@@ -1001,9 +995,7 @@
       </div>
     </div>
 
-    <!-- Messages Area -->
     <div class="shop-ai-messages" id="shop-ai-messages">
-      <!-- Suggestions -->
       <div class="shop-ai-suggestions visible" id="shop-ai-suggestions">
         <div class="shop-ai-sugg-title">How can I assist you?</div>
         <div class="shop-ai-sugg-list">
@@ -1042,7 +1034,6 @@
       </div>
     </div>
 
-    <!-- Input Area -->
     <div class="shop-ai-input-area">
       <div class="shop-ai-input-wrapper">
         <textarea 
@@ -1060,7 +1051,6 @@
       </div>
     </div>
 
-    <!-- History Panel -->
     <div class="shop-ai-history-panel" id="shop-ai-history-panel">
       <div class="shop-ai-history-header">
         <button class="shop-ai-back-btn" id="shop-ai-back-btn" aria-label="Back">
@@ -1071,13 +1061,13 @@
         <h3>Previous Chats</h3>
       </div>
       <div class="shop-ai-history-list" id="shop-ai-history-list">
-        <!-- History items populated by JS -->
-      </div>
+        </div>
     </div>
   </div>
 </div>
 
 <script src="{{ 'chat.js' | asset_url }}" defer></script>
+<script src="{{ 'chat-ui-enhancements.js' | asset_url }}" defer></script>
 
 <script>
   window.shopChatConfig = {

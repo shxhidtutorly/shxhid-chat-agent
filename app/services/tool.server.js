@@ -1,312 +1,173 @@
 // app/services/tool.server.js
 /**
- * Tool Service - Optimized & Robust Version
- * Manages tool execution and product processing with efficient handling
+ * Tool Service - COMPLETE FIXED VERSION
+ * Manages tool execution and product processing
  */
 
 export function createToolService() {
-  // Product display configuration
-  const MAX_PRODUCTS_TO_DISPLAY = 12;
-  const MIN_PRODUCTS_TO_DISPLAY = 10;
+  const MAX_PRODUCTS_TO_DISPLAY = 8;
 
   /**
-   * Robust URL fixer with validation
-   * Handles all edge cases for product URLs and images
+   * Helper to fix URLs by prepending shop domain if needed
    */
   const fixUrl = (url, shopDomain) => {
-    if (!url || typeof url !== "string") return "";
-    
-    // Already a complete URL
-    if (url.startsWith("http://") || url.startsWith("https://")) {
-      return url;
-    }
-    
-    // Relative URL - prepend shop domain
-    const cleanPath = url.startsWith("/") ? url.slice(1) : url;
-    const cleanDomain = shopDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
-    
-    return `https://${cleanDomain}/${cleanPath}`;
+    if (!url) return "";
+    if (typeof url !== "string") return "";
+
+    // If it's already an absolute URL, leave it alone
+    if (url.startsWith("http://") || url.startsWith("https://")) return url;
+
+    // Remove leading slash if present to avoid double slashes
+    const cleanPath = url.startsWith("/") ? url.substring(1) : url;
+    return `https://${shopDomain}/${cleanPath}`;
   };
 
   /**
-   * Extract numeric variant ID from GID
-   */
-  const extractVariantId = (gid) => {
-    if (!gid) return null;
-    
-    const prefix = "gid://shopify/ProductVariant/";
-    if (typeof gid === "string" && gid.startsWith(prefix)) {
-      return gid.replace(prefix, "");
-    }
-    
-    return gid;
-  };
-
-  /**
-   * Process and format a single product
-   */
-  const formatProduct = (product, shopDomain) => {
-    try {
-      // Extract image URL with fallbacks
-      const rawImageUrl = 
-        product.image_url ||
-        product.imageUrl ||
-        product.featuredImage?.url ||
-        product.image?.url ||
-        (Array.isArray(product.images?.edges) && product.images.edges[0]?.node?.url) ||
-        (Array.isArray(product.images) && product.images[0]?.url) ||
-        "";
-
-      const imageUrl = fixUrl(rawImageUrl, shopDomain);
-
-      // Extract product URL with fallbacks
-      const rawProductUrl = 
-        product.url || 
-        product.onlineStoreUrl || 
-        product.product_url ||
-        "";
-
-      const productUrl = fixUrl(rawProductUrl, shopDomain);
-
-      // Get first variant
-      let firstVariant = null;
-      if (Array.isArray(product.variants) && product.variants.length > 0) {
-        firstVariant = product.variants[0];
-      } else if (product.variant) {
-        firstVariant = product.variant;
-      }
-
-      // Extract variant ID
-      let variantId = null;
-      let checkoutUrl = "";
-
-      if (firstVariant?.id) {
-        variantId = firstVariant.id;
-        const numericId = extractVariantId(variantId);
-        
-        if (numericId) {
-          checkoutUrl = `https://${shopDomain.replace(/^https?:\/\//, "")}/cart/${numericId}:1`;
-        }
-      }
-
-      // Format price
-      let priceText = "";
-      if (product.price) {
-        priceText = product.price;
-      } else if (firstVariant?.price) {
-        const price = firstVariant.price;
-        const currency = firstVariant.currency || product.currency || "USD";
-        priceText = `${price} ${currency}`;
-      } else if (product.price_range) {
-        const pr = product.price_range;
-        const currency = pr.currency || "USD";
-        
-        if (pr.min && pr.max && pr.min !== pr.max) {
-          priceText = `${pr.min} - ${pr.max} ${currency}`;
-        } else if (pr.min) {
-          priceText = `${pr.min} ${currency}`;
-        }
-      }
-
-      // Extract description (truncate if too long)
-      const description = product.description || product.body || "";
-      const truncatedDescription = description.length > 200 
-        ? description.substring(0, 200) + "..." 
-        : description;
-
-      return {
-        id: product.product_id || product.id || `product_${Date.now()}`,
-        title: product.title || "Untitled Product",
-        image_url: imageUrl,
-        url: productUrl,
-        checkout_url: checkoutUrl,
-        price: priceText,
-        description: truncatedDescription,
-        variantId: variantId,
-        sku: product.sku || firstVariant?.sku || "",
-        available: product.available ?? firstVariant?.available ?? true,
-      };
-    } catch (error) {
-      console.error("Error formatting product:", error);
-      return null;
-    }
-  };
-
-  /**
-   * Process product search results
-   * Returns formatted products ready for frontend display
-   * Updates tool response with concise summary for Claude
+   * Processes product search results and returns formatted products for display
    */
   const processProductSearchResult = (toolUseResponse, shopDomain) => {
     try {
-      console.log("🔍 Processing product search for:", shopDomain);
+      console.log("🔍 Processing product search result for domain:", shopDomain);
 
-      // Validate response structure
-      if (!toolUseResponse?.content || !Array.isArray(toolUseResponse.content) || toolUseResponse.content.length === 0) {
-        console.warn("⚠️ Invalid tool response structure");
+      if (!toolUseResponse?.content || toolUseResponse.content.length === 0) {
+        console.log("❌ No content in tool response");
         return [];
       }
 
-      // Parse content
+      // 1. Parse the JSON content
       let contentText = toolUseResponse.content[0].text;
       let responseData;
 
       try {
-        responseData = typeof contentText === "string" 
-          ? JSON.parse(contentText) 
-          : contentText;
-      } catch (parseError) {
-        console.error("❌ Failed to parse tool content:", parseError);
+        responseData = typeof contentText === "string" ? JSON.parse(contentText) : contentText;
+      } catch (e) {
+        console.error("❌ Failed to parse tool content:", e);
         return [];
       }
 
-      // Validate products array
+      // 2. Check if we have products
       if (!responseData?.products || !Array.isArray(responseData.products)) {
-        console.warn("⚠️ No products array in response");
+        console.log("❌ No products array in response");
         return [];
       }
 
-      const totalProducts = responseData.products.length;
-      console.log(`✅ Found ${totalProducts} products in response`);
+      console.log(`✅ Found ${responseData.products.length} products in response`);
 
-      // Determine how many to show
-      let productsToShow = Math.min(totalProducts, MAX_PRODUCTS_TO_DISPLAY);
-      
-      if (totalProducts < MIN_PRODUCTS_TO_DISPLAY) {
-        console.log(`⚠️ Only ${totalProducts} products (less than recommended ${MIN_PRODUCTS_TO_DISPLAY})`);
-      }
+      // 3. Process and fix each product
+      const fixedProducts = responseData.products.map((p) => {
+        // Get image URL - try multiple possible fields
+        const rawImageUrl =
+          p.image_url ||
+          p.featuredImage?.url ||
+          p.image?.url ||
+          (p.images && Array.isArray(p.images.edges) && p.images.edges[0]?.node?.url) ||
+          "";
 
-      // Format products with error handling
-      const formattedProducts = responseData.products
-        .slice(0, productsToShow)
-        .map(p => formatProduct(p, shopDomain))
-        .filter(p => p !== null); // Remove any failed products
+        const fixedImage = fixUrl(rawImageUrl, shopDomain);
 
-      console.log(`✅ Successfully formatted ${formattedProducts.length} products`);
+        // Get product URL
+        const rawProductUrl = p.url || p.onlineStoreUrl || "";
+        const fixedProductUrl = fixUrl(rawProductUrl, shopDomain);
 
-      // Create concise summary for Claude (saves tokens)
-      const productSummary = createProductSummary(formattedProducts);
+        // Generate checkout URL from variant
+        let checkoutUrl = "";
+        let firstVariant = null;
 
-      // Update tool response with concise info for Claude
-      toolUseResponse.content[0].text = JSON.stringify({
-        success: true,
-        product_count: formattedProducts.length,
-        products_displayed: true,
-        summary: productSummary,
-        // Include minimal product info for Claude's context
-        sample_products: formattedProducts.slice(0, 3).map(p => ({
-          title: p.title,
-          price: p.price,
-        })),
+        if (Array.isArray(p.variants) && p.variants.length > 0) {
+          firstVariant = p.variants[0];
+        }
+
+        if (firstVariant && firstVariant.id) {
+          const variantGid = firstVariant.id;
+          let numericVariantId = variantGid;
+
+          const prefix = "gid://shopify/ProductVariant/";
+          if (typeof variantGid === "string" && variantGid.startsWith(prefix)) {
+            numericVariantId = variantGid.replace(prefix, "");
+          }
+
+          checkoutUrl = `https://${shopDomain}/cart/${numericVariantId}:1`;
+        }
+
+        // Format price
+        let priceText = "";
+        if (p.price) {
+          priceText = p.price;
+        } else if (p.price_range) {
+          const pr = p.price_range;
+          const currency = pr.currency || "USD";
+          if (pr.min && pr.max && pr.min !== pr.max) {
+            priceText = `${pr.min} - ${pr.max} ${currency}`;
+          } else if (pr.min) {
+            priceText = `${pr.min} ${currency}`;
+          }
+        }
+
+        return {
+          id: p.product_id || p.id,
+          title: p.title || "Untitled Product",
+          image_url: fixedImage,
+          url: fixedProductUrl || p.url,
+          checkout_url: checkoutUrl,
+          price: priceText,
+          description: p.description || "",
+        };
       });
 
-      return formattedProducts;
+      console.log(`✅ Processed ${fixedProducts.length} products, returning first ${MAX_PRODUCTS_TO_DISPLAY}`);
+      
+      // Update the tool response content so Claude also sees the fixed URLs
+      responseData.products = fixedProducts;
+      toolUseResponse.content[0].text = JSON.stringify(responseData);
 
+      // Return products for frontend display
+      return fixedProducts.slice(0, MAX_PRODUCTS_TO_DISPLAY);
     } catch (error) {
-      console.error("❌ Critical error in processProductSearchResult:", error);
+      console.error("❌ Error processing product search results:", error);
       return [];
     }
   };
 
   /**
-   * Create concise product summary for Claude
-   * Prevents verbose responses while giving context
-   */
-  const createProductSummary = (products) => {
-    if (!products || products.length === 0) {
-      return "No products found";
-    }
-
-    const count = products.length;
-    const priceRange = getPriceRange(products);
-    const availableCount = products.filter(p => p.available).length;
-
-    return `${count} products displayed with images and add-to-cart buttons. ${priceRange}. ${availableCount} available.`;
-  };
-
-  /**
-   * Extract price range from products
-   */
-  const getPriceRange = (products) => {
-    const prices = products
-      .map(p => {
-        if (!p.price) return null;
-        const priceMatch = p.price.match(/[\d.]+/);
-        return priceMatch ? parseFloat(priceMatch[0]) : null;
-      })
-      .filter(p => p !== null);
-
-    if (prices.length === 0) return "Pricing varies";
-
-    const min = Math.min(...prices);
-    const max = Math.max(...prices);
-
-    if (min === max) {
-      return `$${min.toFixed(2)}`;
-    }
-
-    return `$${min.toFixed(2)} - $${max.toFixed(2)}`;
-  };
-
-  /**
-   * Process cart update results
-   * Returns formatted cart data
+   * Processes cart update results (update_cart) and extracts a checkout URL
+   * plus any lightweight cart summary we might want to surface to the UI.
+   *
+   * This is intentionally defensive: different MCP/tool versions may shape
+   * the payload slightly differently, so we try several common fields.
    */
   const processCartUpdateResult = (toolUseResponse) => {
+    if (!toolUseResponse || toolUseResponse.error) return { checkoutUrl: null, cart: null };
+
     try {
-      if (!toolUseResponse?.content || toolUseResponse.content.length === 0) {
-        return null;
+      const raw = toolUseResponse.content?.[0]?.text ?? toolUseResponse.content?.[0]?.data;
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+
+      if (!parsed || typeof parsed !== "object") {
+        return { checkoutUrl: null, cart: null };
       }
 
-      let contentText = toolUseResponse.content[0].text;
-      let cartData;
+      // Try multiple likely shapes
+      const checkoutUrl =
+        parsed.checkout_url ||
+        parsed.checkoutUrl ||
+        parsed.cart?.checkoutUrl ||
+        parsed.cart?.checkout_url ||
+        null;
 
-      try {
-        cartData = typeof contentText === "string" 
-          ? JSON.parse(contentText) 
-          : contentText;
-      } catch (e) {
-        console.error("Failed to parse cart content:", e);
-        return null;
-      }
+      const cart =
+        parsed.cart ||
+        parsed;
 
-      // Extract cart info
-      const cart = cartData.cart || cartData;
-      
-      return {
-        cartId: cart.id || cart.cart_id,
-        checkoutUrl: cart.checkoutUrl || cart.checkout_url,
-        totalQuantity: cart.totalQuantity || cart.total_quantity || 0,
-        estimatedCost: cart.estimatedCost || cart.estimated_cost,
-        lines: cart.lines || [],
-      };
-
+      return { checkoutUrl, cart };
     } catch (error) {
-      console.error("Error processing cart update:", error);
-      return null;
+      console.error("❌ Error processing cart update result:", error);
+      return { checkoutUrl: null, cart: null };
     }
-  };
-
-  /**
-   * Validate product data structure
-   */
-  const validateProductData = (product) => {
-    return {
-      isValid: !!(product && product.title),
-      hasImage: !!(product.image_url || product.imageUrl),
-      hasPrice: !!(product.price || product.price_range),
-      hasUrl: !!(product.url || product.onlineStoreUrl),
-      hasVariant: !!(product.variantId || product.variant_id),
-    };
   };
 
   return {
     processProductSearchResult,
     processCartUpdateResult,
-    createProductSummary,
-    validateProductData,
-    formatProduct,
-    fixUrl,
   };
 }
 

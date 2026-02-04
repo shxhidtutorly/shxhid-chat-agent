@@ -1,204 +1,312 @@
 // app/services/tool.server.js
 /**
- * Tool Service - Updated for 10+ products
- * Manages tool execution and product processing
+ * Tool Service - Optimized & Robust Version
+ * Manages tool execution and product processing with efficient handling
  */
 
 export function createToolService() {
-  // Updated to display minimum 10 products
-  const MAX_PRODUCTS_TO_DISPLAY = 10;
-  const PREFERRED_PRODUCTS_TO_DISPLAY = 12; // Show 12 if available
+  // Product display configuration
+  const MAX_PRODUCTS_TO_DISPLAY = 12;
+  const MIN_PRODUCTS_TO_DISPLAY = 10;
 
   /**
-   * Helper to fix URLs by prepending shop domain  needed
+   * Robust URL fixer with validation
+   * Handles all edge cases for product URLs and images
    */
   const fixUrl = (url, shopDomain) => {
-    if (!url) return "";
-    if (typeof url !== "string") return "";
-
-    if (url.startsWith("http://") || url.startsWith("https://")) return url;
-
-    const cleanPath = url.startsWith("/") ? url.substring(1) : url;
-    return `https://${shopDomain}/${cleanPath}`;
+    if (!url || typeof url !== "string") return "";
+    
+    // Already a complete URL
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      return url;
+    }
+    
+    // Relative URL - prepend shop domain
+    const cleanPath = url.startsWith("/") ? url.slice(1) : url;
+    const cleanDomain = shopDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
+    
+    return `https://${cleanDomain}/${cleanPath}`;
   };
 
   /**
-   * Processes product search results and returns formatted products for display
-   * NOW RETURNS MINIMUM 10 PRODUCTS (or all available if less than 10)
+   * Extract numeric variant ID from GID
+   */
+  const extractVariantId = (gid) => {
+    if (!gid) return null;
+    
+    const prefix = "gid://shopify/ProductVariant/";
+    if (typeof gid === "string" && gid.startsWith(prefix)) {
+      return gid.replace(prefix, "");
+    }
+    
+    return gid;
+  };
+
+  /**
+   * Process and format a single product
+   */
+  const formatProduct = (product, shopDomain) => {
+    try {
+      // Extract image URL with fallbacks
+      const rawImageUrl = 
+        product.image_url ||
+        product.imageUrl ||
+        product.featuredImage?.url ||
+        product.image?.url ||
+        (Array.isArray(product.images?.edges) && product.images.edges[0]?.node?.url) ||
+        (Array.isArray(product.images) && product.images[0]?.url) ||
+        "";
+
+      const imageUrl = fixUrl(rawImageUrl, shopDomain);
+
+      // Extract product URL with fallbacks
+      const rawProductUrl = 
+        product.url || 
+        product.onlineStoreUrl || 
+        product.product_url ||
+        "";
+
+      const productUrl = fixUrl(rawProductUrl, shopDomain);
+
+      // Get first variant
+      let firstVariant = null;
+      if (Array.isArray(product.variants) && product.variants.length > 0) {
+        firstVariant = product.variants[0];
+      } else if (product.variant) {
+        firstVariant = product.variant;
+      }
+
+      // Extract variant ID
+      let variantId = null;
+      let checkoutUrl = "";
+
+      if (firstVariant?.id) {
+        variantId = firstVariant.id;
+        const numericId = extractVariantId(variantId);
+        
+        if (numericId) {
+          checkoutUrl = `https://${shopDomain.replace(/^https?:\/\//, "")}/cart/${numericId}:1`;
+        }
+      }
+
+      // Format price
+      let priceText = "";
+      if (product.price) {
+        priceText = product.price;
+      } else if (firstVariant?.price) {
+        const price = firstVariant.price;
+        const currency = firstVariant.currency || product.currency || "USD";
+        priceText = `${price} ${currency}`;
+      } else if (product.price_range) {
+        const pr = product.price_range;
+        const currency = pr.currency || "USD";
+        
+        if (pr.min && pr.max && pr.min !== pr.max) {
+          priceText = `${pr.min} - ${pr.max} ${currency}`;
+        } else if (pr.min) {
+          priceText = `${pr.min} ${currency}`;
+        }
+      }
+
+      // Extract description (truncate if too long)
+      const description = product.description || product.body || "";
+      const truncatedDescription = description.length > 200 
+        ? description.substring(0, 200) + "..." 
+        : description;
+
+      return {
+        id: product.product_id || product.id || `product_${Date.now()}`,
+        title: product.title || "Untitled Product",
+        image_url: imageUrl,
+        url: productUrl,
+        checkout_url: checkoutUrl,
+        price: priceText,
+        description: truncatedDescription,
+        variantId: variantId,
+        sku: product.sku || firstVariant?.sku || "",
+        available: product.available ?? firstVariant?.available ?? true,
+      };
+    } catch (error) {
+      console.error("Error formatting product:", error);
+      return null;
+    }
+  };
+
+  /**
+   * Process product search results
+   * Returns formatted products ready for frontend display
+   * Updates tool response with concise summary for Claude
    */
   const processProductSearchResult = (toolUseResponse, shopDomain) => {
     try {
-      console.log("🔍 Processing product search result for domain:", shopDomain);
+      console.log("🔍 Processing product search for:", shopDomain);
 
-      if (!toolUseResponse?.content || toolUseResponse.content.length === 0) {
-        console.log("❌ No content in tool response");
+      // Validate response structure
+      if (!toolUseResponse?.content || !Array.isArray(toolUseResponse.content) || toolUseResponse.content.length === 0) {
+        console.warn("⚠️ Invalid tool response structure");
         return [];
       }
 
-      // 1. Parse the JSON content
+      // Parse content
       let contentText = toolUseResponse.content[0].text;
       let responseData;
 
       try {
-        responseData = typeof contentText === "string" ? JSON.parse(contentText) : contentText;
-      } catch (e) {
-        console.error("❌ Failed to parse tool content:", e);
+        responseData = typeof contentText === "string" 
+          ? JSON.parse(contentText) 
+          : contentText;
+      } catch (parseError) {
+        console.error("❌ Failed to parse tool content:", parseError);
         return [];
       }
 
-      // 2. Check if we have products
+      // Validate products array
       if (!responseData?.products || !Array.isArray(responseData.products)) {
-        console.log("❌ No products array in response");
+        console.warn("⚠️ No products array in response");
         return [];
       }
 
       const totalProducts = responseData.products.length;
       console.log(`✅ Found ${totalProducts} products in response`);
 
-      // 3. Determine how many products to show
-      let productsToShow = PREFERRED_PRODUCTS_TO_DISPLAY;
-      if (totalProducts < MAX_PRODUCTS_TO_DISPLAY) {
-        // If we have fewer than 10, show all available
-        productsToShow = totalProducts;
-        console.log(`⚠️ Only ${totalProducts} products available (less than minimum 10)`);
-      } else if (totalProducts >= PREFERRED_PRODUCTS_TO_DISPLAY) {
-        // If we have 12+, show 12
-        productsToShow = PREFERRED_PRODUCTS_TO_DISPLAY;
-      } else {
-        // If we have 10-11, show 10
-        productsToShow = MAX_PRODUCTS_TO_DISPLAY;
+      // Determine how many to show
+      let productsToShow = Math.min(totalProducts, MAX_PRODUCTS_TO_DISPLAY);
+      
+      if (totalProducts < MIN_PRODUCTS_TO_DISPLAY) {
+        console.log(`⚠️ Only ${totalProducts} products (less than recommended ${MIN_PRODUCTS_TO_DISPLAY})`);
       }
 
-      // 4. Process and fix each product
-      const fixedProducts = responseData.products.slice(0, productsToShow).map((p) => {
-        // Get image URL
-        const rawImageUrl =
-          p.image_url ||
-          p.featuredImage?.url ||
-          p.image?.url ||
-          (p.images && Array.isArray(p.images.edges) && p.images.edges[0]?.node?.url) ||
-          "";
+      // Format products with error handling
+      const formattedProducts = responseData.products
+        .slice(0, productsToShow)
+        .map(p => formatProduct(p, shopDomain))
+        .filter(p => p !== null); // Remove any failed products
 
-        const fixedImage = fixUrl(rawImageUrl, shopDomain);
+      console.log(`✅ Successfully formatted ${formattedProducts.length} products`);
 
-        // Get product URL
-        const rawProductUrl = p.url || p.onlineStoreUrl || "";
-        const fixedProductUrl = fixUrl(rawProductUrl, shopDomain);
+      // Create concise summary for Claude (saves tokens)
+      const productSummary = createProductSummary(formattedProducts);
 
-        // Generate checkout URL from variant
-        let checkoutUrl = "";
-        let firstVariant = null;
-
-        if (Array.isArray(p.variants) && p.variants.length > 0) {
-          firstVariant = p.variants[0];
-        }
-
-        if (firstVariant && firstVariant.id) {
-          const variantGid = firstVariant.id;
-          let numericVariantId = variantGid;
-
-          const prefix = "gid://shopify/ProductVariant/";
-          if (typeof variantGid === "string" && variantGid.startsWith(prefix)) {
-            numericVariantId = variantGid.replace(prefix, "");
-          }
-
-          checkoutUrl = `https://${shopDomain}/cart/${numericVariantId}:1`;
-        }
-
-        // Format price
-        let priceText = "";
-        if (p.price) {
-          priceText = p.price;
-        } else if (p.price_range) {
-          const pr = p.price_range;
-          const currency = pr.currency || "USD";
-          if (pr.min && pr.max && pr.min !== pr.max) {
-            priceText = `${pr.min} - ${pr.max} ${currency}`;
-          } else if (pr.min) {
-            priceText = `${pr.min} ${currency}`;
-          }
-        }
-
-        // Get variant ID for cart operations
-        let variantId = "";
-        if (firstVariant && firstVariant.id) {
-          variantId = firstVariant.id;
-        }
-
-        return {
-          id: p.product_id || p.id,
-          title: p.title || "Untitled Product",
-          image_url: fixedImage,
-          url: fixedProductUrl || p.url,
-          checkout_url: checkoutUrl,
-          price: priceText,
-          description: p.description || "",
-          variantId: variantId, // Added for direct cart operations
-        };
-      });
-
-      console.log(`✅ Processed ${fixedProducts.length} products for display`);
-      
-      // Update the tool response content so Claude also sees the fixed URLs
-      // BUT limit what we send to Claude to reduce token usage
-      const limitedProducts = fixedProducts.map(p => ({
-        id: p.id,
-        title: p.title,
-        price: p.price,
-        url: p.url,
-        // Don't send full descriptions back to Claude to save tokens
-      }));
-      
-      responseData.products = limitedProducts;
+      // Update tool response with concise info for Claude
       toolUseResponse.content[0].text = JSON.stringify({
-        ...responseData,
-        product_count: fixedProducts.length,
-        message: `Found ${fixedProducts.length} products. They are displayed in the UI.`
+        success: true,
+        product_count: formattedProducts.length,
+        products_displayed: true,
+        summary: productSummary,
+        // Include minimal product info for Claude's context
+        sample_products: formattedProducts.slice(0, 3).map(p => ({
+          title: p.title,
+          price: p.price,
+        })),
       });
 
-      // Return full product details for frontend display
-      return fixedProducts;
+      return formattedProducts;
+
     } catch (error) {
-      console.error("❌ Error processing product search results:", error);
+      console.error("❌ Critical error in processProductSearchResult:", error);
       return [];
     }
   };
 
   /**
-   * Helper to create a concise product summary for Claude
-   * Prevents verbose descriptions while giving Claude context
+   * Create concise product summary for Claude
+   * Prevents verbose responses while giving context
    */
   const createProductSummary = (products) => {
+    if (!products || products.length === 0) {
+      return "No products found";
+    }
+
     const count = products.length;
     const priceRange = getPriceRange(products);
-    
-    return {
-      product_count: count,
-      price_range: priceRange,
-      display_message: `${count} products displayed in UI. Products shown with images, prices, and add-to-cart buttons.`
-    };
+    const availableCount = products.filter(p => p.available).length;
+
+    return `${count} products displayed with images and add-to-cart buttons. ${priceRange}. ${availableCount} available.`;
   };
 
+  /**
+   * Extract price range from products
+   */
   const getPriceRange = (products) => {
     const prices = products
       .map(p => {
-        const priceMatch = p.price?.match(/[\d.]+/);
+        if (!p.price) return null;
+        const priceMatch = p.price.match(/[\d.]+/);
         return priceMatch ? parseFloat(priceMatch[0]) : null;
       })
       .filter(p => p !== null);
 
-    if (prices.length === 0) return "Varied pricing";
+    if (prices.length === 0) return "Pricing varies";
 
     const min = Math.min(...prices);
     const max = Math.max(...prices);
 
-    if (min === max) return `$${min.toFixed(2)}`;
+    if (min === max) {
+      return `$${min.toFixed(2)}`;
+    }
+
     return `$${min.toFixed(2)} - $${max.toFixed(2)}`;
+  };
+
+  /**
+   * Process cart update results
+   * Returns formatted cart data
+   */
+  const processCartUpdateResult = (toolUseResponse) => {
+    try {
+      if (!toolUseResponse?.content || toolUseResponse.content.length === 0) {
+        return null;
+      }
+
+      let contentText = toolUseResponse.content[0].text;
+      let cartData;
+
+      try {
+        cartData = typeof contentText === "string" 
+          ? JSON.parse(contentText) 
+          : contentText;
+      } catch (e) {
+        console.error("Failed to parse cart content:", e);
+        return null;
+      }
+
+      // Extract cart info
+      const cart = cartData.cart || cartData;
+      
+      return {
+        cartId: cart.id || cart.cart_id,
+        checkoutUrl: cart.checkoutUrl || cart.checkout_url,
+        totalQuantity: cart.totalQuantity || cart.total_quantity || 0,
+        estimatedCost: cart.estimatedCost || cart.estimated_cost,
+        lines: cart.lines || [],
+      };
+
+    } catch (error) {
+      console.error("Error processing cart update:", error);
+      return null;
+    }
+  };
+
+  /**
+   * Validate product data structure
+   */
+  const validateProductData = (product) => {
+    return {
+      isValid: !!(product && product.title),
+      hasImage: !!(product.image_url || product.imageUrl),
+      hasPrice: !!(product.price || product.price_range),
+      hasUrl: !!(product.url || product.onlineStoreUrl),
+      hasVariant: !!(product.variantId || product.variant_id),
+    };
   };
 
   return {
     processProductSearchResult,
+    processCartUpdateResult,
     createProductSummary,
+    validateProductData,
+    formatProduct,
+    fixUrl,
   };
 }
 

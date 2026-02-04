@@ -171,8 +171,11 @@
       
       setTimeout(() => this.elements.input.focus(), 320);
       
-      // Show email popup after 3 seconds if not captured yet
-      if (!this.state.emailCaptured && !this.state.emailPopupShown) {
+      // Show email popup after 3 seconds if not captured yet.
+      // It should only appear once per browser (even across sessions),
+      // so we also gate it on a persistent "prompted ever" flag.
+      const emailPromptedEver = localStorage.getItem('shopAiEmailPromptedEver') === 'true';
+      if (!this.state.emailCaptured && !this.state.emailPopupShown && !emailPromptedEver) {
         setTimeout(() => {
           if (this.state.isOpen && this.elements.messages.children.length > 2) {
             this.showEmailPopup();
@@ -191,6 +194,7 @@
       this.elements.emailOverlay.classList.add('active');
       this.state.emailPopupShown = true;
       sessionStorage.setItem('shopAiEmailPopupShown', 'true');
+      localStorage.setItem('shopAiEmailPromptedEver', 'true');
     },
 
     hideEmailPopup() {
@@ -347,6 +351,13 @@
     },
 
     addMessage(content, role) {
+      // Clamp overly long assistant responses to keep UX tight.
+      // We keep the first ~600 characters and drop the rest with an ellipsis.
+      let safeContent = content || '';
+      if (role === 'assistant' && typeof safeContent === 'string' && safeContent.length > 600) {
+        safeContent = safeContent.slice(0, 600) + '…';
+      }
+
       const msgDiv = document.createElement('div');
       msgDiv.className = `shop-ai-message ${role}`;
 
@@ -354,7 +365,7 @@
       bubble.className = 'shop-ai-bubble';
       
       if (role === 'assistant') {
-        bubble.innerHTML = this.parseMarkdown(content);
+        bubble.innerHTML = this.parseMarkdown(safeContent);
       } else {
         bubble.textContent = content;
       }
@@ -367,15 +378,33 @@
     },
 
     parseMarkdown(text) {
-      // Clean up markdown formatting
-      let html = text
+      if (!text || typeof text !== 'string') return '<p></p>';
+
+      let cleaned = text;
+
+      // Convert markdown links [text](url) into real anchors.
+      cleaned = cleaned.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, label, url) => {
+        return `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+      });
+
+      // Basic bold/italic handling.
+      cleaned = cleaned
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\*(.+?)\*/g, '<em>$1</em>')
-        .replace(/\n\n/g, '</p><p>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+      // Strip heading and bullet markdown characters at line starts.
+      cleaned = cleaned
+        .split('\n')
+        .map((line) => line.replace(/^\s*[#>\-\*\/]+ ?/g, ''))
+        .join('\n');
+
+      // Paragraph / line-break handling.
+      let html = cleaned
+        .replace(/\n\n+/g, '</p><p>')
         .replace(/\n/g, '<br>');
 
-      // Remove any remaining ** or // or --
-      html = html.replace(/\*\*/g, '').replace(/\/\//g, '').replace(/--/g, '');
+      // Remove any remaining markdown noise.
+      html = html.replace(/\*\*/g, '').replace(/\/\//g, '');
 
       return `<p>${html}</p>`;
     },
@@ -464,14 +493,22 @@
 
           // Prefer a precomputed checkout URL from the backend if available.
           if (prod.checkout_url) {
-            window.location.href = prod.checkout_url;
+            try {
+              window.open(prod.checkout_url, '_blank');
+            } catch (err) {
+              window.location.href = prod.checkout_url;
+            }
             return;
           }
 
           // Fallback: if a direct product URL is available, navigate there so the
           // buyer can add the item from the product page.
           if (prod.url) {
-            window.location.href = prod.url;
+            try {
+              window.open(prod.url, '_blank');
+            } catch (err) {
+              window.location.href = prod.url;
+            }
             return;
           }
 

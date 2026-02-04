@@ -7,13 +7,11 @@
       isThinking: false,
       conversationId: sessionStorage.getItem('shopAiConversationId') || null,
       visitorId: sessionStorage.getItem('shopAiVisitorId') || null,
-      cartId: sessionStorage.getItem('shopAiCartId') || null,
       emailCaptured: localStorage.getItem('shopAiEmailCaptured') === 'true',
       emailPopupShown: sessionStorage.getItem('shopAiEmailPopupShown') === 'true',
       buffer: '',
       placeholderIndex: 0,
-      chatHistory: JSON.parse(localStorage.getItem('shopAiChatHistory') || '[]'),
-      messageCount: 0
+      chatHistory: JSON.parse(localStorage.getItem('shopAiChatHistory') || '[]')
     },
 
     placeholders: [
@@ -97,8 +95,7 @@
       // Input behavior
       this.elements.input.addEventListener('input', (e) => {
         e.target.style.height = 'auto';
-        const newHeight = Math.min(e.target.scrollHeight, 100);
-        e.target.style.height = `${newHeight}px`;
+        e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
         const hasText = e.target.value.trim().length > 0;
         this.elements.sendBtn.classList.toggle('active', hasText);
       });
@@ -135,7 +132,7 @@
       let resizeTimeout;
       window.addEventListener('resize', () => {
         clearTimeout(resizeTimeout);
-        resizeTimeout = setTimeout(() => this.scrollToBottom(), 120);
+        resizeTimeout = setTimeout(() => this.adjustModalForContent(), 120);
       });
     },
 
@@ -173,6 +170,15 @@
       this.state.isOpen = true;
       
       setTimeout(() => this.elements.input.focus(), 320);
+      
+      // Show email popup after 3 seconds if not captured yet
+      if (!this.state.emailCaptured && !this.state.emailPopupShown) {
+        setTimeout(() => {
+          if (this.state.isOpen && this.elements.messages.children.length > 2) {
+            this.showEmailPopup();
+          }
+        }, 3000);
+      }
     },
 
     close() {
@@ -182,8 +188,6 @@
     },
 
     showEmailPopup() {
-      if (this.state.emailCaptured || this.state.emailPopupShown) return;
-      
       this.elements.emailOverlay.classList.add('active');
       this.state.emailPopupShown = true;
       sessionStorage.setItem('shopAiEmailPopupShown', 'true');
@@ -205,13 +209,13 @@
       this.elements.emailError.classList.remove('visible');
 
       try {
+        // Submit to backend
         await fetch(window.shopChatConfig.leadsUrl, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
             email: email,
             visitor_id: this.state.visitorId,
-            conversation_id: this.state.conversationId,
             source: 'chat_popup'
           })
         });
@@ -232,7 +236,6 @@
     startNewChat() {
       sessionStorage.removeItem('shopAiConversationId');
       this.state.conversationId = null;
-      this.state.messageCount = 0;
       
       if (this.elements.messages) {
         this.elements.messages.querySelectorAll('.shop-ai-message, .shop-ai-thinking-container, .shop-ai-product-container').forEach(n => n.remove());
@@ -274,11 +277,13 @@
     },
 
     loadChat(index) {
+      // Load chat from history
       const chat = this.state.chatHistory[this.state.chatHistory.length - 1 - index];
       if (!chat) return;
 
       this.startNewChat();
       
+      // Re-render messages
       chat.messages.forEach(msg => {
         this.addMessage(msg.content, msg.role);
       });
@@ -287,6 +292,7 @@
     },
 
     endChat() {
+      // Save to history before ending
       const messages = Array.from(this.elements.messages.querySelectorAll('.shop-ai-message'))
         .map(msg => ({
           role: msg.classList.contains('user') ? 'user' : 'assistant',
@@ -302,6 +308,7 @@
 
         this.state.chatHistory.push(chatRecord);
         
+        // Keep only last 20 chats
         if (this.state.chatHistory.length > 20) {
           this.state.chatHistory = this.state.chatHistory.slice(-20);
         }
@@ -332,12 +339,6 @@
       // Add user message
       this.addMessage(message, 'user');
 
-      // Increment message count and show email popup after 2 messages
-      this.state.messageCount++;
-      if (this.state.messageCount === 2 && !this.state.emailCaptured && !this.state.emailPopupShown) {
-        setTimeout(() => this.showEmailPopup(), 2000);
-      }
-
       // Start streaming
       this.startStream(message);
     },
@@ -363,14 +364,14 @@
     },
 
     parseMarkdown(text) {
-      // Clean and parse markdown
+      // Clean up markdown formatting
       let html = text
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
         .replace(/\*(.+?)\*/g, '<em>$1</em>')
         .replace(/\n\n/g, '</p><p>')
         .replace(/\n/g, '<br>');
 
-      // Remove remaining markdown artifacts
+      // Remove any remaining ** or // or --
       html = html.replace(/\*\*/g, '').replace(/\/\//g, '').replace(/--/g, '');
 
       return `<p>${html}</p>`;
@@ -434,7 +435,7 @@
         const img = document.createElement('img');
         img.className = 'shop-ai-prod-img';
         img.alt = prod.title || 'Product';
-        img.src = prod.image_url || prod.imageUrl || '';
+        img.src = prod.image_url || '';
         img.loading = 'lazy';
 
         const info = document.createElement('div');
@@ -451,39 +452,38 @@
         const actions = document.createElement('div');
         actions.className = 'shop-ai-prod-actions';
 
-        // Add to cart button with proper backend integration
+        // Add to cart / checkout button
         const addBtn = document.createElement('button');
         addBtn.className = 'shop-ai-prod-btn';
         addBtn.textContent = 'Add to cart';
-        addBtn.onclick = async (e) => {
+        addBtn.onclick = (e) => {
           e.stopPropagation();
-          
-          addBtn.textContent = 'Adding...';
-          addBtn.disabled = true;
-          
-          try {
-            await this.addToCart(prod);
-            
-            // Visual feedback
-            addBtn.textContent = '✓ Added';
-            addBtn.style.background = '#10b981';
-            
-            setTimeout(() => {
-              addBtn.textContent = 'Add to cart';
-              addBtn.style.background = '';
-              addBtn.disabled = false;
-            }, 2000);
-          } catch (err) {
-            console.error('Add to cart error:', err);
-            addBtn.textContent = 'Error';
-            addBtn.style.background = '#ef4444';
-            
-            setTimeout(() => {
-              addBtn.textContent = 'Add to cart';
-              addBtn.style.background = '';
-              addBtn.disabled = false;
-            }, 2000);
+
+          // Prefer a precomputed checkout URL from the backend if available.
+          // This URL should point to a valid Shopify cart/checkout route and ensures
+          // the product is actually added on the backend, not just visually.
+          if (prod.checkout_url) {
+            window.location.href = prod.checkout_url;
+            return;
           }
+
+          // Fallback: if a direct product URL is available, navigate there so the
+          // buyer can add the item from the product page.
+          if (prod.url) {
+            window.location.href = prod.url;
+            return;
+          }
+
+          // If we reach here we don't have a reliable URL – keep the old visual
+          // feedback so the UI remains responsive, but log for debugging.
+          console.warn('No checkout_url or product url available for product', prod);
+
+          addBtn.textContent = '✓ Added';
+          addBtn.style.background = '#10b981';
+          setTimeout(() => {
+            addBtn.textContent = 'Add to cart';
+            addBtn.style.background = '';
+          }, 2000);
         };
 
         // View product button
@@ -513,42 +513,6 @@
       setTimeout(() => this.scrollToBottom(), 100);
     },
 
-    async addToCart(product) {
-      try {
-        const response = await fetch(window.shopChatConfig.cartUrl, {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            productQuery: product.title,
-            variantId: product.variant_id || product.variantId,
-            quantity: 1,
-            cartId: this.state.cartId,
-            conversationId: this.state.conversationId,
-            shopDomain: window.location.hostname
-          })
-        });
-
-        const data = await response.json();
-        
-        if (data.status === 'success' && data.cartId) {
-          this.state.cartId = data.cartId;
-          sessionStorage.setItem('shopAiCartId', data.cartId);
-          
-          // Dispatch event for analytics/tracking
-          window.dispatchEvent(new CustomEvent('shop-ai-add-to-cart', { 
-            detail: { product, cartId: data.cartId } 
-          }));
-          
-          return data;
-        } else {
-          throw new Error(data.message || 'Failed to add to cart');
-        }
-      } catch (err) {
-        console.error('Cart API error:', err);
-        throw err;
-      }
-    },
-
     async startStream(userMessage) {
       this.showThinking();
 
@@ -559,7 +523,6 @@
           body: JSON.stringify({
             message: userMessage,
             conversation_id: this.state.conversationId,
-            cart_id: this.state.cartId,
             prompt_type: window.shopChatConfig.promptType || 'standardAssistant'
           })
         });
@@ -593,17 +556,13 @@
                 this.state.conversationId = data.conversation_id;
                 sessionStorage.setItem('shopAiConversationId', data.conversation_id);
               }
-              if (data.visitor_id) {
-                this.state.visitorId = data.visitor_id;
-                sessionStorage.setItem('shopAiVisitorId', data.visitor_id);
-              }
             }
 
             if (data.type === 'tool_use') {
               const toolMsg = data.tool_use_message || '';
               const short = toolMsg.includes('search') ? 'Searching products...' : 
                            toolMsg.includes('cart') ? 'Updating cart...' : 
-                           'Processing...';
+                           'Scouting store...';
               this.updateThinkingStage(2, short);
             }
 
@@ -619,6 +578,7 @@
                 this.removeThinking();
               }
               
+              // Accumulate full text before displaying
               fullText += data.chunk;
               
               if (!currentAssistantMsg) {
@@ -638,7 +598,7 @@
 
             if (data.type === 'error' || data.type === 'auth_required') {
               this.removeThinking();
-              this.addMessage(data.error || 'An error occurred. Please try again.', 'assistant');
+              this.addMessage(data.error || 'An error occurred', 'assistant');
             }
           }
         }
@@ -647,13 +607,19 @@
       } catch (err) {
         this.removeThinking();
         this.addMessage('Sorry, there was an error. Please try again.', 'assistant');
-        console.error('Stream error:', err);
       }
+    },
+
+    adjustModalForContent() {
+      // Ensure modal height accommodates content
+      if (!this.elements.modal || !this.elements.messages) return;
+      
+      requestAnimationFrame(() => this.scrollToBottom());
     },
 
     scrollToBottom() {
       if (!this.elements.messages) return;
-      this.elements.messages.scrollTop = this.elements.messages.scrollHeight + 100;
+      this.elements.messages.scrollTop = this.elements.messages.scrollHeight + 200;
     },
 
     truncate(text, length) {

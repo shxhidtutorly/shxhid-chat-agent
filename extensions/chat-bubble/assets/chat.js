@@ -284,8 +284,11 @@
       this.startNewChat();
       
       // Re-render messages
-      chat.messages.forEach(msg => {
-        this.addMessage(msg.content, msg.role);
+      const messages = Array.isArray(chat.messages) ? chat.messages : [];
+      messages.forEach((msg) => {
+        if (!msg || typeof msg.content !== 'string') return;
+        const role = msg.role === 'assistant' || msg.role === 'user' ? msg.role : 'assistant';
+        this.addMessage(msg.content, role);
       });
 
       this.closeHistory();
@@ -460,8 +463,6 @@
           e.stopPropagation();
 
           // Prefer a precomputed checkout URL from the backend if available.
-          // This URL should point to a valid Shopify cart/checkout route and ensures
-          // the product is actually added on the backend, not just visually.
           if (prod.checkout_url) {
             window.location.href = prod.checkout_url;
             return;
@@ -569,6 +570,24 @@
             if (data.type === 'product_results') {
               this.removeThinking();
               this.renderProducts(data.products || []);
+            }
+
+            if (data.type === 'cart_updated') {
+              this.removeThinking();
+
+              // If we get a checkout URL from the backend, open it and also show
+              // a confirmation message in the chat for clarity.
+              if (data.checkout_url) {
+                try {
+                  window.open(data.checkout_url, '_blank');
+                } catch (e) {
+                  console.warn('Failed to open checkout URL in new tab, falling back to same window', e);
+                  window.location.href = data.checkout_url;
+                }
+
+                const msg = `I've updated your cart. You can [click here to proceed to checkout](${data.checkout_url}).`;
+                this.addMessage(msg, 'assistant');
+              }
             }
 
             if (data.type === 'chunk') {

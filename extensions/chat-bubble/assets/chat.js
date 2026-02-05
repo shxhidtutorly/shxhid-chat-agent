@@ -11,7 +11,11 @@
       emailPopupShown: sessionStorage.getItem('shopAiEmailPopupShown') === 'true',
       buffer: '',
       placeholderIndex: 0,
-      chatHistory: JSON.parse(localStorage.getItem('shopAiChatHistory') || '[]')
+      chatHistory: JSON.parse(localStorage.getItem('shopAiChatHistory') || '[]'),
+      cartId: null,
+      checkoutUrl: null,
+      selectedProduct: null,
+      isCartUpdating: false
     },
 
     placeholders: [
@@ -454,6 +458,207 @@
       this.state.isThinking = false;
     },
 
+    openProductModal(product) {
+      if (!product) return;
+      this.state.selectedProduct = product;
+
+      const existing = document.getElementById('shop-ai-product-modal-overlay');
+      if (existing) existing.remove();
+
+      const overlay = document.createElement('div');
+      overlay.id = 'shop-ai-product-modal-overlay';
+      overlay.className = 'shop-ai-product-modal-overlay active';
+
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          this.closeProductModal();
+        }
+      });
+
+      const modal = document.createElement('div');
+      modal.className = 'shop-ai-product-modal';
+
+      const left = document.createElement('div');
+      left.className = 'shop-ai-product-modal-left';
+      const img = document.createElement('img');
+      img.alt = product.title || 'Product';
+      img.src = product.image_url || '';
+      img.loading = 'lazy';
+      left.appendChild(img);
+
+      const right = document.createElement('div');
+      right.className = 'shop-ai-product-modal-right';
+
+      const title = document.createElement('div');
+      title.className = 'shop-ai-product-modal-title';
+      title.textContent = product.title || 'Untitled product';
+
+      const price = document.createElement('div');
+      price.className = 'shop-ai-product-modal-price';
+      price.textContent = product.price || '';
+
+      const desc = document.createElement('div');
+      desc.className = 'shop-ai-product-modal-description';
+      if (product.description) {
+        desc.textContent = product.description;
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'shop-ai-product-modal-actions';
+
+      const primary = document.createElement('button');
+      primary.className = 'shop-ai-product-modal-primary';
+      primary.textContent = this.state.checkoutUrl ? 'Go to Cart' : 'Add to Cart';
+      primary.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (this.state.checkoutUrl) {
+          this.openCheckout();
+        } else {
+          await this.addProductToCart(product, primary);
+        }
+      });
+
+      const secondary = document.createElement('button');
+      secondary.className = 'shop-ai-product-modal-secondary';
+      secondary.textContent = 'View product';
+      secondary.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (product.url) {
+          try {
+            window.open(product.url, '_blank');
+          } catch (err) {
+            window.location.href = product.url;
+          }
+        }
+      });
+
+      actions.appendChild(primary);
+      if (product.url) actions.appendChild(secondary);
+
+      right.appendChild(title);
+      if (product.price) right.appendChild(price);
+      if (product.description) right.appendChild(desc);
+      right.appendChild(actions);
+
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'shop-ai-product-modal-close';
+      closeBtn.setAttribute('aria-label', 'Close product details');
+      closeBtn.innerHTML = '<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><line x1=\"18\" y1=\"6\" x2=\"6\" y2=\"18\"/><line x1=\"6\" y1=\"6\" x2=\"18\" y2=\"18\"/></svg>';
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.closeProductModal();
+      });
+
+      modal.appendChild(left);
+      modal.appendChild(right);
+      modal.appendChild(closeBtn);
+
+      overlay.appendChild(modal);
+
+      // Attach inside the main modal so it inherits the same stacking context
+      const host = this.elements.modal || document.body;
+      host.appendChild(overlay);
+    },
+
+    closeProductModal() {
+      const overlay = document.getElementById('shop-ai-product-modal-overlay');
+      if (overlay) overlay.remove();
+      this.state.selectedProduct = null;
+    },
+
+    async addProductToCart(product, primaryButton) {
+      if (this.state.isCartUpdating) return;
+
+      const variantId = product.variant_id || product.merchandise_id;
+      if (!variantId) {
+        console.warn('No variant_id/merchandise_id on product; cannot add to cart', product);
+        this.addMessage('I could not find a valid variant for that item. Please use the product page to add it to your cart.', 'assistant');
+        return;
+      }
+
+      this.state.isCartUpdating = true;
+      const originalLabel = primaryButton.textContent;
+      primaryButton.textContent = 'Adding…';
+
+      try {
+        const result = await this.callCartApi({
+          variantId,
+          quantity: 1
+        });
+
+        if (result && result.checkoutUrl) {
+          this.state.cartId = result.cartId || null;
+          this.state.checkoutUrl = result.checkoutUrl;
+          primaryButton.textContent = 'Go to Cart';
+        } else {
+          primaryButton.textContent = originalLabel;
+          this.addMessage('I could not update your cart just now. Please try again or use the product page.', 'assistant');
+        }
+      } catch (err) {
+        console.error('Cart API error:', err);
+        primaryButton.textContent = originalLabel;
+        this.addMessage('I could not update your cart just now. Please try again or use the product page.', 'assistant');
+      } finally {
+        this.state.isCartUpdating = false;
+      }
+    },
+
+    async callCartApi({ variantId, quantity }) {
+      const cfg = window.shopChatConfig || {};
+      const url = cfg.cartUrl || (cfg.apiUrl ? cfg.apiUrl.replace('/chat', '/api/cart') : null);
+
+      if (!url) {
+        throw new Error('Cart API URL is not configured');
+      }
+
+      const payload = {
+        variantId,
+        quantity: quantity || 1,
+        cartId: this.state.cartId,
+        conversationId: this.state.conversationId
+      };
+
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`Cart API failed: ${resp.status} ${errBody}`);
+      }
+
+      const data = await resp.json();
+      return {
+        cartId: data.cartId || null,
+        checkoutUrl: data.checkoutUrl || null
+      };
+    },
+
+    openCheckout() {
+      const url = this.state.checkoutUrl;
+      if (!url || typeof url !== 'string') {
+        console.warn('Missing checkoutUrl in state');
+        this.addMessage('I could not open your cart link. Please try from the product page.', 'assistant');
+        return;
+      }
+
+      const safeUrl = url.trim();
+      if (!safeUrl.startsWith('http')) {
+        console.warn('Invalid checkout URL format:', safeUrl);
+        this.addMessage('I could not open your cart link. Please try from the product page.', 'assistant');
+        return;
+      }
+
+      try {
+        window.open(safeUrl, '_blank');
+      } catch (err) {
+        console.warn('Failed to open checkout in new tab, falling back to same window', err);
+        window.location.href = safeUrl;
+      }
+    },
+
     renderProducts(products) {
       if (!products || !products.length) return;
 
@@ -463,6 +668,9 @@
       products.forEach(prod => {
         const card = document.createElement('div');
         card.className = 'shop-ai-product-row';
+        card.onclick = () => {
+          this.openProductModal(prod);
+        };
 
         const img = document.createElement('img');
         img.className = 'shop-ai-prod-img';
@@ -481,66 +689,8 @@
         price.className = 'shop-ai-prod-price';
         price.textContent = prod.price || (prod.price_range ? `${prod.price_range.min} ${prod.price_range.currency || ''}` : '');
 
-        const actions = document.createElement('div');
-        actions.className = 'shop-ai-prod-actions';
-
-        // Add to cart / checkout button
-        const addBtn = document.createElement('button');
-        addBtn.className = 'shop-ai-prod-btn';
-        addBtn.textContent = 'Add to cart';
-        addBtn.onclick = (e) => {
-          e.stopPropagation();
-
-          // Prefer a precomputed checkout URL from the backend if available.
-          if (prod.checkout_url) {
-            try {
-              window.open(prod.checkout_url, '_blank');
-            } catch (err) {
-              window.location.href = prod.checkout_url;
-            }
-            return;
-          }
-
-          // Fallback: if a direct product URL is available, navigate there so the
-          // buyer can add the item from the product page.
-          if (prod.url) {
-            try {
-              window.open(prod.url, '_blank');
-            } catch (err) {
-              window.location.href = prod.url;
-            }
-            return;
-          }
-
-          // If we reach here we don't have a reliable URL – keep the old visual
-          // feedback so the UI remains responsive, but log for debugging.
-          console.warn('No checkout_url or product url available for product', prod);
-
-          addBtn.textContent = '✓ Added';
-          addBtn.style.background = '#10b981';
-          setTimeout(() => {
-            addBtn.textContent = 'Add to cart';
-            addBtn.style.background = '';
-          }, 2000);
-        };
-
-        // View product button
-        const viewBtn = document.createElement('button');
-        viewBtn.className = 'shop-ai-prod-btn shop-ai-prod-btn-view';
-        viewBtn.textContent = 'View';
-        viewBtn.onclick = (e) => {
-          e.stopPropagation();
-          if (prod.url) {
-            window.open(prod.url, '_blank');
-          }
-        };
-
-        actions.appendChild(addBtn);
-        if (prod.url) actions.appendChild(viewBtn);
-
         info.appendChild(title);
         info.appendChild(price);
-        info.appendChild(actions);
 
         card.appendChild(img);
         card.appendChild(info);
@@ -612,17 +762,14 @@
             if (data.type === 'cart_updated') {
               this.removeThinking();
 
-              // If we get a checkout URL from the backend, open it and also show
-              // a confirmation message in the chat for clarity.
               if (data.checkout_url) {
-                try {
-                  window.open(data.checkout_url, '_blank');
-                } catch (e) {
-                  console.warn('Failed to open checkout URL in new tab, falling back to same window', e);
-                  window.location.href = data.checkout_url;
+                // Persist latest cart info so UI buttons can switch to \"Go to Cart\"
+                this.state.checkoutUrl = data.checkout_url;
+                if (data.cart && data.cart.id) {
+                  this.state.cartId = data.cart.id;
                 }
 
-                const msg = `I've updated your cart. You can [click here to proceed to checkout](${data.checkout_url}).`;
+                const msg = `Your cart is ready. You can [click here to proceed to checkout](${data.checkout_url}).`;
                 this.addMessage(msg, 'assistant');
               }
             }

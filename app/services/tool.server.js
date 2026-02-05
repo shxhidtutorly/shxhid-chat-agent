@@ -69,7 +69,7 @@ export function createToolService() {
         const rawProductUrl = p.url || p.onlineStoreUrl || "";
         const fixedProductUrl = fixUrl(rawProductUrl, shopDomain);
 
-        // Generate checkout URL from variant
+        // Generate checkout URL + capture a stable variant identifier
         let checkoutUrl = "";
         let firstVariant = null;
 
@@ -77,8 +77,15 @@ export function createToolService() {
           firstVariant = p.variants[0];
         }
 
-        if (firstVariant && firstVariant.id) {
-          const variantGid = firstVariant.id;
+        // Prefer the canonical ProductVariant GID for cart operations
+        const variantIdRaw =
+          firstVariant?.id ||
+          firstVariant?.variant_id ||
+          firstVariant?.merchandise_id ||
+          null;
+
+        if (variantIdRaw) {
+          const variantGid = variantIdRaw;
           let numericVariantId = variantGid;
 
           const prefix = "gid://shopify/ProductVariant/";
@@ -86,6 +93,7 @@ export function createToolService() {
             numericVariantId = variantGid.replace(prefix, "");
           }
 
+          // Standard Shopify \"direct cart\" URL – this is a safe, deterministic fallback
           checkoutUrl = `https://${shopDomain}/cart/${numericVariantId}:1`;
         }
 
@@ -111,6 +119,10 @@ export function createToolService() {
           checkout_url: checkoutUrl,
           price: priceText,
           description: p.description || "",
+          // Extra metadata for frontend cart operations
+          variant_id: variantIdRaw,
+          merchandise_id: variantIdRaw,
+          sku: p.sku || firstVariant?.sku || null,
         };
       });
 
@@ -152,10 +164,15 @@ export function createToolService() {
         parsed.checkoutUrl ||
         parsed.cart?.checkoutUrl ||
         parsed.cart?.checkout_url ||
+        parsed.data?.cart?.checkoutUrl ||
+        parsed.data?.cart?.checkout_url ||
+        parsed.data?.checkoutUrl ||
+        parsed.data?.checkout_url ||
         null;
 
       const cart =
         parsed.cart ||
+        parsed.data?.cart ||
         parsed;
 
       return { checkoutUrl, cart };

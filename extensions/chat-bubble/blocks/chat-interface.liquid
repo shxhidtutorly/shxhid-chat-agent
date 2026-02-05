@@ -526,6 +526,145 @@
   }
 
   /* ============================================
+     PRODUCT DETAIL POPUP
+     ============================================ */
+  .shop-ai-product-modal-overlay{
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.45);
+    backdrop-filter: blur(10px);
+    z-index: 1000;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.25s ease, visibility 0.25s ease;
+  }
+
+  .shop-ai-product-modal-overlay.active{
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .shop-ai-product-modal{
+    width: 100%;
+    max-width: 640px;
+    background: #ffffff;
+    border-radius: 20px;
+    box-shadow: var(--shop-ai-shadow);
+    display: flex;
+    gap: 24px;
+    padding: 24px;
+    position: relative;
+  }
+
+  .shop-ai-product-modal-left{
+    flex: 0 0 230px;
+    border-radius: 16px;
+    overflow: hidden;
+    background: #f5f5f5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .shop-ai-product-modal-left img{
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .shop-ai-product-modal-right{
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .shop-ai-product-modal-title{
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--shop-ai-text);
+  }
+
+  .shop-ai-product-modal-price{
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--shop-ai-primary);
+  }
+
+  .shop-ai-product-modal-description{
+    font-size: 14px;
+    color: var(--shop-ai-text-light);
+    line-height: 1.5;
+    max-height: 80px;
+    overflow: hidden;
+  }
+
+  .shop-ai-product-modal-actions{
+    margin-top: 8px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .shop-ai-product-modal-primary{
+    flex: 1;
+    min-width: 0;
+    padding: 10px 18px;
+    border-radius: 999px;
+    border: none;
+    background: var(--shop-ai-gradient);
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .shop-ai-product-modal-primary:hover{
+    transform: translateY(-1px);
+    box-shadow: 0 8px 18px rgba(255,157,92,0.32);
+  }
+
+  .shop-ai-product-modal-secondary{
+    padding: 10px 18px;
+    border-radius: 999px;
+    border: 1px solid var(--shop-ai-border);
+    background: #ffffff;
+    color: var(--shop-ai-text);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .shop-ai-product-modal-close{
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--shop-ai-border);
+    background: rgba(255,255,255,0.92);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  .shop-ai-product-modal-close svg{
+    width: 14px;
+    height: 14px;
+  }
+
+  /* ============================================
      THINKING UI - MODERN GLASSY
      ============================================ */
   .shop-ai-thinking-container{
@@ -906,6 +1045,22 @@
       width: 100%;
       height: 180px;
     }
+
+    .shop-ai-product-modal{
+      flex-direction: column;
+      max-width: 100%;
+      margin: 0 16px;
+    }
+
+    .shop-ai-product-modal-left{
+      flex: 0 0 auto;
+      width: 100%;
+      max-height: 260px;
+    }
+
+    .shop-ai-product-modal-right{
+      width: 100%;
+    }
   }
 </style>
 
@@ -1087,7 +1242,8 @@
     apiUrl: '{{ shop.url }}/apps/shop-chat/chat',
     leadsUrl: '{{ shop.url }}/apps/shop-chat/leads',
     shopId: '{{ shop.id }}',
-    promptType: 'standardAssistant',
+  cartUrl: '{{ shop.url }}/apps/shop-chat/api/cart',
+  promptType: 'creativeAutomationAssistant',
     welcomeMessage: '{{ settings.welcome_message }}'
   };
 </script>

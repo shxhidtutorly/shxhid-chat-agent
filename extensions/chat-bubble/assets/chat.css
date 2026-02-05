@@ -184,8 +184,10 @@
 
   .shop-ai-message.assistant {
     align-self: flex-start;
-    background-color: #f1f1f1;
-    border-bottom-left-radius: 4px;
+    /* Bubble visuals are now handled in theme extension styles */
+    background-color: transparent;
+    border-radius: 0;
+    padding: 0;
   }
 
   .shop-ai-message.assistant a {
@@ -246,9 +248,11 @@
 
   .shop-ai-message.user {
     align-self: flex-end;
-    background-color: #5046e4;
-    color: white;
-    border-bottom-right-radius: 4px;
+    /* Bubble visuals are now handled in theme extension styles */
+    background-color: transparent;
+    color: inherit;
+    border-radius: 0;
+    padding: 0;
   }
   
   .shop-ai-message.user a {

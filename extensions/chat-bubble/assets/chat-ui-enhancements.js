@@ -56,7 +56,7 @@
   let elements = {};
 
   // ============================================
-  // INITIALIZATION
+  // INITIALIZATIONs
   // ============================================
   
   function init() {
@@ -92,7 +92,7 @@
   }
 
   // ============================================
-  // UI INJECTION
+  // UI INJECTIONs
   // ============================================
   
   function injectUIElements() {
@@ -134,7 +134,7 @@
     }
   }
 
-  // --- HTML TEMPLATES (Reuse existing ones, just ensure consistency) ---
+  // --- HTML TEMPLATES (Reuse existing ones, just ensure consistencys) ---
   function createFloatingButtonsHTML() {
     return `
       <div class="shop-ai-floating-group">

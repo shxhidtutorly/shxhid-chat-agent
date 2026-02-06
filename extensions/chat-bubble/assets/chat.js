@@ -96,7 +96,7 @@
         });
       });
 
-      // Input behavior
+      // Input behaviors
       this.elements.input.addEventListener('input', (e) => {
         e.target.style.height = 'auto';
         e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;

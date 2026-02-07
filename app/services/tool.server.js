@@ -158,7 +158,7 @@ export function createToolService() {
         return { checkoutUrl: null, cart: null };
       }
 
-      // Try multiple likely shapes
+      // Try multiple likely shapes (MCP/GraphQL/Storefront API)
       const checkoutUrl =
         parsed.checkout_url ||
         parsed.checkoutUrl ||
@@ -166,6 +166,10 @@ export function createToolService() {
         parsed.cart?.checkout_url ||
         parsed.data?.cart?.checkoutUrl ||
         parsed.data?.cart?.checkout_url ||
+        parsed.data?.cartCreate?.cart?.checkoutUrl ||
+        parsed.data?.cartCreate?.cart?.checkout_url ||
+        parsed.data?.cartLinesAdd?.cart?.checkoutUrl ||
+        parsed.data?.cartLinesAdd?.cart?.checkout_url ||
         parsed.data?.checkoutUrl ||
         parsed.data?.checkout_url ||
         null;
@@ -173,6 +177,8 @@ export function createToolService() {
       const cart =
         parsed.cart ||
         parsed.data?.cart ||
+        parsed.data?.cartCreate?.cart ||
+        parsed.data?.cartLinesAdd?.cart ||
         parsed;
 
       return { checkoutUrl, cart };

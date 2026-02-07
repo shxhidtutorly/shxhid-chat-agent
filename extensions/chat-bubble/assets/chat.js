@@ -96,7 +96,7 @@
         });
       });
 
-      // Input behaviors
+      // Input behavior
       this.elements.input.addEventListener('input', (e) => {
         e.target.style.height = 'auto';
         e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
@@ -175,16 +175,14 @@
       
       setTimeout(() => this.elements.input.focus(), 320);
       
-      // Show email popup after 3 seconds if not captured yet.
-      // It should only appear once per browser (even across sessions),
-      // so we also gate it on a persistent "prompted ever" flag.
+      // Show email popup quickly for new users (800ms after opening chat).
       const emailPromptedEver = localStorage.getItem('shopAiEmailPromptedEver') === 'true';
       if (!this.state.emailCaptured && !this.state.emailPopupShown && !emailPromptedEver) {
         setTimeout(() => {
-          if (this.state.isOpen && this.elements.messages.children.length > 2) {
+          if (this.state.isOpen) {
             this.showEmailPopup();
           }
-        }, 3000);
+        }, 800);
       }
     },
 
@@ -385,6 +383,10 @@
       if (!text || typeof text !== 'string') return '<p></p>';
 
       let cleaned = text;
+
+      // Strip markdown tables to avoid bulky table rendering
+      cleaned = cleaned.replace(/\|[^\n]+\|\n\|[\s\-:|]+\|\n(\|[^\n]+\|\n?)*/g, '');
+      cleaned = cleaned.replace(/^\s*\|.+\|\s*$/gm, '');
 
       // Convert markdown links [text](url) into real anchors.
       cleaned = cleaned.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, label, url) => {
@@ -855,9 +857,13 @@
     ShopAIChat.init();
   }
 
-  // Escape key handler
+  // Escape key handler – close product modal first, then main chat
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && ShopAIChat && ShopAIChat.state && ShopAIChat.state.isOpen) {
+    if (e.key !== 'Escape' || !ShopAIChat) return;
+    if (document.getElementById('shop-ai-product-modal-overlay')) {
+      ShopAIChat.closeProductModal();
+      e.preventDefault();
+    } else if (ShopAIChat.state && ShopAIChat.state.isOpen) {
       ShopAIChat.close();
     }
   });

@@ -38,11 +38,9 @@ export async function action({ request }) {
 
     console.log(`🛒 Cart Action: Adding ${quantity} x ${variantId || productQuery} to cart ${cartId || 'new'}`);
 
-    // Initialize MCP Client
-    const urls = await getCustomerAccountUrls(shopDomain, conversationId || "default");
-    const mcpApiUrl = urls?.mcpApiUrl;
-
-    const client = new MCPClient(shopDomain, conversationId || "cart_action", null, mcpApiUrl);
+    // Initialize MCP Client (storefront MCP at shopDomain/api/mcp; customer MCP override from DB if any)
+    const urls = await getCustomerAccountUrls(conversationId || "cart_action");
+    const client = new MCPClient(shopDomain, conversationId || "cart_action", null, urls?.mcpApiUrl);
     
     // Connect to Storefront MCP
     await client.connectToStorefrontServer();
@@ -50,10 +48,13 @@ export async function action({ request }) {
     let result;
 
     if (variantId) {
-      // Direct update if we have the variant ID
+      // Direct update if we have the variant ID (Storefront MCP expects merchandise_id as GID)
+      const merchId = String(variantId).startsWith("gid://")
+        ? variantId
+        : `gid://shopify/ProductVariant/${variantId}`;
       result = await client.updateCart({
         cartId: cartId,
-        lines: [{ merchandise_id: variantId, quantity: parseInt(quantity) }]
+        lines: [{ merchandise_id: merchId, quantity: parseInt(quantity) }]
       });
     } else if (productQuery) {
       // Helper method: Search -> Variant -> Update Cart
@@ -66,15 +67,31 @@ export async function action({ request }) {
       throw new Error("Must provide variantId or productQuery");
     }
 
-    // Extract checkout URL and Cart ID from the result
-    const cart = result.cart || result;
-    const checkoutUrl = cart.checkoutUrl || cart.checkout_url;
-    const newCartId = cart.id;
+    // MCP update_cart returns { content: [{ type: "text", text: "{\"cart\": {...}}" }] }
+    // Use the same parsing logic as chat route's processCartUpdateResult
+    const { createToolService } = await import("../services/tool.server");
+    const toolService = createToolService();
+    const { checkoutUrl, cart } = toolService.processCartUpdateResult(result);
+
+    const newCartId = cart?.id || null;
+
+    let finalCheckoutUrl = checkoutUrl;
+    if (!finalCheckoutUrl && variantId) {
+      // Fallback: Shopify cart permalink adds item and redirects to checkout
+      const numericId = String(variantId).replace(/^gid:\/\/shopify\/ProductVariant\//, "").trim();
+      if (numericId && /^\d+$/.test(numericId)) {
+        finalCheckoutUrl = `https://${shopDomain}/cart/${numericId}:${parseInt(quantity)}`;
+        console.log("🛒 Using fallback cart permalink:", finalCheckoutUrl);
+      }
+    }
+    if (!finalCheckoutUrl) {
+      console.warn("🛒 Cart updated but no checkoutUrl; MCP structure:", JSON.stringify(result).slice(0, 500));
+    }
 
     return Response.json({
       status: "success",
       cartId: newCartId,
-      checkoutUrl: checkoutUrl,
+      checkoutUrl: finalCheckoutUrl || null,
       raw: cart
     }, { headers: getCorsHeaders(request) });
 

@@ -1,5 +1,5 @@
 /**
- * Authentication service for handling OAuth and PKCE flows
+ * Authentication service for handling OAuth and PKCE 
  */
 
 /**

@@ -71,27 +71,45 @@ export async function action({ request }) {
     // Use the same parsing logic as chat route's processCartUpdateResult
     const { createToolService } = await import("../services/tool.server");
     const toolService = createToolService();
-    const { checkoutUrl, cart } = toolService.processCartUpdateResult(result);
+    let { checkoutUrl, cart } = toolService.processCartUpdateResult(result);
 
     const newCartId = cart?.id || null;
 
-    let finalCheckoutUrl = checkoutUrl;
-    if (!finalCheckoutUrl && variantId) {
-      // Fallback: Shopify cart permalink adds item and redirects to checkout
-      const numericId = String(variantId).replace(/^gid:\/\/shopify\/ProductVariant\//, "").trim();
-      if (numericId && /^\d+$/.test(numericId)) {
-        finalCheckoutUrl = `https://${shopDomain}/cart/${numericId}:${parseInt(quantity)}`;
-        console.log("🛒 Using fallback cart permalink:", finalCheckoutUrl);
+    // If update_cart didn't include checkoutUrl, fetch the cart (MCP-correct, no permalinks)
+    if (!checkoutUrl && newCartId) {
+      try {
+        const cartResult = await client.getCart(newCartId);
+        const parsed = toolService.processCartUpdateResult(cartResult);
+        checkoutUrl = parsed.checkoutUrl || checkoutUrl;
+        cart = parsed.cart || cart;
+      } catch (e) {
+        console.warn("🛒 get_cart failed while resolving checkoutUrl:", e?.message || e);
       }
     }
+
+    // Normalize checkoutUrl to an absolute URL (some responses may be relative)
+    let finalCheckoutUrl = checkoutUrl;
+    if (typeof finalCheckoutUrl === "string") {
+      finalCheckoutUrl = finalCheckoutUrl.trim();
+      if (finalCheckoutUrl && finalCheckoutUrl.startsWith("/")) {
+        finalCheckoutUrl = `https://${shopDomain}${finalCheckoutUrl}`;
+      }
+      if (!finalCheckoutUrl) finalCheckoutUrl = null;
+    } else {
+      finalCheckoutUrl = null;
+    }
+
     if (!finalCheckoutUrl) {
-      console.warn("🛒 Cart updated but no checkoutUrl; MCP structure:", JSON.stringify(result).slice(0, 500));
+      console.warn(
+        "🛒 Cart updated but no checkoutUrl after get_cart; MCP structure:",
+        JSON.stringify(result).slice(0, 500)
+      );
     }
 
     return Response.json({
       status: "success",
       cartId: newCartId,
-      checkoutUrl: finalCheckoutUrl || null,
+      checkoutUrl: finalCheckoutUrl,
       raw: cart
     }, { headers: getCorsHeaders(request) });
 

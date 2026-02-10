@@ -412,6 +412,105 @@
     border-bottom: 1px solid #eaeaea;
     padding: 10px 0;
   }
+
+  /* ============================================
+     PRODUCT ROWS (chat.js renderProducts)
+     Larger cards + 2 buttons side-by-side
+     ============================================ */
+  .shop-ai-product-container{
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin: 10px 0;
+  }
+
+  .shop-ai-product-row{
+    display: flex;
+    gap: 16px;
+    padding: 16px;
+    border: 1px solid #eaeaea;
+    border-radius: 14px;
+    background: #ffffff;
+    align-items: center;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.06);
+  }
+
+  .shop-ai-prod-img{
+    width: 110px;
+    height: 110px;
+    border-radius: 12px;
+    object-fit: cover;
+    background: #f7f7f7;
+    flex-shrink: 0;
+  }
+
+  .shop-ai-prod-info{
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .shop-ai-prod-title{
+    font-size: 15px;
+    font-weight: 650;
+    color: #111827;
+    line-height: 1.25;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .shop-ai-prod-price{
+    font-size: 14px;
+    font-weight: 700;
+    color: #5046e4;
+  }
+
+  .shop-ai-prod-actions{
+    display: flex;
+    gap: 10px;
+    margin-top: 6px;
+  }
+
+  .shop-ai-prod-btn{
+    flex: 1;
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: none;
+    background: #5046e4;
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .shop-ai-prod-btn-view{
+    background: #ffffff;
+    color: #111827;
+    border: 1px solid #e5e7eb;
+  }
+
+  .shop-ai-prod-btn:disabled{
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  @media (max-width: 480px) {
+    .shop-ai-product-row{
+      padding: 14px;
+    }
+    .shop-ai-prod-img{
+      width: 90px;
+      height: 90px;
+    }
+    .shop-ai-prod-actions{
+      flex-direction: row;
+    }
+  }
   
   /* Product Header Styling */
   .shop-ai-product-header {

@@ -12,10 +12,11 @@
       buffer: '',
       placeholderIndex: 0,
       chatHistory: JSON.parse(localStorage.getItem('shopAiChatHistory') || '[]'),
-      cartId: null,
-      checkoutUrl: null,
+      cartId: sessionStorage.getItem('shopAiCartId') || null,
+      checkoutUrl: sessionStorage.getItem('shopAiCheckoutUrl') || null,
       selectedProduct: null,
-      isCartUpdating: false
+      isCartUpdating: false,
+      addedByProductId: JSON.parse(sessionStorage.getItem('shopAiAddedByProductId') || '{}')
     },
 
     placeholders: [
@@ -271,8 +272,8 @@
         return;
       }
 
-      this.elements.historyList.innerHTML = this.state.chatHistory
-        .reverse()
+      const chats = this.state.chatHistory.slice().reverse(); // don't mutate state
+      this.elements.historyList.innerHTML = chats
         .map((chat, idx) => `
           <div class="shop-ai-history-item" onclick="ShopAIChat.loadChat(${idx})">
             <div class="shop-ai-history-item-title">${this.truncate(chat.title, 60)}</div>
@@ -284,7 +285,8 @@
 
     loadChat(index) {
       // Load chat from history
-      const chat = this.state.chatHistory[this.state.chatHistory.length - 1 - index];
+      const chats = this.state.chatHistory.slice().reverse(); // match renderHistory ordering
+      const chat = chats[index];
       if (!chat) return;
 
       this.startNewChat();
@@ -588,9 +590,19 @@
           quantity: 1
         });
 
-        if (result && result.checkoutUrl) {
-          this.state.cartId = result.cartId || null;
+        if (result && result.checkoutUrl && result.cartId) {
+          this.state.cartId = result.cartId;
           this.state.checkoutUrl = result.checkoutUrl;
+          sessionStorage.setItem('shopAiCartId', this.state.cartId);
+          sessionStorage.setItem('shopAiCheckoutUrl', this.state.checkoutUrl);
+
+          // Mark only THIS product as added
+          const key = String(product.id || product.variant_id || product.merchandise_id || '');
+          if (key) {
+            this.state.addedByProductId[key] = true;
+            sessionStorage.setItem('shopAiAddedByProductId', JSON.stringify(this.state.addedByProductId));
+          }
+
           primaryButton.textContent = 'Go to Cart';
         } else {
           primaryButton.textContent = originalLabel;
@@ -647,7 +659,8 @@
       }
 
       const safeUrl = url.trim();
-      if (!safeUrl.startsWith('http')) {
+      // Must be a real Shopify cart/checkout URL, not a homepage redirect
+      if (!safeUrl.startsWith('http') || (!safeUrl.includes('/cart') && !safeUrl.includes('/checkouts'))) {
         console.warn('Invalid checkout URL format:', safeUrl);
         this.addMessage('I could not open your cart link. Please try from the product page.', 'assistant');
         return;
@@ -670,9 +683,7 @@
       products.forEach(prod => {
         const card = document.createElement('div');
         card.className = 'shop-ai-product-row';
-        card.onclick = () => {
-          this.openProductModal(prod);
-        };
+        // Card is not the primary action; buttons handle View/Add to cart.
 
         const img = document.createElement('img');
         img.className = 'shop-ai-prod-img';
@@ -691,8 +702,45 @@
         price.className = 'shop-ai-prod-price';
         price.textContent = prod.price || (prod.price_range ? `${prod.price_range.min} ${prod.price_range.currency || ''}` : '');
 
+        const actions = document.createElement('div');
+        actions.className = 'shop-ai-prod-actions';
+
+        const viewBtn = document.createElement('button');
+        viewBtn.className = 'shop-ai-prod-btn shop-ai-prod-btn-view';
+        viewBtn.type = 'button';
+        viewBtn.textContent = 'View';
+        viewBtn.onclick = (e) => {
+          e.stopPropagation();
+          if (prod.url) {
+            try {
+              window.open(prod.url, '_blank');
+            } catch (err) {
+              window.location.href = prod.url;
+            }
+          }
+        };
+
+        const addBtn = document.createElement('button');
+        addBtn.className = 'shop-ai-prod-btn';
+        addBtn.type = 'button';
+        const key = String(prod.id || prod.variant_id || prod.merchandise_id || '');
+        const isAdded = key && this.state.addedByProductId[key] === true;
+        addBtn.textContent = isAdded ? 'Go to Cart' : 'Add to Cart';
+        addBtn.onclick = async (e) => {
+          e.stopPropagation();
+          if (key && this.state.addedByProductId[key] === true) {
+            this.openCheckout();
+            return;
+          }
+          await this.addProductToCart(prod, addBtn);
+        };
+
+        actions.appendChild(viewBtn);
+        actions.appendChild(addBtn);
+
         info.appendChild(title);
         info.appendChild(price);
+        info.appendChild(actions);
 
         card.appendChild(img);
         card.appendChild(info);
@@ -765,11 +813,13 @@
               this.removeThinking();
 
               if (data.checkout_url) {
-                // Persist latest cart info so UI buttons can switch to \"Go to Cart\"
+                // Persist latest cart info for checkout button usage (do NOT toggle all products)
                 this.state.checkoutUrl = data.checkout_url;
                 if (data.cart && data.cart.id) {
                   this.state.cartId = data.cart.id;
                 }
+                sessionStorage.setItem('shopAiCartId', this.state.cartId || '');
+                sessionStorage.setItem('shopAiCheckoutUrl', this.state.checkoutUrl || '');
 
                 const msg = `Your cart is ready. You can [click here to proceed to checkout](${data.checkout_url}).`;
                 this.addMessage(msg, 'assistant');

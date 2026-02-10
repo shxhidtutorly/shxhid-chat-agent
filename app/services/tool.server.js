@@ -65,12 +65,18 @@ export function createToolService() {
 
         const fixedImage = fixUrl(rawImageUrl, shopDomain);
 
-        // Get product URL
-        const rawProductUrl = p.url || p.onlineStoreUrl || "";
-        const fixedProductUrl = fixUrl(rawProductUrl, shopDomain);
+        // Get product URL (Storefront MCP may use different keys depending on version)
+        const rawProductUrl =
+          p.url ||
+          p.product_url ||
+          p.productUrl ||
+          p.onlineStoreUrl ||
+          p.online_store_url ||
+          (p.handle ? `/products/${p.handle}` : "") ||
+          "";
+        const fixedProductUrl = rawProductUrl ? fixUrl(rawProductUrl, shopDomain) : "";
 
-        // Generate checkout URL + capture a stable variant identifier
-        let checkoutUrl = "";
+        // Capture a stable variant identifier (cart actions use variant GID)
         let firstVariant = null;
 
         if (Array.isArray(p.variants) && p.variants.length > 0) {
@@ -84,18 +90,9 @@ export function createToolService() {
           firstVariant?.merchandise_id ||
           null;
 
-        if (variantIdRaw) {
-          const variantGid = variantIdRaw;
-          let numericVariantId = variantGid;
-
-          const prefix = "gid://shopify/ProductVariant/";
-          if (typeof variantGid === "string" && variantGid.startsWith(prefix)) {
-            numericVariantId = variantGid.replace(prefix, "");
-          }
-
-          // Standard Shopify \"direct cart\" URL – this is a safe, deterministic fallback
-          checkoutUrl = `https://${shopDomain}/cart/${numericVariantId}:1`;
-        }
+        // NOTE: We intentionally do NOT generate checkout URLs here.
+        // Checkout/cart URLs must come from the Cart API (via MCP update_cart/get_cart)
+        // to ensure a real cart session is created and persisted correctly.
 
         // Format price
         let priceText = "";
@@ -116,7 +113,6 @@ export function createToolService() {
           title: p.title || "Untitled Product",
           image_url: fixedImage,
           url: fixedProductUrl || p.url,
-          checkout_url: checkoutUrl,
           price: priceText,
           description: p.description || "",
           // Extra metadata for frontend cart operations

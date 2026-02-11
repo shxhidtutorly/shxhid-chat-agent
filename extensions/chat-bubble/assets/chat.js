@@ -575,28 +575,36 @@
 
       const variantId = product.variant_id || product.merchandise_id;
       if (!variantId) {
-        console.warn('No variant_id/merchandise_id on product; cannot add to cart', product);
-        this.addMessage('I could not find a valid variant for that item. Please use the product page to add it to your cart.', 'assistant');
+        console.warn('❌ No variant_id/merchandise_id on product:', product);
+        this.addMessage('I could not find a valid variant for that item. Please use the product page to add it.', 'assistant');
         return;
       }
 
       this.state.isCartUpdating = true;
       const originalLabel = primaryButton.textContent;
       primaryButton.textContent = 'Adding…';
+      primaryButton.disabled = true;
 
       try {
+        console.log(`📞 Calling cart API with variantId: ${variantId}`);
+        
         const result = await this.callCartApi({
           variantId,
           quantity: 1
         });
 
         if (result && result.checkoutUrl && result.cartId) {
+          // CRITICAL FIX: Store both cartId and checkoutUrl
           this.state.cartId = result.cartId;
           this.state.checkoutUrl = result.checkoutUrl;
+          
+          // Persist to session storage
           sessionStorage.setItem('shopAiCartId', this.state.cartId);
           sessionStorage.setItem('shopAiCheckoutUrl', this.state.checkoutUrl);
 
-          // Mark only THIS product as added
+          console.log(`✅ Product added! Checkout URL: ${this.state.checkoutUrl}`);
+
+          // Mark as added
           const key = String(product.id || product.variant_id || product.merchandise_id || '');
           if (key) {
             this.state.addedByProductId[key] = true;
@@ -605,15 +613,17 @@
 
           primaryButton.textContent = 'Go to Cart';
         } else {
+          console.warn('❌ Invalid response from cart API:', result);
           primaryButton.textContent = originalLabel;
-          this.addMessage('I could not update your cart just now. Please try again or use the product page.', 'assistant');
+          this.addMessage('Cart operation failed. Please try again.', 'assistant');
         }
       } catch (err) {
-        console.error('Cart API error:', err);
+        console.error('❌ Cart API error:', err);
         primaryButton.textContent = originalLabel;
-        this.addMessage('I could not update your cart just now. Please try again or use the product page.', 'assistant');
+        this.addMessage('I could not update your cart. Please try again or use the product page.', 'assistant');
       } finally {
         this.state.isCartUpdating = false;
+        primaryButton.disabled = false;
       }
     },
 
@@ -621,16 +631,20 @@
       const cfg = window.shopChatConfig || {};
       const url = cfg.cartUrl || (cfg.apiUrl ? cfg.apiUrl.replace('/chat', '/api/cart') : null);
 
+      console.log(`🔗 Cart API URL: ${url}`);
+
       if (!url) {
-        throw new Error('Cart API URL is not configured');
+        throw new Error('Cart API URL is not configured. Check window.shopChatConfig');
       }
 
       const payload = {
         variantId,
         quantity: quantity || 1,
-        cartId: this.state.cartId,
+        cartId: this.state.cartId || null, // Send existing cart ID if we have one
         conversationId: this.state.conversationId
       };
+
+      console.log(`📦 Cart API Payload:`, payload);
 
       const resp = await fetch(url, {
         method: 'POST',
@@ -640,42 +654,66 @@
 
       if (!resp.ok) {
         const errBody = await resp.text();
+        console.error(`❌ Cart API HTTP Error ${resp.status}:`, errBody);
         throw new Error(`Cart API failed: ${resp.status} ${errBody}`);
       }
 
       const data = await resp.json();
+      console.log(`📥 Cart API Response:`, data);
+
       return {
         cartId: data.cartId || null,
-        checkoutUrl: data.checkoutUrl || null
+        checkoutUrl: data.checkoutUrl || data.cartUrl || null // Support both names
       };
     },
 
     openCheckout() {
       const url = this.state.checkoutUrl;
-      if (!url || typeof url !== 'string') {
-        console.warn('Missing checkoutUrl in state');
-        this.addMessage('I could not open your cart link. Please try from the product page.', 'assistant');
+      
+      console.log(`🛒 Opening checkout. URL: ${url}`);
+
+      if (!url || typeof url !== 'string' || url.length === 0) {
+        console.warn('❌ Invalid checkoutUrl in state:', url);
+        this.addMessage('I could not open your cart. Please refresh and try again.', 'assistant');
         return;
       }
 
-      const safeUrl = url.trim();
-      // Must be a real Shopify cart/checkout URL, not a homepage redirect
-      if (!safeUrl.startsWith('http') || (!safeUrl.includes('/cart') && !safeUrl.includes('/checkouts'))) {
-        console.warn('Invalid checkout URL format:', safeUrl);
-        this.addMessage('I could not open your cart link. Please try from the product page.', 'assistant');
+      const safeUrl = String(url).trim();
+
+      // CRITICAL FIX: Better URL validation
+      const isValidCheckoutUrl = 
+        safeUrl.startsWith('http://') || 
+        safeUrl.startsWith('https://') ||
+        safeUrl.startsWith('/cart') ||
+        safeUrl.startsWith('/checkouts');
+
+      if (!isValidCheckoutUrl) {
+        console.warn('❌ Invalid checkout URL format:', safeUrl);
+        this.addMessage('Invalid cart link. Please try using the product page directly.', 'assistant');
         return;
       }
+
+      // Ensure absolute URL
+      let finalUrl = safeUrl;
+      if (safeUrl.startsWith('/')) {
+        const shopDomain = window.shopChatConfig?.shopDomain || this.state.shopDomain;
+        finalUrl = `https://${shopDomain}${safeUrl}`;
+      }
+
+      console.log(`✅ Attempting to open: ${finalUrl}`);
 
       try {
-        window.open(safeUrl, '_blank');
+        window.open(finalUrl, '_blank');
       } catch (err) {
-        console.warn('Failed to open checkout in new tab, falling back to same window', err);
-        window.location.href = safeUrl;
+        console.warn('⚠️ Failed to open in new tab, using same window:', err);
+        window.location.href = finalUrl;
       }
     },
 
     renderProducts(products) {
       if (!products || !products.length) return;
+
+      console.log(`📦 Rendering ${products.length} products`);
 
       const container = document.createElement('div');
       container.className = 'shop-ai-product-container';
@@ -683,7 +721,6 @@
       products.forEach(prod => {
         const card = document.createElement('div');
         card.className = 'shop-ai-product-row';
-        // Card is not the primary action; buttons handle View/Add to cart.
 
         const img = document.createElement('img');
         img.className = 'shop-ai-prod-img';
@@ -700,38 +737,63 @@
 
         const price = document.createElement('div');
         price.className = 'shop-ai-prod-price';
-        price.textContent = prod.price || (prod.price_range ? `${prod.price_range.min} ${prod.price_range.currency || ''}` : '');
+        price.textContent = prod.price || 
+          (prod.price_range ? `${prod.price_range.min} ${prod.price_range.currency || 'USD'}` : 'Contact for price');
 
         const actions = document.createElement('div');
         actions.className = 'shop-ai-prod-actions';
 
+        // VIEW BUTTON - CRITICAL FIX
         const viewBtn = document.createElement('button');
         viewBtn.className = 'shop-ai-prod-btn shop-ai-prod-btn-view';
         viewBtn.type = 'button';
         viewBtn.textContent = 'View';
+        
+        // FIXED: Better URL handling
         viewBtn.onclick = (e) => {
+          e.preventDefault();
           e.stopPropagation();
-          if (prod.url) {
+          
+          // Try multiple URL properties
+          const productUrl = prod.url || prod.handle || prod.product_handle;
+          
+          if (productUrl) {
+            console.log(`🔗 Opening product URL: ${productUrl}`);
             try {
-              window.open(prod.url, '_blank');
+              window.open(productUrl, '_blank');
             } catch (err) {
-              window.location.href = prod.url;
+              console.warn('Fallback to same window:', err);
+              window.location.href = productUrl;
             }
+          } else {
+            console.warn('❌ No product URL available for:', prod.title);
+            this.addMessage('Product page link not available.', 'assistant');
           }
         };
 
+        // ADD TO CART BUTTON
         const addBtn = document.createElement('button');
         addBtn.className = 'shop-ai-prod-btn';
         addBtn.type = 'button';
+        
         const key = String(prod.id || prod.variant_id || prod.merchandise_id || '');
         const isAdded = key && this.state.addedByProductId[key] === true;
         addBtn.textContent = isAdded ? 'Go to Cart' : 'Add to Cart';
+        addBtn.disabled = false;
+
         addBtn.onclick = async (e) => {
+          e.preventDefault();
           e.stopPropagation();
+          
           if (key && this.state.addedByProductId[key] === true) {
+            // Product already added - open checkout
+            console.log(`📦 Product already added, opening checkout`);
             this.openCheckout();
             return;
           }
+          
+          // Add to cart
+          console.log(`➕ Adding product to cart:`, prod.title);
           await this.addProductToCart(prod, addBtn);
         };
 
@@ -750,7 +812,7 @@
       this.elements.messages.appendChild(container);
       setTimeout(() => this.scrollToBottom(), 100);
     },
-
+    
     async startStream(userMessage) {
       this.showThinking();
 

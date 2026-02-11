@@ -1,6 +1,6 @@
 /**
  * PostHog Analytics Service (SERVER-ONLY)
- * Safe for React Router 7 + Railway
+ * Safe for React Router 7 
  */
 
 let posthogClient = null;

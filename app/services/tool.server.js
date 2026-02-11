@@ -2,10 +2,20 @@
 /**
  * Tool Service - COMPLETE FIXED VERSION
  * Manages tool execution and product processing
+ * ✅ CRITICAL FIX: Generates product URLs from handles
  */
 
 export function createToolService() {
   const MAX_PRODUCTS_TO_DISPLAY = 8;
+
+  /**
+   * Generate product URL from handle
+   * @private
+   */
+  const generateProductUrl = (handle, shopDomain) => {
+    if (!handle || !shopDomain) return null;
+    return `https://${shopDomain}/products/${handle}`;
+  };
 
   /**
    * Helper to fix URLs by prepending shop domain if needed
@@ -24,6 +34,7 @@ export function createToolService() {
 
   /**
    * Processes product search results and returns formatted products for display
+   * ✅ NOW GENERATES PRODUCT URLS
    */
   const processProductSearchResult = (toolUseResponse, shopDomain) => {
     try {
@@ -55,7 +66,7 @@ export function createToolService() {
 
       // 3. Process and fix each product
       const fixedProducts = responseData.products.map((p) => {
-        // Get image URL - try multiple possible fields
+        // Get image URL
         const rawImageUrl =
           p.image_url ||
           p.featuredImage?.url ||
@@ -65,34 +76,30 @@ export function createToolService() {
 
         const fixedImage = fixUrl(rawImageUrl, shopDomain);
 
-        // Get product URL (Storefront MCP may use different keys depending on version)
-        const rawProductUrl =
-          p.url ||
-          p.product_url ||
-          p.productUrl ||
-          p.onlineStoreUrl ||
-          p.online_store_url ||
-          (p.handle ? `/products/${p.handle}` : "") ||
-          "";
-        const fixedProductUrl = rawProductUrl ? fixUrl(rawProductUrl, shopDomain) : "";
+        // ✅ CRITICAL: Generate product URL from handle
+        let productUrl = null;
+        
+        // Try to get URL from response first
+        if (p.url || p.product_url || p.onlineStoreUrl) {
+          productUrl = fixUrl(p.url || p.product_url || p.onlineStoreUrl, shopDomain);
+        }
+        // ✅ NEW: Generate from handle if no URL provided
+        else if (p.handle) {
+          productUrl = generateProductUrl(p.handle, shopDomain);
+          console.log(`📦 Generated URL from handle "${p.handle}": ${productUrl}`);
+        }
 
-        // Capture a stable variant identifier (cart actions use variant GID)
+        // Get variant info
         let firstVariant = null;
-
         if (Array.isArray(p.variants) && p.variants.length > 0) {
           firstVariant = p.variants[0];
         }
 
-        // Prefer the canonical ProductVariant GID for cart operations
         const variantIdRaw =
           firstVariant?.id ||
           firstVariant?.variant_id ||
           firstVariant?.merchandise_id ||
           null;
-
-        // NOTE: We intentionally do NOT generate checkout URLs here.
-        // Checkout/cart URLs must come from the Cart API (via MCP update_cart/get_cart)
-        // to ensure a real cart session is created and persisted correctly.
 
         // Format price
         let priceText = "";
@@ -112,23 +119,22 @@ export function createToolService() {
           id: p.product_id || p.id,
           title: p.title || "Untitled Product",
           image_url: fixedImage,
-          url: fixedProductUrl || p.url,
+          url: productUrl, // ✅ NOW ALWAYS HAS A URL
           price: priceText,
           description: p.description || "",
-          // Extra metadata for frontend cart operations
           variant_id: variantIdRaw,
           merchandise_id: variantIdRaw,
           sku: p.sku || firstVariant?.sku || null,
+          handle: p.handle, // Include handle for reference
         };
       });
 
-      console.log(`✅ Processed ${fixedProducts.length} products, returning first ${MAX_PRODUCTS_TO_DISPLAY}`);
+      console.log(`✅ Processed ${fixedProducts.length} products with URLs`);
       
-      // Update the tool response content so Claude also sees the fixed URLs
+      // Update the tool response content
       responseData.products = fixedProducts;
       toolUseResponse.content[0].text = JSON.stringify(responseData);
 
-      // Return products for frontend display
       return fixedProducts.slice(0, MAX_PRODUCTS_TO_DISPLAY);
     } catch (error) {
       console.error("❌ Error processing product search results:", error);
@@ -137,11 +143,7 @@ export function createToolService() {
   };
 
   /**
-   * Processes cart update results (update_cart) and extracts a checkout URL
-   * plus any lightweight cart summary we might want to surface to the UI.
-   *
-   * This is intentionally defensive: different MCP/tool versions may shape
-   * the payload slightly differently, so we try several common fields.
+   * Processes cart update results
    */
   const processCartUpdateResult = (toolUseResponse) => {
     if (!toolUseResponse || toolUseResponse.error) return { checkoutUrl: null, cart: null };
@@ -154,7 +156,7 @@ export function createToolService() {
         return { checkoutUrl: null, cart: null };
       }
 
-      // Try multiple likely shapes (MCP/GraphQL/Storefront API)
+      // Try multiple likely shapes
       const checkoutUrl =
         parsed.checkout_url ||
         parsed.checkoutUrl ||

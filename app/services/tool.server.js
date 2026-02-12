@@ -1,105 +1,57 @@
-// app/services/tool.server.js
-/**
- * Tool Service - COMPLETE FIXED VERSION
- * Manages tool execution and product processing
- * ✅ CRITICAL FIX: Generates product URLs from handles
- */
-
 export function createToolService() {
   const MAX_PRODUCTS_TO_DISPLAY = 8;
 
-  /**
-   * Generate product URL from handle
-   * @private
-   */
-  const generateProductUrl = (handle, shopDomain) => {
-    if (!handle || !shopDomain) return null;
-    return `https://${shopDomain}/products/${handle}`;
-  };
-
-  /**
-   * Helper to fix URLs by prepending shop domain if needed
-   */
-  const fixUrl = (url, shopDomain) => {
-    if (!url) return "";
-    if (typeof url !== "string") return "";
-
-    // If it's already an absolute URL, leave it alone
-    if (url.startsWith("http://") || url.startsWith("https://")) return url;
-
-    // Remove leading slash if present to avoid double slashes
-    const cleanPath = url.startsWith("/") ? url.substring(1) : url;
-    return `https://${shopDomain}/${cleanPath}`;
-  };
-
-  /**
-   * Processes product search results and returns formatted products for display
-   * ✅ NOW GENERATES PRODUCT URLS
-   */
   const processProductSearchResult = (toolUseResponse, shopDomain) => {
     try {
-      console.log("🔍 Processing product search result for domain:", shopDomain);
-
       if (!toolUseResponse?.content || toolUseResponse.content.length === 0) {
-        console.log("❌ No content in tool response");
         return [];
       }
 
-      // 1. Parse the JSON content
       let contentText = toolUseResponse.content[0].text;
       let responseData;
 
       try {
         responseData = typeof contentText === "string" ? JSON.parse(contentText) : contentText;
       } catch (e) {
-        console.error("❌ Failed to parse tool content:", e);
+        console.error("❌ Failed to parse product response:", e);
         return [];
       }
 
-      // 2. Check if we have products
       if (!responseData?.products || !Array.isArray(responseData.products)) {
-        console.log("❌ No products array in response");
+        console.log("⚠️ No products in response");
         return [];
       }
 
-      console.log(`✅ Found ${responseData.products.length} products in response`);
+      console.log(`📦 Processing ${responseData.products.length} products`);
 
-      // 3. Process and fix each product
+      // ✅ Process each product with URL generation
       const fixedProducts = responseData.products.map((p) => {
-        // Get image URL
-        const rawImageUrl =
-          p.image_url ||
-          p.featuredImage?.url ||
-          p.image?.url ||
-          (p.images && Array.isArray(p.images.edges) && p.images.edges[0]?.node?.url) ||
-          "";
-
-        const fixedImage = fixUrl(rawImageUrl, shopDomain);
-
-        // ✅ CRITICAL: Generate product URL from handle
+        const imageUrl = p.image_url || p.featuredImage?.url || "";
+        
+        // ✅ CRITICAL: Generate product URL
         let productUrl = null;
         
-        // Try to get URL from response first
-        if (p.url || p.product_url || p.onlineStoreUrl) {
-          productUrl = fixUrl(p.url || p.product_url || p.onlineStoreUrl, shopDomain);
-        }
-        // ✅ NEW: Generate from handle if no URL provided
-        else if (p.handle) {
-          productUrl = generateProductUrl(p.handle, shopDomain);
-          console.log(`📦 Generated URL from handle "${p.handle}": ${productUrl}`);
-        }
-
-        // Get variant info
-        let firstVariant = null;
-        if (Array.isArray(p.variants) && p.variants.length > 0) {
-          firstVariant = p.variants[0];
+        if (p.url) {
+          productUrl = p.url;
+        } else if (p.product_url) {
+          productUrl = p.product_url;
+        } else if (p.onlineStoreUrl) {
+          productUrl = p.onlineStoreUrl;
+        } else if (p.handle) {
+          // Generate from handle
+          productUrl = `https://${shopDomain}/products/${p.handle}`;
         }
 
-        const variantIdRaw =
-          firstVariant?.id ||
-          firstVariant?.variant_id ||
-          firstVariant?.merchandise_id ||
-          null;
+        // Ensure absolute URL
+        if (productUrl && !productUrl.startsWith("http")) {
+          productUrl = `https://${shopDomain}${productUrl.startsWith("/") ? "" : "/"}${productUrl}`;
+        }
+
+        // Get variant ID
+        let variantId = null;
+        if (p.variants && Array.isArray(p.variants) && p.variants.length > 0) {
+          variantId = p.variants[0].id || p.variants[0].variant_id || p.variants[0].merchandise_id;
+        }
 
         // Format price
         let priceText = "";
@@ -117,36 +69,30 @@ export function createToolService() {
 
         return {
           id: p.product_id || p.id,
-          title: p.title || "Untitled Product",
-          image_url: fixedImage,
-          url: productUrl, // ✅ NOW ALWAYS HAS A URL
+          title: p.title || "Untitled",
+          image_url: imageUrl,
+          url: productUrl, // ✅ ALWAYS HAS URL NOW
           price: priceText,
           description: p.description || "",
-          variant_id: variantIdRaw,
-          merchandise_id: variantIdRaw,
-          sku: p.sku || firstVariant?.sku || null,
-          handle: p.handle, // Include handle for reference
+          variant_id: variantId,
+          merchandise_id: variantId,
+          handle: p.handle
         };
       });
 
       console.log(`✅ Processed ${fixedProducts.length} products with URLs`);
-      
-      // Update the tool response content
-      responseData.products = fixedProducts;
-      toolUseResponse.content[0].text = JSON.stringify(responseData);
 
       return fixedProducts.slice(0, MAX_PRODUCTS_TO_DISPLAY);
     } catch (error) {
-      console.error("❌ Error processing product search results:", error);
+      console.error("❌ Product processing error:", error);
       return [];
     }
   };
 
-  /**
-   * Processes cart update results
-   */
   const processCartUpdateResult = (toolUseResponse) => {
-    if (!toolUseResponse || toolUseResponse.error) return { checkoutUrl: null, cart: null };
+    if (!toolUseResponse || toolUseResponse.error) {
+      return { checkoutUrl: null, cart: null };
+    }
 
     try {
       const raw = toolUseResponse.content?.[0]?.text ?? toolUseResponse.content?.[0]?.data;
@@ -156,7 +102,7 @@ export function createToolService() {
         return { checkoutUrl: null, cart: null };
       }
 
-      // Try multiple likely shapes
+      // ✅ Try multiple checkout URL paths
       const checkoutUrl =
         parsed.checkout_url ||
         parsed.checkoutUrl ||
@@ -164,24 +110,15 @@ export function createToolService() {
         parsed.cart?.checkout_url ||
         parsed.data?.cart?.checkoutUrl ||
         parsed.data?.cart?.checkout_url ||
-        parsed.data?.cartCreate?.cart?.checkoutUrl ||
-        parsed.data?.cartCreate?.cart?.checkout_url ||
-        parsed.data?.cartLinesAdd?.cart?.checkoutUrl ||
-        parsed.data?.cartLinesAdd?.cart?.checkout_url ||
-        parsed.data?.checkoutUrl ||
-        parsed.data?.checkout_url ||
+        parsed.data?.checkoutCreate?.checkout?.url ||
+        parsed.data?.checkoutCreate?.checkout?.webUrl ||
         null;
 
-      const cart =
-        parsed.cart ||
-        parsed.data?.cart ||
-        parsed.data?.cartCreate?.cart ||
-        parsed.data?.cartLinesAdd?.cart ||
-        parsed;
+      const cart = parsed.cart || parsed.data?.cart || parsed;
 
       return { checkoutUrl, cart };
     } catch (error) {
-      console.error("❌ Error processing cart update result:", error);
+      console.error("❌ Cart processing error:", error);
       return { checkoutUrl: null, cart: null };
     }
   };
@@ -192,6 +129,4 @@ export function createToolService() {
   };
 }
 
-export default {
-  createToolService,
-};
+export default { createToolService };

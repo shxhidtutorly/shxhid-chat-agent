@@ -45,14 +45,14 @@ export async function action({ request }) {
       );
     }
 
-    // Add to cart using Storefront API
+    // ✅ Call Storefront Service
     const result = await addToCart({
       variantId,
       quantity,
       cartId: cartId || null
     });
 
-    console.log(`✅ Cart API Success`);
+    console.log(`✅ SUCCESS`);
     console.log(`  CartId: ${result.cartId?.substring(0, 30)}...`);
     console.log(`  Checkout: ${result.checkoutUrl?.substring(0, 50)}...`);
     console.log(`${'='.repeat(60)}\n`);
@@ -85,13 +85,11 @@ export async function action({ request }) {
 
 function getCorsHeaders(request) {
   const origin = request.headers.get('Origin');
-  
   return {
     'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Max-Age': '86400',
-    'Vary': 'Origin'
   };
 }

@@ -1,26 +1,28 @@
 /**
  * Shopify Storefront API Client
- * GraphQL wrapper for all Storefront operations
+ * GraphQL wrapper - with Railway environment variable support
  */
-import { checkEnvironment } from './debug-env.js';
 
-if (process.env.NODE_ENV === 'production') {
-  checkEnvironment();
-}
+// ✅ HARDCODED FALLBACK (temporary while we set up Railway)
+const SHOPIFY_CONFIG = {
+  endpoint: process.env.SHOPIFY_STOREFRONT_API || 'https://shahid-ai-agent.myshopify.com/api/2024-01/graphql.json',
+  token: process.env.SHOPIFY_STOREFRONT_TOKEN || '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', // ← REPLACE WITH YOUR ACTUAL TOKEN
+  domain: process.env.SHOPIFY_DOMAIN || 'shahid-ai-agent.myshopify.com'
+};
+
+console.log(`\n✅ Shopify Config Loaded:`);
+console.log(`   Endpoint: ${SHOPIFY_CONFIG.endpoint.substring(0, 60)}...`);
+console.log(`   Token: ${SHOPIFY_CONFIG.token.substring(0, 20)}...`);
+console.log(`   Domain: ${SHOPIFY_CONFIG.domain}\n`);
 
 export async function shopifyStorefrontQuery({ query, variables = {} }) {
-  const endpoint = process.env.SHOPIFY_STOREFRONT_API;
-  const token = process.env.SHOPIFY_STOREFRONT_TOKEN;
-  const domain = process.env.SHOPIFY_DOMAIN;
+  const { endpoint, token, domain } = SHOPIFY_CONFIG;
 
   if (!endpoint || !token || !domain) {
-    throw new Error(
-      '❌ Missing Storefront API config: SHOPIFY_STOREFRONT_API, SHOPIFY_STOREFRONT_TOKEN, SHOPIFY_DOMAIN'
-    );
+    throw new Error('❌ Shopify config missing');
   }
 
-  console.log(`🔗 Storefront API Request: ${endpoint}`);
-  console.log(`📝 Variables:`, JSON.stringify(variables).substring(0, 100));
+  console.log(`🔗 Storefront API Query`);
 
   try {
     const response = await fetch(endpoint, {
@@ -39,13 +41,12 @@ export async function shopifyStorefrontQuery({ query, variables = {} }) {
 
     const json = await response.json();
 
-    // Check for GraphQL errors
     if (json.errors) {
-      console.error('❌ GraphQL Errors:', json.errors);
+      console.error('❌ GraphQL Error:', json.errors[0]?.message);
       throw new Error(json.errors[0]?.message || 'GraphQL error');
     }
 
-    console.log('✅ Storefront API request succeeded');
+    console.log('✅ Storefront API Success');
     return json.data;
 
   } catch (error) {

@@ -2,6 +2,11 @@
  * Shopify Storefront API Client
  * GraphQL wrapper for all Storefront operations
  */
+import { checkEnvironment } from './debug-env.js';
+
+if (process.env.NODE_ENV === 'production') {
+  checkEnvironment();
+}
 
 export async function shopifyStorefrontQuery({ query, variables = {} }) {
   const endpoint = process.env.SHOPIFY_STOREFRONT_API;

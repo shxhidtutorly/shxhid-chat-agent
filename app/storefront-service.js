@@ -3,16 +3,14 @@
  * Handles all product and cart operations
  */
 
-import { shopifyStorefrontQuery } from './shopify-storefront';
+import { shopifyStorefrontQuery } from './shopify-storefront.js';
 import {
   SEARCH_PRODUCTS_QUERY,
-  GET_PRODUCT_BY_HANDLE_QUERY,
   CREATE_CART_MUTATION,
   ADD_LINES_TO_CART_MUTATION,
-  GET_CART_QUERY
-} from './storefront-queries';
+} from './storefront-queries.js';
 
-const SHOP_DOMAIN = process.env.SHOPIFY_DOMAIN;
+const SHOP_DOMAIN = 'shahid-ai-agent.myshopify.com';
 
 // ============================================
 // SEARCH PRODUCTS
@@ -22,7 +20,7 @@ export async function searchProducts(searchQuery) {
     throw new Error('Search query is required');
   }
 
-  console.log(`🔍 Searching for: "${searchQuery}"`);
+  console.log(`🔍 Searching: "${searchQuery}"`);
 
   try {
     const data = await shopifyStorefrontQuery({
@@ -56,52 +54,12 @@ export async function searchProducts(searchQuery) {
 }
 
 // ============================================
-// GET PRODUCT DETAILS
-// ============================================
-export async function getProductByHandle(handle) {
-  if (!handle) throw new Error('Product handle is required');
-
-  console.log(`📦 Fetching product: ${handle}`);
-
-  try {
-    const data = await shopifyStorefrontQuery({
-      query: GET_PRODUCT_BY_HANDLE_QUERY,
-      variables: { handle }
-    });
-
-    const product = data.productByHandle;
-    if (!product) throw new Error('Product not found');
-
-    return {
-      id: product.id,
-      title: product.title,
-      handle: product.handle,
-      description: product.description,
-      image_url: product.featuredImage?.url,
-      images: product.images?.edges?.map(e => e.node.url) || [],
-      variants: product.variants?.edges?.map(e => ({
-        id: e.node.id,
-        title: e.node.title,
-        sku: e.node.sku,
-        available: e.node.availableForSale,
-        price: e.node.price?.amount,
-      })) || [],
-      url: `https://${SHOP_DOMAIN}/products/${product.handle}`,
-    };
-
-  } catch (error) {
-    console.error('❌ Get product failed:', error.message);
-    throw error;
-  }
-}
-
-// ============================================
-// ADD TO CART (Create or Update)
+// ADD TO CART
 // ============================================
 export async function addToCart({ variantId, quantity = 1, cartId = null }) {
   if (!variantId) throw new Error('Variant ID is required');
 
-  console.log(`🛒 Adding to cart: ${variantId} (qty: ${quantity}), cartId: ${cartId || 'new'}`);
+  console.log(`🛒 Adding to cart: ${variantId} (qty: ${quantity})`);
 
   try {
     const lines = [{
@@ -124,7 +82,7 @@ export async function addToCart({ variantId, quantity = 1, cartId = null }) {
       }
 
       const cart = result.cartCreate.cart;
-      console.log(`✅ Cart created: ${cart.id}`);
+      console.log(`✅ Cart created`);
 
       return {
         status: 'success',
@@ -158,42 +116,6 @@ export async function addToCart({ variantId, quantity = 1, cartId = null }) {
 
   } catch (error) {
     console.error('❌ Add to cart failed:', error.message);
-    throw error;
-  }
-}
-
-// ============================================
-// GET CART
-// ============================================
-export async function getCart(cartId) {
-  if (!cartId) throw new Error('Cart ID is required');
-
-  console.log(`🛒 Fetching cart: ${cartId}`);
-
-  try {
-    const data = await shopifyStorefrontQuery({
-      query: GET_CART_QUERY,
-      variables: { cartId }
-    });
-
-    const cart = data.cart;
-    if (!cart) throw new Error('Cart not found');
-
-    return {
-      id: cart.id,
-      checkoutUrl: cart.checkoutUrl,
-      totalQuantity: cart.totalQuantity,
-      items: (cart.lines?.edges || []).map(e => ({
-        id: e.node.id,
-        quantity: e.node.quantity,
-        title: e.node.merchandise?.title,
-      })),
-      total: cart.cost?.totalAmount?.amount,
-      currency: cart.cost?.totalAmount?.currencyCode,
-    };
-
-  } catch (error) {
-    console.error('❌ Get cart failed:', error.message);
     throw error;
   }
 }

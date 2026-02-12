@@ -6,7 +6,7 @@
 // ✅ HARDCODED FALLBACK (temporary while we set up Railway)
 const SHOPIFY_CONFIG = {
   endpoint: process.env.SHOPIFY_STOREFRONT_API || 'https://shahid-ai-agent.myshopify.com/api/2024-01/graphql.json',
-  token: process.env.SHOPIFY_STOREFRONT_TOKEN || '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', // ← REPLACE WITH YOUR ACTUAL TOKEN
+  token: process.env.SHOPIFY_STOREFRONT_TOKEN || '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', 
   domain: process.env.SHOPIFY_DOMAIN || 'shahid-ai-agent.myshopify.com'
 };
 

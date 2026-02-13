@@ -1,19 +1,22 @@
 /**
  * Shopify Storefront API Client
- * GraphQL wrapper - with Railway environment variable support
+ * ✅ FIXED: Uses cartCheckoutUrl instead of checkoutUrl (as per Shopify docs)
  */
 
-// ✅ HARDCODED FALLBACK (temporary while we set up Railway)
+const STOREFRONT_TOKEN = 'shpat_YOUR_ACTUAL_TOKEN_HERE';
+
 const SHOPIFY_CONFIG = {
-  endpoint: process.env.SHOPIFY_STOREFRONT_API || 'https://shahid-ai-agent.myshopify.com/api/2024-01/graphql.json',
-  token: process.env.SHOPIFY_STOREFRONT_TOKEN || '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', 
-  domain: process.env.SHOPIFY_DOMAIN || 'shahid-ai-agent.myshopify.com'
+  endpoint: 'https://shahid-ai-agent.myshopify.com/api/2024-01/graphql.json',
+  token: STOREFRONT_TOKEN,
+  domain: 'shahid-ai-agent.myshopify.com'
 };
 
-console.log(`\n✅ Shopify Config Loaded:`);
-console.log(`   Endpoint: ${SHOPIFY_CONFIG.endpoint.substring(0, 60)}...`);
-console.log(`   Token: ${SHOPIFY_CONFIG.token.substring(0, 20)}...`);
-console.log(`   Domain: ${SHOPIFY_CONFIG.domain}\n`);
+console.log(`\n${'='.repeat(60)}`);
+console.log(`✅ Shopify Storefront API Initialized`);
+console.log(`   Endpoint: ${SHOPIFY_CONFIG.endpoint.substring(0, 50)}...`);
+console.log(`   Token: ${SHOPIFY_CONFIG.token.substring(0, 15)}...`);
+console.log(`   Domain: ${SHOPIFY_CONFIG.domain}`);
+console.log(`${'='.repeat(60)}\n`);
 
 export async function shopifyStorefrontQuery({ query, variables = {} }) {
   const { endpoint, token, domain } = SHOPIFY_CONFIG;
@@ -22,7 +25,7 @@ export async function shopifyStorefrontQuery({ query, variables = {} }) {
     throw new Error('❌ Shopify config missing');
   }
 
-  console.log(`🔗 Storefront API Query`);
+  console.log(`🔗 Storefront GraphQL Request`);
 
   try {
     const response = await fetch(endpoint, {
@@ -36,7 +39,9 @@ export async function shopifyStorefrontQuery({ query, variables = {} }) {
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      const errorText = await response.text();
+      console.error(`❌ HTTP ${response.status}: ${errorText.substring(0, 100)}`);
+      throw new Error(`HTTP ${response.status} - ${response.statusText}`);
     }
 
     const json = await response.json();

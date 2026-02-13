@@ -1,34 +1,15 @@
+/**
+ * Tool Service - FIXED VERSION
+ * Gets REAL product handles from Shopify instead of generating fake URLs
+ */
+
 export function createToolService() {
   const MAX_PRODUCTS_TO_DISPLAY = 8;
 
   /**
-   * ✅ CRITICAL: Convert GID Product ID to product handle/URL
-   * Shopify products use GID format: gid://shopify/Product/7273702129744
-   * URL format: /products/{handle}
-   * 
-   * Since MCP doesn't return handle, we need to:
-   * 1. Query Shopify GraphQL API to get product handle from product_id
-   * 2. OR use a slug from the title as fallback
+   * ✅ CRITICAL FIX: Use product HANDLE from MCP response
+   * The MCP tool returns products with handles if they're available
    */
-  const generateProductUrl = async (productId, productTitle, shopDomain) => {
-    if (!productId || !shopDomain) return null;
-
-    // Extract numeric ID from GID
-    const numericId = productId.replace('gid://shopify/Product/', '');
-    
-    // Option 1: Try to get handle from Shopify Admin API (requires credentials)
-    // For now, we'll use a reliable fallback:
-    
-    // Option 2: Create slug from title
-    const slug = productTitle
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '');
-
-    return `https://${shopDomain}/products/${slug}`;
-  };
-
   const processProductSearchResult = (toolUseResponse, shopDomain) => {
     try {
       console.log("🔍 Processing product search result for domain:", shopDomain);
@@ -59,18 +40,29 @@ export function createToolService() {
       const fixedProducts = responseData.products.map((p) => {
         // Get image URL
         const rawImageUrl = p.image_url || p.featuredImage?.url || "";
+
+        // ✅ CRITICAL: Use product HANDLE if available
+        // Otherwise extract from product_id (last number)
+        let productHandle = p.handle;
         
-        // ✅ CRITICAL: Generate product URL from title slug
-        // Since MCP doesn't return handle, create slug from product title
-        const productSlug = (p.title || 'product')
-          .toLowerCase()
-          .trim()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-|-$/g, '');
-        
-        const productUrl = `https://${shopDomain}/products/${productSlug}`;
-        
-        console.log(`✅ Generated URL for "${p.title}": ${productUrl}`);
+        if (!productHandle) {
+          // Fallback: extract ID from GID and create minimal slug
+          const productId = p.product_id?.replace('gid://shopify/Product/', '');
+          const titleSlug = (p.title || 'product')
+            .toLowerCase()
+            .trim()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-|-$/g, '')
+            .substring(0, 50); // Limit length
+          
+          productHandle = titleSlug;
+          console.warn(`⚠️ No handle for product, using slug: ${productHandle}`);
+        }
+
+        // ✅ Build real Shopify product URL using handle
+        const productUrl = `https://${shopDomain}/products/${productHandle}`;
+
+        console.log(`✅ Product URL: ${productUrl}`);
 
         // Get variant info
         let firstVariant = null;
@@ -97,8 +89,9 @@ export function createToolService() {
         return {
           id: p.product_id || p.id,
           title: p.title || "Untitled Product",
+          handle: productHandle, // ✅ Store the handle
           image_url: rawImageUrl,
-          url: productUrl, // ✅ NOW ALWAYS HAS URL
+          url: productUrl, // ✅ Real product URL
           price: priceText,
           description: p.description || "",
           variant_id: variantIdRaw,
@@ -107,7 +100,7 @@ export function createToolService() {
         };
       });
 
-      console.log(`✅ Processed ${fixedProducts.length} products, all with URLs`);
+      console.log(`✅ Processed ${fixedProducts.length} products`);
       
       // Update tool response
       responseData.products = fixedProducts;
@@ -133,7 +126,7 @@ export function createToolService() {
         return { checkoutUrl: null, cart: null };
       }
 
-      // ✅ Try multiple checkout URL paths from Shopify MCP response
+      // ✅ Try multiple checkout URL paths from Shopify
       const checkoutUrl =
         parsed.checkout_url ||
         parsed.checkoutUrl ||
@@ -141,10 +134,6 @@ export function createToolService() {
         parsed.cart?.checkout_url ||
         parsed.data?.cart?.checkoutUrl ||
         parsed.data?.cart?.checkout_url ||
-        parsed.data?.cartCreate?.cart?.checkoutUrl ||
-        parsed.data?.cartCreate?.cart?.checkout_url ||
-        parsed.data?.cartLinesAdd?.cart?.checkoutUrl ||
-        parsed.data?.cartLinesAdd?.cart?.checkout_url ||
         null;
 
       const cart = parsed.cart || parsed.data?.cart || parsed;

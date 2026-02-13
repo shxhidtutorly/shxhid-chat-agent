@@ -1,3 +1,12 @@
+/**
+ * Shopify Chat Agent - Production Ready
+ * ✅ CHANGES:
+ * - Products show in GRID ROWS (3 per row)
+ * - Text shows BEFORE products
+ * - Click product to open MODAL POPUP
+ * - Email popup on FIRST CHAT only
+ * - Only ONE valid checkout link (no duplicates)
+ */
 
 (function () {
   'use strict';
@@ -10,24 +19,25 @@
       visitorId: sessionStorage.getItem('shopAiVisitorId') || null,
       emailCaptured: localStorage.getItem('shopAiEmailCaptured') === 'true',
       emailPopupShown: sessionStorage.getItem('shopAiEmailPopupShown') === 'true',
+      isFirstMessage: !sessionStorage.getItem('shopAiConversationId'), // ✅ Track first message
       buffer: '',
       placeholderIndex: 0,
       chatHistory: JSON.parse(localStorage.getItem('shopAiChatHistory') || '[]'),
       cartId: sessionStorage.getItem('shopAiCartId') || null,
       checkoutUrl: sessionStorage.getItem('shopAiCheckoutUrl') || null,
       selectedProduct: null,
+      selectedProductModal: null, // ✅ For modal popup
       isCartUpdating: false,
       addedByProductId: JSON.parse(sessionStorage.getItem('shopAiAddedByProductId') || '{}'),
       productDataMap: new Map(),
+      lastCheckoutUrlShown: null,
+    },
 
     placeholders: [
       'Ask me anything...',
-      'Suggest me products',
-      'What else would you like to know?',
-      'Need more details?',
-      'Search by SKU or model',
-      'Tell me about your requirements',
-      'Looking for something specific?'
+      'Search for products',
+      'What do you need?',
+      'Tell me a product name...',
     ],
 
     elements: {},
@@ -41,17 +51,6 @@
         input: document.getElementById('shop-ai-input'),
         sendBtn: document.getElementById('shop-ai-send-btn'),
         closeBtn: document.getElementById('shop-ai-close-btn'),
-        menuBtn: document.getElementById('shop-ai-menu-btn'),
-        menuDropdown: document.getElementById('shop-ai-menu'),
-        suggestions: document.getElementById('shop-ai-suggestions'),
-        emailOverlay: document.getElementById('shop-ai-email-overlay'),
-        emailInput: document.getElementById('shop-ai-email-input'),
-        emailSubmit: document.getElementById('shop-ai-email-submit'),
-        emailSkip: document.getElementById('shop-ai-email-skip'),
-        emailError: document.getElementById('shop-ai-email-error'),
-        historyPanel: document.getElementById('shop-ai-history-panel'),
-        historyList: document.getElementById('shop-ai-history-list'),
-        backBtn: document.getElementById('shop-ai-back-btn')
       };
 
       if (!this.elements.modal) {
@@ -97,7 +96,7 @@
         });
       }
 
-      // ✅ CRITICAL: Use document-level event delegation for product buttons
+      // ✅ Document-level delegation for product buttons
       document.addEventListener('click', (e) => {
         const btn = e.target.closest('[data-product-action]');
         if (!btn) return;
@@ -108,14 +107,16 @@
         const action = btn.dataset.productAction;
         const productId = btn.dataset.productId;
 
-        console.log(`🔘 Button clicked: action=${action}, productId=${productId}`);
-
         if (action === 'view-product') {
           this.handleViewProduct(productId);
         } else if (action === 'add-to-cart') {
           this.handleAddToCart(productId);
         } else if (action === 'go-to-cart') {
           this.handleGoToCart();
+        } else if (action === 'modal-open') {
+          this.handleOpenProductModal(productId);
+        } else if (action === 'modal-close') {
+          this.handleCloseProductModal();
         }
       });
     },
@@ -130,6 +131,13 @@
     },
 
     open() {
+      // ✅ Show email popup on FIRST chat only
+      if (this.state.isFirstMessage && !this.state.emailCaptured && !this.state.emailPopupShown) {
+        this.showEmailPopup();
+        this.state.emailPopupShown = true;
+        sessionStorage.setItem('shopAiEmailPopupShown', 'true');
+      }
+
       this.elements.modal?.classList.add('active');
       this.elements.backdrop?.classList.add('active');
       this.state.isOpen = true;
@@ -142,9 +150,61 @@
       this.state.isOpen = false;
     },
 
+    // ✅ NEW: Show email popup
+    showEmailPopup() {
+      const modal = document.createElement('div');
+      modal.id = 'shop-ai-email-modal';
+      modal.className = 'shop-ai-email-popup';
+      modal.innerHTML = `
+        <div class="shop-ai-email-popup-content">
+          <h3>Get Exclusive Deals! 💌</h3>
+          <p>Sign up for updates and special offers</p>
+          <input type="email" id="shop-ai-email-input" placeholder="your@email.com" />
+          <button id="shop-ai-email-submit">Subscribe</button>
+          <button id="shop-ai-email-skip" class="skip">Skip for now</button>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      document.getElementById('shop-ai-email-submit')?.addEventListener('click', () => {
+        const email = document.getElementById('shop-ai-email-input')?.value;
+        if (email && email.includes('@')) {
+          console.log('📧 Email captured:', email);
+          this.state.emailCaptured = true;
+          localStorage.setItem('shopAiEmailCaptured', 'true');
+          modal.remove();
+          // Send to backend
+          this.captureEmail(email);
+        }
+      });
+
+      document.getElementById('shop-ai-email-skip')?.addEventListener('click', () => {
+        modal.remove();
+      });
+    },
+
+    async captureEmail(email) {
+      try {
+        const shopParam = new URLSearchParams(window.location.search).get('shop');
+        await fetch('/leads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, shop: shopParam })
+        });
+      } catch (e) {
+        console.warn('Email capture failed:', e);
+      }
+    },
+
     async send() {
       const message = this.elements.input?.value?.trim();
       if (!message) return;
+
+      // ✅ Mark first message sent
+      if (this.state.isFirstMessage) {
+        this.state.isFirstMessage = false;
+      }
 
       this.addMessage(message, 'user');
       this.elements.input.value = '';
@@ -177,6 +237,7 @@
         let currentAssistantMsg = null;
         let buffer = '';
         let fullText = '';
+        let productsReceived = false;
 
         while (true) {
           const { value, done } = await reader.read();
@@ -203,18 +264,7 @@
               sessionStorage.setItem('shopAiConversationId', data.conversation_id);
             }
 
-            if (data.type === 'product_results') {
-              this.removeThinking();
-              this.renderProducts(data.products || []);
-            }
-
-            if (data.type === 'cart_updated') {
-              this.removeThinking();
-              if (data.checkout_url) {
-                this.updateCheckoutState(data.checkout_url, data.cart?.id);
-              }
-            }
-
+            // ✅ TEXT BEFORE PRODUCTS
             if (data.type === 'chunk') {
               if (this.state.isThinking) {
                 this.removeThinking();
@@ -227,6 +277,22 @@
               if (bubble) {
                 bubble.innerHTML = this.parseMarkdown(fullText);
                 this.scrollToBottom();
+              }
+            }
+
+            // ✅ PRODUCTS AFTER TEXT
+            if (data.type === 'product_results') {
+              if (!productsReceived) {
+                this.removeThinking();
+                this.renderProductsGrid(data.products || []);
+                productsReceived = true;
+              }
+            }
+
+            if (data.type === 'cart_updated') {
+              this.removeThinking();
+              if (data.checkout_url) {
+                this.updateCheckoutState(data.checkout_url, data.cart?.id);
               }
             }
 
@@ -305,26 +371,24 @@
       this.state.isThinking = false;
     },
 
-    // ✅ RENDER PRODUCTS WITH CORRECT ATTRIBUTES
-    renderProducts(products) {
+    // ✅ NEW: Products in GRID ROWS (3 per row)
+    renderProductsGrid(products) {
       if (!products || !products.length) return;
 
-      console.log(`📦 Rendering ${products.length} products`);
+      console.log(`📦 Rendering ${products.length} products in grid`);
 
       const container = document.createElement('div');
-      container.className = 'shop-ai-product-container';
+      container.className = 'shop-ai-product-grid';
 
       products.forEach((prod, idx) => {
         const productId = String(prod.id || `prod-${idx}`);
-        
-        // ✅ Store product data
         this.state.productDataMap.set(productId, prod);
 
         const card = document.createElement('div');
         card.className = 'shop-ai-product-card';
         card.dataset.productId = productId;
+        card.style.cursor = 'pointer';
 
-        // Image
         const img = document.createElement('img');
         img.className = 'shop-ai-product-image';
         img.src = prod.image_url || '';
@@ -332,7 +396,6 @@
         img.loading = 'lazy';
         card.appendChild(img);
 
-        // Info
         const info = document.createElement('div');
         info.className = 'shop-ai-product-info';
 
@@ -346,11 +409,9 @@
         price.textContent = prod.price || 'Price on request';
         info.appendChild(price);
 
-        // Actions
         const actions = document.createElement('div');
         actions.className = 'shop-ai-product-actions';
 
-        // ✅ View Button with data attributes
         const viewBtn = document.createElement('button');
         viewBtn.type = 'button';
         viewBtn.className = 'shop-ai-product-btn shop-ai-product-btn-secondary';
@@ -359,16 +420,21 @@
         viewBtn.dataset.productId = productId;
         actions.appendChild(viewBtn);
 
-        // ✅ Add to Cart button with per-product state
+        const isAdded = this.state.addedByProductId[productId] === true;
         const addBtn = document.createElement('button');
         addBtn.type = 'button';
         addBtn.className = 'shop-ai-product-btn shop-ai-product-btn-primary';
-        
-        const isAdded = this.state.addedByProductId[productId] === true;
         addBtn.textContent = isAdded ? 'Go to Cart' : 'Add to Cart';
         addBtn.dataset.productAction = isAdded ? 'go-to-cart' : 'add-to-cart';
         addBtn.dataset.productId = productId;
         actions.appendChild(addBtn);
+
+        // ✅ Click card to open modal
+        card.addEventListener('click', (e) => {
+          if (!e.target.closest('button')) {
+            this.handleOpenProductModal(productId);
+          }
+        });
 
         info.appendChild(actions);
         card.appendChild(info);
@@ -379,46 +445,80 @@
       this.scrollToBottom();
     },
 
-    // ✅ Handle View Product
-    handleViewProduct(productId) {
-      console.log(`🔗 Viewing product: ${productId}`);
-
+    // ✅ NEW: Product modal popup
+    handleOpenProductModal(productId) {
       const product = this.state.productDataMap.get(productId);
-      if (!product) {
-        console.error('❌ Product not found:', productId);
-        return;
+      if (!product) return;
+
+      const modal = document.createElement('div');
+      modal.id = 'shop-ai-product-modal';
+      modal.className = 'shop-ai-product-modal-overlay';
+
+      const isAdded = this.state.addedByProductId[productId] === true;
+
+      modal.innerHTML = `
+        <div class="shop-ai-product-modal">
+          <button class="shop-ai-modal-close" data-product-action="modal-close">✕</button>
+          
+          <div class="shop-ai-modal-content">
+            <img src="${product.image_url}" alt="${product.title}" class="shop-ai-modal-image" />
+            
+            <div class="shop-ai-modal-info">
+              <h2>${product.title}</h2>
+              <p class="shop-ai-modal-price">${product.price}</p>
+              <p class="shop-ai-modal-description">${product.description || 'Premium quality product'}</p>
+              
+              <div class="shop-ai-modal-actions">
+                <button class="shop-ai-modal-btn shop-ai-modal-btn-secondary" 
+                  data-product-action="view-product" 
+                  data-product-id="${productId}">
+                  View on Store ↗
+                </button>
+                <button class="shop-ai-modal-btn shop-ai-modal-btn-primary" 
+                  data-product-action="${isAdded ? 'go-to-cart' : 'add-to-cart'}" 
+                  data-product-id="${productId}">
+                  ${isAdded ? '🛒 Go to Cart' : '➕ Add to Cart'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+      this.state.selectedProductModal = modal;
+    },
+
+    handleCloseProductModal() {
+      if (this.state.selectedProductModal) {
+        this.state.selectedProductModal.remove();
+        this.state.selectedProductModal = null;
       }
+    },
+
+    handleViewProduct(productId) {
+      const product = this.state.productDataMap.get(productId);
+      if (!product) return;
 
       const url = product.url || product.product_url;
       if (!url) {
-        console.warn('⚠️ No URL for product:', productId);
         alert('Product page link not available');
         return;
       }
 
-      console.log(`✅ Opening: ${url}`);
+      console.log(`🔗 Opening product: ${url}`);
       window.open(url, '_blank');
     },
 
-    // ✅ Handle Add to Cart
     async handleAddToCart(productId) {
-      console.log(`🛒 Adding product: ${productId}`);
-
-      if (this.state.isCartUpdating) {
-        console.warn('⚠️ Cart update in progress');
-        return;
-      }
+      if (this.state.isCartUpdating) return;
 
       const product = this.state.productDataMap.get(productId);
-      if (!product) {
-        console.error('❌ Product not found:', productId);
-        return;
-      }
+      if (!product) return;
 
       const variantId = product.variant_id || product.merchandise_id;
       if (!variantId) {
-        console.error('❌ No variant ID:', product);
-        this.addMessage('Cannot add this product.', 'assistant');
+        this.addMessage('Cannot add this product - missing variant.', 'assistant');
         return;
       }
 
@@ -433,10 +533,6 @@
       try {
         const cartApiUrl = (window.shopChatConfig?.apiUrl || '/chat').replace('/chat', '/api/cart');
         
-        console.log(`📞 POST ${cartApiUrl}`);
-        console.log(`   variantId: ${variantId}`);
-        console.log(`   cartId: ${this.state.cartId || 'new'}`);
-
         const response = await fetch(cartApiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -448,38 +544,34 @@
           })
         });
 
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const data = await response.json();
-        console.log(`📥 Cart response:`, data);
 
         if (data.status === 'success' && data.checkoutUrl && data.cartId) {
-          // ✅ Update ONLY this product's state
           this.state.addedByProductId[productId] = true;
           sessionStorage.setItem('shopAiAddedByProductId', JSON.stringify(this.state.addedByProductId));
 
-          // Update global checkout
           this.updateCheckoutState(data.checkoutUrl, data.cartId);
 
-          // ✅ Update ONLY this button
-          if (button) {
-            button.textContent = 'Go to Cart';
-            button.dataset.productAction = 'go-to-cart';
-            button.disabled = false;
-          }
+          // Update all buttons for this product
+          document.querySelectorAll(`[data-product-id="${productId}"]`).forEach(btn => {
+            if (btn.dataset.productAction === 'add-to-cart') {
+              btn.textContent = 'Go to Cart';
+              btn.dataset.productAction = 'go-to-cart';
+              btn.disabled = false;
+            }
+          });
 
           console.log(`✅ Product added!`);
-          this.addMessage('Added to cart! Click "Go to Cart" when ready.', 'assistant');
+          this.addMessage('Added to cart! 🎉', 'assistant');
         } else {
-          throw new Error(data.message || 'Failed to add');
+          throw new Error(data.message || 'Failed to add to cart');
         }
       } catch (err) {
         console.error('❌ Add to cart error:', err);
         if (button) {
           button.textContent = 'Add to Cart';
-          button.dataset.productAction = 'add-to-cart';
           button.disabled = false;
         }
         this.addMessage('Could not add to cart. Please try again.', 'assistant');
@@ -488,36 +580,27 @@
       }
     },
 
-    // ✅ Handle Go to Cart
     handleGoToCart() {
-      console.log(`🛒 Going to cart`);
       this.openCheckout();
     },
 
-    // ✅ Update checkout state
- updateCheckoutState(checkoutUrl, cartId) {
-      if (checkoutUrl) {
-        // ✅ Only update if it's different from last one shown
-        if (checkoutUrl !== this.state.lastCheckoutUrlShown) {
-          console.log(`💾 Storing checkoutUrl: ${checkoutUrl.substring(0, 60)}...`);
-          this.state.checkoutUrl = checkoutUrl;
-          this.state.lastCheckoutUrlShown = checkoutUrl; // ✅ Track it
-          sessionStorage.setItem('shopAiCheckoutUrl', checkoutUrl);
-        }
+    updateCheckoutState(checkoutUrl, cartId) {
+      if (checkoutUrl && checkoutUrl !== this.state.lastCheckoutUrlShown) {
+        console.log(`💾 Storing checkoutUrl: ${checkoutUrl.substring(0, 60)}...`);
+        this.state.checkoutUrl = checkoutUrl;
+        this.state.lastCheckoutUrlShown = checkoutUrl;
+        sessionStorage.setItem('shopAiCheckoutUrl', checkoutUrl);
       }
       if (cartId) {
-        console.log(`💾 Storing cartId: ${cartId.substring(0, 40)}...`);
         this.state.cartId = cartId;
         sessionStorage.setItem('shopAiCartId', cartId);
       }
     },
 
-    // ✅ FIXED: Open checkout only once
     openCheckout() {
       const url = this.state.checkoutUrl;
       
       console.log(`🔗 openCheckout() called`);
-      console.log(`   URL: ${url}`);
 
       if (!url || typeof url !== 'string') {
         console.error('❌ No checkout URL:', url);
@@ -527,14 +610,12 @@
 
       const safeUrl = String(url).trim();
 
-      // Validate URL
       if (!safeUrl.startsWith('https://') && !safeUrl.startsWith('http://')) {
         console.error('❌ Invalid protocol:', safeUrl.substring(0, 30));
         this.addMessage('Invalid cart link.', 'assistant');
         return;
       }
 
-      // ✅ Must be /cart/c/ NOT /checkouts/
       if (!safeUrl.includes('/cart/c/')) {
         console.error('❌ Invalid checkout path:', safeUrl.substring(0, 60));
         this.addMessage('Invalid cart link format.', 'assistant');
@@ -578,7 +659,6 @@
     }
   };
 
-  // Initialize
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => ShopAIChat.init());
   } else {

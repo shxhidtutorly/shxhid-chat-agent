@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "606557c20ad788f2ea86d0dea1f1a577"
-name = "updated-shxhid-agent"
+client_id = "448a66ca9b4cbb16ded22cddef5b1610"
+name = "shxhid"
 application_url = "https://shxhid-chat-agent-production.up.railway.app"
 embedded = true
 
@@ -9,7 +9,7 @@ embedded = true
 include_config_on_deploy = true
 
 [webhooks]
-api_version = "2025-04"
+api_version = "2026-01"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes

@@ -1,3 +1,4 @@
+
 (function () {
   'use strict';
 
@@ -17,8 +18,7 @@
       selectedProduct: null,
       isCartUpdating: false,
       addedByProductId: JSON.parse(sessionStorage.getItem('shopAiAddedByProductId') || '{}'),
-      productDataMap: new Map()
-    },
+      productDataMap: new Map(),
 
     placeholders: [
       'Ask me anything...',
@@ -495,11 +495,15 @@
     },
 
     // ✅ Update checkout state
-    updateCheckoutState(checkoutUrl, cartId) {
+ updateCheckoutState(checkoutUrl, cartId) {
       if (checkoutUrl) {
-        console.log(`💾 Storing checkoutUrl: ${checkoutUrl.substring(0, 60)}...`);
-        this.state.checkoutUrl = checkoutUrl;
-        sessionStorage.setItem('shopAiCheckoutUrl', checkoutUrl);
+        // ✅ Only update if it's different from last one shown
+        if (checkoutUrl !== this.state.lastCheckoutUrlShown) {
+          console.log(`💾 Storing checkoutUrl: ${checkoutUrl.substring(0, 60)}...`);
+          this.state.checkoutUrl = checkoutUrl;
+          this.state.lastCheckoutUrlShown = checkoutUrl; // ✅ Track it
+          sessionStorage.setItem('shopAiCheckoutUrl', checkoutUrl);
+        }
       }
       if (cartId) {
         console.log(`💾 Storing cartId: ${cartId.substring(0, 40)}...`);
@@ -508,7 +512,7 @@
       }
     },
 
-    // ✅ Open checkout with strict validation
+    // ✅ FIXED: Open checkout only once
     openCheckout() {
       const url = this.state.checkoutUrl;
       
@@ -530,9 +534,9 @@
         return;
       }
 
-      // ✅ CRITICAL: Must be /cart/c/ NOT /checkouts/
+      // ✅ Must be /cart/c/ NOT /checkouts/
       if (!safeUrl.includes('/cart/c/')) {
-        console.error('❌ Invalid checkout path (must be /cart/c/):', safeUrl.substring(0, 60));
+        console.error('❌ Invalid checkout path:', safeUrl.substring(0, 60));
         this.addMessage('Invalid cart link format.', 'assistant');
         return;
       }

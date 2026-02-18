@@ -4,9 +4,9 @@
  */
 
 const SHOPIFY_CONFIG = {
-  endpoint: process.env.SHOPIFY_STOREFRONT_ENDPOINT || 'https://shahid-ai-agent.myshopify.com/api/2024-01/graphql.json',
+  endpoint: process.env.SHOPIFY_STOREFRONT_ENDPOINT || 'creativeautomation.myshopify.com/api/2024-01/graphql.json',
   token: process.env.SHOPIFY_STOREFRONT_TOKEN, // ✅ NOW from env var
-  domain: process.env.SHOPIFY_STORE_DOMAIN || 'shahid-ai-agent.myshopify.com'
+  domain: process.env.SHOPIFY_STORE_DOMAIN || 'creativeautomation.myshopify.com'
 };
 
 // ✅ Validate config on startup

@@ -39,19 +39,25 @@ class MCPClient {
   }
 
   /**
-   * Normalize URL to ensure protocol
+   * Normalize URL to ensure protocol.
+   * Falls back to SHOPIFY_STORE_DOMAIN env var if url is empty.
    * @private
    */
   _normalizeUrl(url) {
-    if (!url) throw new Error("hostUrl is required");
-    
-    // Already has protocol
-    if (url.startsWith('http://') || url.startsWith('https://')) {
-      return url;
+    const resolved = url || process.env.SHOPIFY_STORE_DOMAIN;
+    if (!resolved) {
+      throw new Error(
+        "hostUrl is required: pass shopDomain or set SHOPIFY_STORE_DOMAIN env var"
+      );
     }
-    
+
+    // Already has protocol
+    if (resolved.startsWith('http://') || resolved.startsWith('https://')) {
+      return resolved;
+    }
+
     // Add https by default
-    return `https://${url}`;
+    return `https://${resolved}`;
   }
 
   /**

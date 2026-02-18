@@ -1,6 +1,6 @@
 /**
  * Shopify Storefront API GraphQL Queries & Mutations
- * ✅ FIXED: Uses cartCheckoutUrl (not checkoutUrl)
+ * Validated against official Storefront API schema
  */
 
 export const SEARCH_PRODUCTS_QUERY = `
@@ -42,13 +42,13 @@ export const SEARCH_PRODUCTS_QUERY = `
   }
 `;
 
-// ✅ FIXED: Uses cartCheckoutUrl instead of checkoutUrl
+
 export const CREATE_CART_MUTATION = `
   mutation createCart($lines: [CartLineInput!]!) {
     cartCreate(input: { lines: $lines }) {
       cart {
         id
-        checkoutUrl: cartCheckoutUrl
+        checkoutUrl
         totalQuantity
         lines(first: 10) {
           edges {
@@ -77,13 +77,13 @@ export const CREATE_CART_MUTATION = `
   }
 `;
 
-// ✅ FIXED: Uses cartCheckoutUrl instead of checkoutUrl
+
 export const ADD_LINES_TO_CART_MUTATION = `
   mutation addLinesToCart($cartId: ID!, $lines: [CartLineInput!]!) {
     cartLinesAdd(cartId: $cartId, lines: $lines) {
       cart {
         id
-        checkoutUrl: cartCheckoutUrl
+        checkoutUrl
         totalQuantity
       }
       userErrors {
@@ -98,7 +98,7 @@ export const GET_CART_QUERY = `
   query getCart($cartId: ID!) {
     cart(id: $cartId) {
       id
-      checkoutUrl: cartCheckoutUrl
+      checkoutUrl
       totalQuantity
       lines(first: 10) {
         edges {

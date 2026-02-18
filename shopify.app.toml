@@ -12,7 +12,6 @@ include_config_on_deploy = true
 api_version = "2026-01"
 
 [access_scopes]
-# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "customer_read_customers,customer_read_orders,customer_read_store_credit_account_transactions,customer_read_store_credit_accounts,unauthenticated_read_product_listings"
 
 [auth]
@@ -25,3 +24,8 @@ embedded = false
 redirect_uris = [
   "https://shxhid-chat-agent-production.up.railway.app/auth/callback"
 ]
+
+[app_proxy]
+url = "https://shxhid-chat-agent-production.up.railway.app"
+subpath = "shop-chat"
+prefix = "apps"

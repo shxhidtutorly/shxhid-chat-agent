@@ -10,7 +10,7 @@ import {
   ADD_LINES_TO_CART_MUTATION,
 } from './storefront-queries.js';
 
-const SHOP_DOMAIN = 'shahid-ai-agent.myshopify.com';
+const SHOP_DOMAIN = 'creativeautomation.myshopify.com';
 
 // ============================================
 // SEARCH PRODUCTS

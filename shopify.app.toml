@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "448a66ca9b4cbb16ded22cddef5b1610"
-name = "shxhid"
+client_id = "665dc5bbd35756bbd2d8a4f26f77b174"
+name = "shxhid-production-mcp"
 application_url = "https://shxhid-chat-agent-production.up.railway.app"
 embedded = true
 

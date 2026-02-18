@@ -56,9 +56,12 @@ export async function action({ request }) {
       );
     }
 
-    // Get shop info
-    const origin = request.headers.get("Origin") || request.headers.get("Referer");
-    const shopDomain = origin ? new URL(origin).hostname : "unknown";
+    // Get shop info — prefer Shopify app proxy ?shop= param
+    const leadUrl = new URL(request.url);
+    const shopFromProxy = leadUrl.searchParams.get("shop");
+    const originHeader = request.headers.get("Origin") || request.headers.get("Referer");
+    const shopFromOrigin = originHeader ? new URL(originHeader).hostname : null;
+    const shopDomain = shopFromProxy || shopFromOrigin || process.env.SHOPIFY_STORE_DOMAIN || "unknown";
     const shopId = request.headers.get("X-Shopify-Shop-Id") || null;
 
     console.log("📧 Saving lead:", email, "for shop:", shopDomain);

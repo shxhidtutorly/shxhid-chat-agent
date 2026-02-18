@@ -147,8 +147,15 @@ async function handleChatRequest(request) {
     const MCPClient = MCPClientMod.default ?? MCPClientMod;
 
     // Get shop domain from request
+    // Priority: 1) Shopify app proxy ?shop= param  2) Origin header  3) env var fallback
+    const reqUrl = new URL(request.url);
+    const shopFromProxy = reqUrl.searchParams.get("shop"); // Shopify app proxy adds this
     const origin = request.headers.get("Origin");
-    const shopDomain = origin ? new URL(origin).hostname : null;
+    const shopFromOrigin = origin ? new URL(origin).hostname : null;
+    const shopDomain = shopFromProxy || shopFromOrigin || process.env.SHOPIFY_STORE_DOMAIN || null;
+
+    console.log(`🏪 Shop domain resolved: ${shopDomain} (proxy=${shopFromProxy}, origin=${shopFromOrigin}, env=${process.env.SHOPIFY_STORE_DOMAIN || 'unset'})`);
+
     const trackingId = visitorId || fingerprintId || conversationId;
 
     // Track analytics
@@ -543,26 +550,29 @@ async function getCustomerAccountUrls(conversationIdOrDomain, conversationId, db
    CORS Headers
    ------------------------ */
 function getCorsHeaders(request) {
-  const origin = request.headers.get("Origin") || "*";
+  const origin = request.headers.get("Origin");
+  // For app proxy requests there's no Origin — use wildcard
+  const allowOrigin = origin || "*";
   return {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Accept, X-Shopify-Shop-Id",
-    "Access-Control-Allow-Credentials": "true",
+    ...(origin ? { "Access-Control-Allow-Credentials": "true" } : {}),
     "Access-Control-Max-Age": "86400",
   };
 }
 
 function getSseHeaders(request) {
-  const origin = request.headers.get("Origin") || "*";
+  const origin = request.headers.get("Origin");
+  const allowOrigin = origin || "*";
   return {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     "Connection": "keep-alive",
-    "Access-Control-Allow-Credentials": "true",
-    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Accept, X-Shopify-Shop-Id",
+    ...(origin ? { "Access-Control-Allow-Credentials": "true" } : {}),
   };
 }

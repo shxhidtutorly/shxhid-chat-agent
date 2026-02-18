@@ -4,8 +4,8 @@
  */
 
 const SHOPIFY_CONFIG = {
-  endpoint: process.env.SHOPIFY_STOREFRONT_ENDPOINT || 'creativeautomation.myshopify.com/api/2024-01/graphql.json',
-  token: process.env.SHOPIFY_STOREFRONT_TOKEN, // ✅ NOW from env var
+  endpoint: process.env.SHOPIFY_STOREFRONT_ENDPOINT || 'https://creativeautomation.myshopify.com/api/2025-01/graphql.json',
+  token: process.env.SHOPIFY_STOREFRONT_TOKEN,
   domain: process.env.SHOPIFY_STORE_DOMAIN || 'creativeautomation.myshopify.com'
 };
 

@@ -51,6 +51,12 @@
         input: document.getElementById('shop-ai-input'),
         sendBtn: document.getElementById('shop-ai-send-btn'),
         closeBtn: document.getElementById('shop-ai-close-btn'),
+        menuBtn: document.getElementById('shop-ai-menu-btn'),
+        menuDropdown: document.getElementById('shop-ai-menu'),
+        suggestions: document.getElementById('shop-ai-suggestions'),
+        historyPanel: document.getElementById('shop-ai-history-panel'),
+        historyList: document.getElementById('shop-ai-history-list'),
+        backBtn: document.getElementById('shop-ai-back-btn'),
       };
 
       if (!this.elements.modal) {
@@ -94,7 +100,53 @@
             this.send();
           }
         });
+        // Activate/deactivate send button based on input
+        this.elements.input.addEventListener('input', () => {
+          if (this.elements.sendBtn) {
+            this.elements.sendBtn.classList.toggle('active', !!this.elements.input.value.trim());
+          }
+        });
       }
+
+      // 3-dot menu toggle
+      if (this.elements.menuBtn) {
+        this.elements.menuBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.elements.menuDropdown?.classList.toggle('active');
+        });
+      }
+
+      // Menu item actions (delegated)
+      if (this.elements.menuDropdown) {
+        this.elements.menuDropdown.addEventListener('click', (e) => {
+          const item = e.target.closest('[data-action]');
+          if (!item) return;
+          const action = item.dataset.action;
+          this.elements.menuDropdown.classList.remove('active');
+          if (action === 'new') this.startNewChat();
+          if (action === 'history') this.openHistory();
+          if (action === 'end') { this.startNewChat(); this.close(); }
+        });
+      }
+
+      // History panel back button
+      if (this.elements.backBtn) {
+        this.elements.backBtn.addEventListener('click', () => this.closeHistory());
+      }
+
+      // Close menu when clicking outside
+      document.addEventListener('click', (e) => {
+        if (this.elements.menuDropdown?.classList.contains('active') &&
+            !this.elements.menuBtn?.contains(e.target) &&
+            !this.elements.menuDropdown?.contains(e.target)) {
+          this.elements.menuDropdown.classList.remove('active');
+        }
+      });
+
+      // Escape key closes modal
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && this.state.isOpen) this.close();
+      });
 
       // ✅ Document-level delegation for product buttons
       document.addEventListener('click', (e) => {
@@ -138,15 +190,23 @@
         sessionStorage.setItem('shopAiEmailPopupShown', 'true');
       }
 
-      this.elements.modal?.classList.add('active');
-      this.elements.backdrop?.classList.add('active');
+      // ✅ FIX: CSS uses body.shop-ai-open to control modal/backdrop visibility
+      document.body.classList.add('shop-ai-open');
+      // Hide floating launcher buttons when modal is open
+      if (this.elements.floatingGroup) {
+        this.elements.floatingGroup.classList.add('hidden');
+      }
       this.state.isOpen = true;
       this.elements.input?.focus();
     },
 
     close() {
-      this.elements.modal?.classList.remove('active');
-      this.elements.backdrop?.classList.remove('active');
+      // ✅ FIX: Remove body class to hide modal/backdrop via CSS
+      document.body.classList.remove('shop-ai-open');
+      // Show floating launcher buttons again
+      if (this.elements.floatingGroup) {
+        this.elements.floatingGroup.classList.remove('hidden');
+      }
       this.state.isOpen = false;
     },
 
@@ -186,11 +246,19 @@
 
     async captureEmail(email) {
       try {
-        const shopParam = new URLSearchParams(window.location.search).get('shop');
-        await fetch('/leads', {
+        const leadsUrl = window.shopChatConfig?.leadsUrl;
+        if (!leadsUrl) {
+          console.warn('Leads URL not configured');
+          return;
+        }
+        await fetch(leadsUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, shop: shopParam })
+          body: JSON.stringify({
+            email,
+            visitorId: this.state.visitorId,
+            conversationId: this.state.conversationId,
+          })
         });
       } catch (e) {
         console.warn('Email capture failed:', e);
@@ -201,9 +269,13 @@
       const message = this.elements.input?.value?.trim();
       if (!message) return;
 
-      // ✅ Mark first message sent
+      // ✅ Mark first message sent and hide suggestions
       if (this.state.isFirstMessage) {
         this.state.isFirstMessage = false;
+        if (this.elements.suggestions) {
+          this.elements.suggestions.classList.remove('visible');
+          this.elements.suggestions.style.display = 'none';
+        }
       }
 
       this.addMessage(message, 'user');
@@ -531,7 +603,8 @@
       }
 
       try {
-        const cartApiUrl = (window.shopChatConfig?.apiUrl || '/chat').replace('/chat', '/api/cart');
+        const cartApiUrl = window.shopChatConfig?.cartUrl ||
+          (window.shopChatConfig?.apiUrl || '/chat').replace('/chat', '/api/cart');
         
         const response = await fetch(cartApiUrl, {
           method: 'POST',
@@ -642,12 +715,32 @@
       this.state.addedByProductId = {};
       this.state.cartId = null;
       this.state.checkoutUrl = null;
+      this.state.lastCheckoutUrlShown = null;
       this.state.conversationId = null;
+      this.state.isFirstMessage = true;
       this.state.productDataMap.clear();
-      
-      sessionStorage.clear();
-      this.elements.messages.innerHTML = '';
-      this.addMessage('Started new chat.', 'assistant');
+
+      sessionStorage.removeItem('shopAiConversationId');
+      sessionStorage.removeItem('shopAiCartId');
+      sessionStorage.removeItem('shopAiCheckoutUrl');
+      sessionStorage.removeItem('shopAiAddedByProductId');
+
+      if (this.elements.messages) {
+        this.elements.messages.innerHTML = '';
+      }
+      // Re-show suggestions
+      if (this.elements.suggestions) {
+        this.elements.messages?.appendChild(this.elements.suggestions);
+        this.elements.suggestions.classList.add('visible');
+      }
+    },
+
+    openHistory() {
+      this.elements.historyPanel?.classList.add('active');
+    },
+
+    closeHistory() {
+      this.elements.historyPanel?.classList.remove('active');
     },
 
     restoreState() {

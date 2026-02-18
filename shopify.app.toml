@@ -16,12 +16,12 @@ api_version = "2026-01"
 scopes = "customer_read_customers,customer_read_orders,customer_read_store_credit_account_transactions,customer_read_store_credit_accounts,unauthenticated_read_product_listings"
 
 [auth]
-redirect_urls = [ "https://shop-chat-agent.com/api/auth" ]
+redirect_urls = [ "https://shxhid-chat-agent-production.up.railway.app/auth/callback" ]
 
 [pos]
 embedded = false
 
 [customer_authentication]
 redirect_uris = [
-  "https://shop-chat-agent.com/callback"
+  "https://shxhid-chat-agent-production.up.railway.app/auth/callback"
 ]

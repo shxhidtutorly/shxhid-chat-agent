@@ -528,43 +528,53 @@
 
       const isAdded = this.state.addedByProductId[productId] === true;
 
+      // Class names must match the CSS in chat-interface.liquid
       modal.innerHTML = `
         <div class="shop-ai-product-modal">
-          <button class="shop-ai-modal-close" data-product-action="modal-close">✕</button>
-          
-          <div class="shop-ai-modal-content">
-            <img src="${product.image_url}" alt="${product.title}" class="shop-ai-modal-image" />
-            
-            <div class="shop-ai-modal-info">
-              <h2>${product.title}</h2>
-              <p class="shop-ai-modal-price">${product.price}</p>
-              <p class="shop-ai-modal-description">${product.description || 'Premium quality product'}</p>
-              
-              <div class="shop-ai-modal-actions">
-                <button class="shop-ai-modal-btn shop-ai-modal-btn-secondary" 
-                  data-product-action="view-product" 
-                  data-product-id="${productId}">
-                  View on Store ↗
-                </button>
-                <button class="shop-ai-modal-btn shop-ai-modal-btn-primary" 
-                  data-product-action="${isAdded ? 'go-to-cart' : 'add-to-cart'}" 
-                  data-product-id="${productId}">
-                  ${isAdded ? '🛒 Go to Cart' : '➕ Add to Cart'}
-                </button>
-              </div>
+          <button class="shop-ai-product-modal-close" data-product-action="modal-close">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+
+          <div class="shop-ai-product-modal-left">
+            <img src="${product.image_url}" alt="${product.title}" />
+          </div>
+
+          <div class="shop-ai-product-modal-right">
+            <div class="shop-ai-product-modal-title">${product.title}</div>
+            <div class="shop-ai-product-modal-price">${product.price}</div>
+            <div class="shop-ai-product-modal-description">${product.description || 'Premium quality product'}</div>
+
+            <div class="shop-ai-product-modal-actions">
+              <button class="shop-ai-product-modal-secondary"
+                data-product-action="view-product"
+                data-product-id="${productId}">
+                View on Store
+              </button>
+              <button class="shop-ai-product-modal-primary"
+                data-product-action="${isAdded ? 'go-to-cart' : 'add-to-cart'}"
+                data-product-id="${productId}">
+                ${isAdded ? 'Go to Cart' : 'Add to Cart'}
+              </button>
             </div>
           </div>
         </div>
       `;
 
       document.body.appendChild(modal);
+      // Trigger CSS transition by adding active class on next frame
+      requestAnimationFrame(() => modal.classList.add('active'));
       this.state.selectedProductModal = modal;
     },
 
     handleCloseProductModal() {
       if (this.state.selectedProductModal) {
-        this.state.selectedProductModal.remove();
+        const modal = this.state.selectedProductModal;
+        modal.classList.remove('active');
         this.state.selectedProductModal = null;
+        // Remove from DOM after transition completes
+        setTimeout(() => modal.remove(), 300);
       }
     },
 

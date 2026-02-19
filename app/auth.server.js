@@ -15,8 +15,8 @@ export async function generateAuthUrl(conversationId, shopId) {
   const scope = "customer-account-mcp-api:full";
   const responseType = "code";
 
-  // Use the actual app URL for redirect
-  const redirectUri = process.env.REDIRECT_URL;
+  // Derive redirect URI: prefer REDIRECT_URL, fall back to SHOPIFY_APP_URL + /auth/callback
+  const redirectUri = process.env.REDIRECT_URL || (process.env.SHOPIFY_APP_URL ? `${process.env.SHOPIFY_APP_URL}/auth/callback` : null);
 
   // Include the conversation ID and shop ID in the state parameter for tracking
   const state = `${conversationId}-${shopId}`;

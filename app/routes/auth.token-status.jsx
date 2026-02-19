@@ -25,11 +25,13 @@ export async function loader({ request }) {
 }
 
 function corsHeaders(request) {
-  const origin = request.headers.get("Origin") || "*";
+  const origin = request.headers.get("Origin");
+  const allowOrigin = origin || "*";
   return {
-    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "GET, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Accept",
+    ...(origin ? { "Access-Control-Allow-Credentials": "true" } : {}),
     "Access-Control-Max-Age": "86400",
   };
 }

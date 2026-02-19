@@ -85,11 +85,12 @@ export async function action({ request }) {
 
 function getCorsHeaders(request) {
   const origin = request.headers.get('Origin');
+  const allowOrigin = origin || '*';
   return {
-    'Access-Control-Allow-Origin': origin || '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Allow-Origin': allowOrigin,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Accept, X-Shopify-Shop-Id',
+    ...(origin ? { 'Access-Control-Allow-Credentials': 'true' } : {}),
     'Access-Control-Max-Age': '86400',
   };
 }

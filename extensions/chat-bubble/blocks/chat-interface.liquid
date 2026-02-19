@@ -1239,12 +1239,13 @@
 
 <script>
   window.shopChatConfig = {
-    apiUrl: '{{ shop.url }}/apps/shop-chat/chat',
-    leadsUrl: '{{ shop.url }}/apps/shop-chat/leads',
+    apiUrl: '{{ block.settings.backend_url | default: "" }}/chat',
+    leadsUrl: '{{ block.settings.backend_url | default: "" }}/leads',
+    cartUrl: '{{ block.settings.backend_url | default: "" }}/api/cart',
+    shopDomain: '{{ shop.permanent_domain }}',
     shopId: '{{ shop.id }}',
-  cartUrl: '{{ shop.url }}/apps/shop-chat/api/cart',
-  promptType: 'creativeAutomationAssistant',
-    welcomeMessage: '{{ settings.welcome_message }}'
+    promptType: 'creativeAutomationAssistant',
+    welcomeMessage: '{{ block.settings.welcome_message }}'
   };
 </script>
 
@@ -1253,6 +1254,7 @@
   "name": "AI Chat Assistant",
   "target": "body",
   "settings": [
+    {"type":"text","id":"backend_url","label":"Backend API URL","default":"https://shxhid-chat-agent-production.up.railway.app","info":"Direct URL to the Railway backend. Required for SSE streaming."},
     {"type":"text","id":"chat_title","label":"Chat Title","default":"AI Assistant"},
     {"type":"text","id":"welcome_message","label":"Welcome Message","default":"Hi! How can I help you today?"}
   ]

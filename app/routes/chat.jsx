@@ -147,14 +147,15 @@ async function handleChatRequest(request) {
     const MCPClient = MCPClientMod.default ?? MCPClientMod;
 
     // Get shop domain from request
-    // Priority: 1) Shopify app proxy ?shop= param  2) Origin header  3) env var fallback
+    // Priority: 1) Shopify app proxy ?shop= param  2) POST body shop_domain  3) Origin header  4) env var fallback
     const reqUrl = new URL(request.url);
     const shopFromProxy = reqUrl.searchParams.get("shop"); // Shopify app proxy adds this
+    const shopFromBody = body.shop_domain || null; // Direct connection sends this
     const origin = request.headers.get("Origin");
     const shopFromOrigin = origin ? new URL(origin).hostname : null;
-    const shopDomain = shopFromProxy || shopFromOrigin || process.env.SHOPIFY_STORE_DOMAIN || null;
+    const shopDomain = shopFromProxy || shopFromBody || shopFromOrigin || process.env.SHOPIFY_STORE_DOMAIN || null;
 
-    console.log(`🏪 Shop domain resolved: ${shopDomain} (proxy=${shopFromProxy}, origin=${shopFromOrigin}, env=${process.env.SHOPIFY_STORE_DOMAIN || 'unset'})`);
+    console.log(`🏪 Shop domain resolved: ${shopDomain} (proxy=${shopFromProxy}, body=${shopFromBody}, origin=${shopFromOrigin}, env=${process.env.SHOPIFY_STORE_DOMAIN || 'unset'})`);
 
     const trackingId = visitorId || fingerprintId || conversationId;
 

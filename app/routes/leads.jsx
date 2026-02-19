@@ -56,12 +56,13 @@ export async function action({ request }) {
       );
     }
 
-    // Get shop info — prefer Shopify app proxy ?shop= param
+    // Get shop info — prefer proxy ?shop=, then POST body, then Origin header, then env
     const leadUrl = new URL(request.url);
     const shopFromProxy = leadUrl.searchParams.get("shop");
+    const shopFromBody = body.shop_domain || null;
     const originHeader = request.headers.get("Origin") || request.headers.get("Referer");
     const shopFromOrigin = originHeader ? new URL(originHeader).hostname : null;
-    const shopDomain = shopFromProxy || shopFromOrigin || process.env.SHOPIFY_STORE_DOMAIN || "unknown";
+    const shopDomain = shopFromProxy || shopFromBody || shopFromOrigin || process.env.SHOPIFY_STORE_DOMAIN || "unknown";
     const shopId = request.headers.get("X-Shopify-Shop-Id") || null;
 
     console.log("📧 Saving lead:", email, "for shop:", shopDomain);
@@ -189,12 +190,13 @@ function isValidEmail(email) {
 }
 
 function getCorsHeaders(request) {
-  const origin = request.headers.get("Origin") || "*";
+  const origin = request.headers.get("Origin");
+  const allowOrigin = origin || "*";
   return {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Accept, X-Shopify-Shop-Id",
-    "Access-Control-Allow-Credentials": "true",
+    ...(origin ? { "Access-Control-Allow-Credentials": "true" } : {}),
   };
 }

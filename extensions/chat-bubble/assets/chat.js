@@ -258,6 +258,7 @@
             email,
             visitorId: this.state.visitorId,
             conversationId: this.state.conversationId,
+            shop_domain: window.shopChatConfig?.shopDomain || '',
           })
         });
       } catch (e) {
@@ -265,11 +266,14 @@
       }
     },
 
-    async send() {
-      const message = this.elements.input?.value?.trim();
+    async send(messageArg) {
+      // Accept message from argument (suggestion buttons) or from input field
+      const message = (typeof messageArg === 'string' && messageArg.trim())
+        ? messageArg.trim()
+        : this.elements.input?.value?.trim();
       if (!message) return;
 
-      // ✅ Mark first message sent and hide suggestions
+      // Mark first message sent and hide suggestions
       if (this.state.isFirstMessage) {
         this.state.isFirstMessage = false;
         if (this.elements.suggestions) {
@@ -279,7 +283,7 @@
       }
 
       this.addMessage(message, 'user');
-      this.elements.input.value = '';
+      if (this.elements.input) this.elements.input.value = '';
 
       if (!this.state.conversationId) {
         this.state.conversationId = 'conv_' + Date.now();
@@ -290,7 +294,11 @@
 
       try {
         const apiUrl = window.shopChatConfig?.apiUrl;
-        if (!apiUrl) throw new Error('Chat API not configured');
+        if (!apiUrl || apiUrl === '/chat') {
+          throw new Error('Chat API URL not configured. Set Backend API URL in theme editor.');
+        }
+
+        console.log('📡 Sending to:', apiUrl);
 
         const response = await fetch(apiUrl, {
           method: 'POST',
@@ -298,11 +306,24 @@
           body: JSON.stringify({
             message,
             conversation_id: this.state.conversationId,
-            prompt_type: window.shopChatConfig?.promptType || 'standardAssistant'
+            prompt_type: window.shopChatConfig?.promptType || 'standardAssistant',
+            shop_domain: window.shopChatConfig?.shopDomain || ''
           })
         });
 
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        // Check for non-OK responses (404 = proxy not configured, 502 = backend down)
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => '');
+          console.error('❌ API response:', response.status, errorText.substring(0, 200));
+          throw new Error(`Server returned ${response.status}`);
+        }
+
+        // Verify we got a stream, not an HTML error page
+        const contentType = response.headers.get('Content-Type') || '';
+        if (contentType.includes('text/html')) {
+          console.error('❌ Received HTML instead of SSE — check backend URL');
+          throw new Error('Received HTML response instead of stream. Backend URL may be wrong.');
+        }
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -314,7 +335,7 @@
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-          
+
           buffer += decoder.decode(value, { stream: true });
           const parts = buffer.split('\n\n');
           buffer = parts.pop() || '';
@@ -322,13 +343,13 @@
           for (const chunk of parts) {
             const line = chunk.trim();
             if (!line) continue;
-            
+
             const jsonStr = line.startsWith('data:') ? line.slice(5).trim() : line;
             let data;
-            try { 
-              data = JSON.parse(jsonStr); 
-            } catch (err) { 
-              continue; 
+            try {
+              data = JSON.parse(jsonStr);
+            } catch (err) {
+              continue;
             }
 
             if (data.type === 'id' && data.conversation_id) {
@@ -336,7 +357,6 @@
               sessionStorage.setItem('shopAiConversationId', data.conversation_id);
             }
 
-            // ✅ TEXT BEFORE PRODUCTS
             if (data.type === 'chunk') {
               if (this.state.isThinking) {
                 this.removeThinking();
@@ -352,7 +372,6 @@
               }
             }
 
-            // ✅ PRODUCTS AFTER TEXT
             if (data.type === 'product_results') {
               if (!productsReceived) {
                 this.removeThinking();
@@ -623,7 +642,8 @@
             variantId,
             quantity: 1,
             cartId: this.state.cartId,
-            conversationId: this.state.conversationId
+            conversationId: this.state.conversationId,
+            shop_domain: window.shopChatConfig?.shopDomain || ''
           })
         });
 

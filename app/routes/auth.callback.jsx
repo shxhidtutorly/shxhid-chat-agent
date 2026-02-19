@@ -93,10 +93,11 @@ async function exchangeCodeForToken(code, state) {
   const clientId = process.env.SHOPIFY_API_KEY;
   const [conversationId, shopId] = state.split("-");
   if (!clientId || !shopId) {
-    throw new Error("SHOPIFY_CLIENT_ID and SHOPIFY_SHOP_ID environment variables are required");
+    throw new Error("SHOPIFY_API_KEY is required and shopId must be present in state parameter");
   }
 
-  const redirectUri = process.env.REDIRECT_URL;
+  // Derive redirect URI: prefer REDIRECT_URL, fall back to SHOPIFY_APP_URL + /auth/callback
+  const redirectUri = process.env.REDIRECT_URL || (process.env.SHOPIFY_APP_URL ? `${process.env.SHOPIFY_APP_URL}/auth/callback` : null);
 
   // Correct token URL format
   const tokenUrl = await getTokenUrl(conversationId);

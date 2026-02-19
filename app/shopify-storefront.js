@@ -3,10 +3,11 @@
  * ✅ FIXED: Proper token management and error handling
  */
 
+const storeDomain = process.env.SHOPIFY_STORE_DOMAIN;
 const SHOPIFY_CONFIG = {
-  endpoint: process.env.SHOPIFY_STOREFRONT_ENDPOINT || 'https://creativeautomation.myshopify.com/api/2025-01/graphql.json',
+  endpoint: process.env.SHOPIFY_STOREFRONT_ENDPOINT || (storeDomain ? `https://${storeDomain}/api/2025-10/graphql.json` : ''),
   token: process.env.SHOPIFY_STOREFRONT_TOKEN,
-  domain: process.env.SHOPIFY_STORE_DOMAIN || 'creativeautomation.myshopify.com'
+  domain: storeDomain || ''
 };
 
 // ✅ Validate config on startup

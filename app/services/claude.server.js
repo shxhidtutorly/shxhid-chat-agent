@@ -45,22 +45,11 @@ export function createClaudeService() {
           stop_reason: null,
         };
 
+        // Only use stream.on("text") for text deltas — the SDK's "text" event
+        // already extracts text from content_block_delta events internally.
+        // Listening on BOTH "text" AND "content_block_delta" would double-fire onText.
         stream.on("text", (textDelta) => {
           if (onText) onText(textDelta);
-        });
-
-        stream.on("message_start", () => {
-          console.log("📨 Message started");
-        });
-
-        stream.on("content_block_start", (event) => {
-          console.log("🔷 Content block started:", event.content_block.type);
-        });
-
-        stream.on("content_block_delta", (event) => {
-          if (event.delta.type === "text_delta") {
-            if (onText) onText(event.delta.text);
-          }
         });
 
         stream.on("content_block_stop", (event) => {
@@ -71,10 +60,6 @@ export function createClaudeService() {
           if (event.delta.stop_reason) {
             currentMessage.stop_reason = event.delta.stop_reason;
           }
-        });
-
-        stream.on("message_stop", () => {
-          console.log("✅ Message completed");
         });
 
         const finalMessage = await stream.finalMessage();

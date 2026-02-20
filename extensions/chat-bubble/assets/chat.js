@@ -777,6 +777,15 @@
       // Restore from session
     },
 
+    openAndSend(message) {
+      if (!this.state.isOpen) {
+        this.open();
+      }
+      if (typeof message === 'string' && message.trim()) {
+        setTimeout(() => this.send(message), 150);
+      }
+    },
+
     exposeAPI() {
       window.ShopAIChat = this;
     }

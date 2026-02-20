@@ -130,6 +130,17 @@
     transform: translate(-50%, -50%) scale(1);
   }
 
+  /* Fallback: .active class on elements directly */
+  .shop-ai-modal.active{
+    opacity: 1;
+    visibility: visible;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  .shop-ai-backdrop.active{
+    opacity: 1;
+    visibility: visible;
+  }
+
   /* ============================================
      HEADER - TRANSLUCENT TEXT ON BORDER
      ============================================ */
@@ -1031,7 +1042,10 @@
     body.shop-ai-open .shop-ai-modal{
       transform: translateY(0);
     }
-    
+    .shop-ai-modal.active{
+      transform: translateY(0);
+    }
+
     .shop-ai-header{
       padding-top: max(20px, env(safe-area-inset-top));
     }
@@ -1165,7 +1179,7 @@
       <div class="shop-ai-suggestions visible" id="shop-ai-suggestions">
         <div class="shop-ai-sugg-title">How can I assist you?</div>
         <div class="shop-ai-sugg-list">
-          <button class="shop-ai-sugg-item" onclick="ShopAIChat.send('Show me circuit breakers for industrial applications')">
+          <button class="shop-ai-sugg-item" onclick="ShopAIChat.openAndSend('Show me circuit breakers for industrial applications')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="11" cy="11" r="8"/>
               <path d="m21 21-4.35-4.35"/>
@@ -1173,7 +1187,7 @@
             Show me circuit breakers for industrial applications
           </button>
 
-          <button class="shop-ai-sugg-item" onclick="ShopAIChat.send('I need pneumatic components for manufacturing')">
+          <button class="shop-ai-sugg-item" onclick="ShopAIChat.openAndSend('I need pneumatic components for manufacturing')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="11" cy="11" r="8"/>
               <path d="m21 21-4.35-4.35"/>
@@ -1181,7 +1195,7 @@
             I need pneumatic components for manufacturing
           </button>
 
-          <button class="shop-ai-sugg-item" onclick="ShopAIChat.send('Help me find the right inverter drive')">
+          <button class="shop-ai-sugg-item" onclick="ShopAIChat.openAndSend('Help me find the right inverter drive')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="11" cy="11" r="8"/>
               <path d="m21 21-4.35-4.35"/>
@@ -1189,7 +1203,7 @@
             Help me find the right inverter drive
           </button>
 
-          <button class="shop-ai-sugg-item" onclick="ShopAIChat.send('Do you have SKU: ')">
+          <button class="shop-ai-sugg-item" onclick="ShopAIChat.openAndSend('Do you have SKU: ')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="2" y="2" width="20" height="20" rx="5"/>
               <path d="M16 11.37A4 4 0 1 1 12.63 8"/>

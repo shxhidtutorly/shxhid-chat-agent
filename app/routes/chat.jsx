@@ -131,8 +131,8 @@ async function handleChatRequest(request) {
       trackAnalyticsEvent,
     } = dbMod;
 
-    const posthogMod = await import("../services/posthog.server");
-    const ChatEvents = posthogMod.ChatEvents;
+    con// Priority: 1) Shopify app proxy ?shop= param  2) POST body shop_domain  3) Origin header  4) env var fallbackst posthogMod = await import("../services/posthog.server");
+    con// NEW Priority: 1) SHOPIFY_STORE_DOMAIN env var (authoritative)  2) POST body shop_domain  3) App proxy ?shop= param  4) Origin headerst ChatEvents = posthogMod.ChatEvents;
 
     const streamMod = await import("../services/streaming.server");
     const createSseStream = streamMod.createSseStream;
@@ -153,7 +153,10 @@ async function handleChatRequest(request) {
     const shopFromBody = body.shop_domain || null; // Direct connection sends this
     const origin = request.headers.get("Origin");
     const shopFromOrigin = origin ? new URL(origin).hostname : null;
-    const shopDomain = shopFromProxy || shopFromBody || shopFromOrigin || process.env.SHOPIFY_STORE_DOMAIN || null;
+    // FIX: SHOPIFY_STORE_DOMAIN env var is the AUTHORITATIVE source for single-store deployments.    // The app proxy ?shop= param can inject the OLD store domain if app is still installed there.
+        // We intentionally do NOT trust the app proxy ?shop= param as the primary source.
+        const envDomain = process.env.SHOPIFY_STORE_DOMAIN || null;
+        const shopDomain = envDomain || shopFromBody || shopFromProxy || shopFromOrigin || null;
 
     console.log(`🏪 Shop domain resolved: ${shopDomain} (proxy=${shopFromProxy}, body=${shopFromBody}, origin=${shopFromOrigin}, env=${process.env.SHOPIFY_STORE_DOMAIN || 'unset'})`);
 

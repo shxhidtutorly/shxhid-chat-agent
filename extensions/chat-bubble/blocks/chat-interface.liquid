@@ -1246,9 +1246,8 @@
 
 <script>
   window.shopChatConfig = {
-    apiUrl: '{{ block.settings.backend_url | default: "" }}/chat',
-    leadsUrl: '{{ block.settings.backend_url | default: "" }}/leads',
-    cartUrl: '{{ block.settings.backend_url | default: "" }}/api/cart',
+    apiUrl: '{{ block.settings.backend_url | default: "https://shxhid-chat-agent-production.up.railway.app" }}/chat',
+    leadsUrl: '{{ block.settings.backend_url | default: "https://shxhid-chat-agent-production.up.railway.app" }}/leads',    cartUrl: '{{ block.settings.backend_url | default: "" }}/api/cart',
     shopDomain: '{{ shop.permanent_domain }}',
     shopId: '{{ shop.id }}',
     promptType: 'creativeAutomationAssistant',

@@ -46,6 +46,13 @@ export async function loader({ request }) {
 }
 
 export async function action({ request }) {
+  // Handle CORS preflight — belt-and-suspenders for servers that route OPTIONS to action()
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: getCorsHeaders(request),
+    });
+  }
   return handleChatRequest(request);
 }
 
@@ -243,11 +250,15 @@ async function handleChatSession({
     MCPClient,
   } = helpers;
 
+  // Send conversation ID immediately — establishes the SSE connection for the client
+  stream.sendMessage({ type: "id", conversation_id: conversationId });
+
   // Check for Anthropic API key
   if (!process.env.ANTHROPIC_API_KEY) {
-    stream.sendMessage({ 
-      type: "error", 
-      error: "Anthropic API key not configured. Please add ANTHROPIC_API_KEY to environment variables." 
+    console.error("❌ ANTHROPIC_API_KEY missing from environment");
+    stream.sendMessage({
+      type: "error",
+      error: "Anthropic API key not configured. Please add ANTHROPIC_API_KEY to environment variables."
     });
     return;
   }
@@ -255,49 +266,80 @@ async function handleChatSession({
   const claudeService = createClaudeService();
   const toolService = createToolService();
 
-  // Get MCP URL
-  const { mcpApiUrl } = await getCustomerAccountUrls(
-    shopDomain, 
-    conversationId, 
-    { getCustomerAccountUrlsFromDb, storeCustomerAccountUrls }
-  );
+  // Get MCP URL (with timeout to prevent hanging)
+  let mcpApiUrl = null;
+  try {
+    const urlResult = await Promise.race([
+      getCustomerAccountUrls(
+        shopDomain,
+        conversationId,
+        { getCustomerAccountUrlsFromDb, storeCustomerAccountUrls }
+      ),
+      new Promise((resolve) => setTimeout(() => resolve({ mcpApiUrl: null }), 5000)),
+    ]);
+    mcpApiUrl = urlResult.mcpApiUrl;
+  } catch (e) {
+    console.warn("Failed to get customer account URLs:", e.message);
+  }
 
   const mcpClient = new MCPClient(shopDomain, conversationId, null, mcpApiUrl);
 
   try {
-    stream.sendMessage({ type: "id", conversation_id: conversationId });
-
-    // Connect to MCP (best-effort)
+    // Connect to MCP (best-effort, with timeout)
     let storefrontMcpTools = [], customerMcpTools = [];
     try {
-      storefrontMcpTools = await mcpClient.connectToStorefrontServer();
-      customerMcpTools = await mcpClient.connectToCustomerServer();
+      const mcpConnectPromise = (async () => {
+        const sf = await mcpClient.connectToStorefrontServer();
+        const cu = await mcpClient.connectToCustomerServer();
+        return { sf, cu };
+      })();
+      const mcpResult = await Promise.race([
+        mcpConnectPromise,
+        new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
+      ]);
+      if (mcpResult) {
+        storefrontMcpTools = mcpResult.sf;
+        customerMcpTools = mcpResult.cu;
+      }
       console.log(`Connected to MCP: ${storefrontMcpTools.length + customerMcpTools.length} tools`);
     } catch (error) {
       console.warn("MCP connection failed, continuing without tools:", error.message);
     }
 
     // Save user message
+    let dbSaveSucceeded = false;
     try {
       await saveMessage(conversationId, "user", userMessage, {
         shopDomain,
         visitorId,
       });
+      dbSaveSucceeded = true;
     } catch (dbError) {
       console.error("Failed to save user message:", dbError);
     }
 
     // Get conversation history
-    const dbMessages = await getConversationHistory(conversationId);
-    let conversationHistory = dbMessages.map((dbMessage) => {
-      let content;
-      try {
-        content = JSON.parse(dbMessage.content);
-      } catch (e) {
-        content = dbMessage.content;
-      }
-      return { role: dbMessage.role, content };
-    });
+    let conversationHistory = [];
+    try {
+      const dbMessages = await getConversationHistory(conversationId);
+      conversationHistory = dbMessages.map((dbMessage) => {
+        let content;
+        try {
+          content = JSON.parse(dbMessage.content);
+        } catch (e) {
+          content = dbMessage.content;
+        }
+        return { role: dbMessage.role, content };
+      });
+    } catch (historyError) {
+      console.error("Failed to get conversation history:", historyError);
+    }
+
+    // Ensure user message is in history even if DB save or read failed
+    const lastMsg = conversationHistory[conversationHistory.length - 1];
+    if (!lastMsg || lastMsg.role !== "user" || lastMsg.content !== userMessage) {
+      conversationHistory.push({ role: "user", content: userMessage });
+    }
 
     // Stream from Claude
     let finalMessage = { role: "user", content: userMessage };
@@ -523,13 +565,17 @@ async function getCustomerAccountUrls(conversationIdOrDomain, conversationId, db
       ? conversationIdOrDomain 
       : new URL(conversationIdOrDomain).hostname;
 
+    const fetchWithTimeout = (url, ms = 4000) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), ms);
+      return fetch(url, { signal: controller.signal })
+        .then((r) => { clearTimeout(timer); return r.json(); })
+        .catch(() => ({}));
+    };
+
     const [mcpResponse, openidResponse] = await Promise.all([
-      fetch(`https://${hostname}/.well-known/customer-account-api`)
-        .then((r) => r.json())
-        .catch(() => ({})),
-      fetch(`https://${hostname}/.well-known/openid-configuration`)
-        .then((r) => r.json())
-        .catch(() => ({})),
+      fetchWithTimeout(`https://${hostname}/.well-known/customer-account-api`),
+      fetchWithTimeout(`https://${hostname}/.well-known/openid-configuration`),
     ]);
 
     const response = {
@@ -562,8 +608,8 @@ function getCorsHeaders(request) {
     "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Accept, X-Shopify-Shop-Id",
-    ...(origin ? { "Access-Control-Allow-Credentials": "true" } : {}),
     "Access-Control-Max-Age": "86400",
+    ...(origin ? { "Access-Control-Allow-Credentials": "true" } : {}),
   };
 }
 
@@ -572,8 +618,9 @@ function getSseHeaders(request) {
   const allowOrigin = origin || "*";
   return {
     "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
+    "Cache-Control": "no-cache, no-transform",
     "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
     "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Accept, X-Shopify-Shop-Id",

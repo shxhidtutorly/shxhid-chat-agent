@@ -357,6 +357,10 @@
               sessionStorage.setItem('shopAiConversationId', data.conversation_id);
             }
 
+            if (data.type === 'thinking_state') {
+              this.updateThinkingState(data.state);
+            }
+
             if (data.type === 'chunk') {
               if (this.state.isThinking) {
                 this.removeThinking();
@@ -443,17 +447,33 @@
       return `<p>${html}</p>`;
     },
 
-    showThinking() {
+    showThinking(text) {
       if (this.state.isThinking) return;
       this.state.isThinking = true;
 
       const container = document.createElement('div');
       container.id = 'shop-ai-thinking';
       container.className = 'shop-ai-thinking-container';
-      container.innerHTML = '<div class="shop-ai-spinner"></div><p>Thinking...</p>';
+      container.innerHTML = '<div class="shop-ai-thinking-dots"><span></span><span></span><span></span></div><span class="shop-ai-thinking-text">' + (text || 'Thinking...') + '</span>';
 
       this.elements.messages?.appendChild(container);
       this.scrollToBottom();
+    },
+
+    updateThinkingState(text) {
+      const el = document.querySelector('#shop-ai-thinking .shop-ai-thinking-text');
+      if (el) {
+        el.style.opacity = '0';
+        setTimeout(() => {
+          el.textContent = text;
+          el.style.opacity = '1';
+        }, 150);
+      } else {
+        // No thinking indicator yet, show one
+        if (!this.state.isThinking) {
+          this.showThinking(text);
+        }
+      }
     },
 
     removeThinking() {

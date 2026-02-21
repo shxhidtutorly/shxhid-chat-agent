@@ -407,6 +407,18 @@ async function handleChatSession({
   const toolArgs = content.input;
   const toolUseId = content.id;
 
+  // Send dynamic thinking state to frontend
+  const thinkingStates = {
+    'search_shop_catalog': 'Searching products...',
+    'update_cart': 'Adding to cart...',
+    'get_cart': 'Checking availability...',
+    'get_product': 'Looking up product...',
+  };
+  stream.sendMessage({
+    type: 'thinking_state',
+    state: thinkingStates[toolName] || 'Thinking...'
+  });
+
   const toolUseMessage = `Calling tool: ${toolName} with arguments: ${JSON.stringify(toolArgs)}`;
 
   stream.sendMessage({

@@ -1,54 +1,64 @@
 /**
- * Storefront Service - High-level API for chat agent
- * Handles all product and cart operations
- *
- * FIX: SHOP_DOMAIN is NO LONGER a module-level const.
- * It is read from process.env at call time to avoid stale baking.
+ * Storefront Service - High-level API for cart operations
+ * Uses Storefront API via shopify-storefront.js
  */
+
 import { shopifyStorefrontQuery } from './shopify-storefront.js';
 import {
-    SEARCH_PRODUCTS_QUERY,
-    CREATE_CART_MUTATION,
-    ADD_LINES_TO_CART_MUTATION,
+  SEARCH_PRODUCTS_QUERY,
+  CREATE_CART_MUTATION,
+  ADD_LINES_TO_CART_MUTATION,
 } from './storefront-queries.js';
+
+const SHOP_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || '';
+
+/**
+ * Validate that a variant ID is a proper Shopify GID.
+ * Expected format: gid://shopify/ProductVariant/{numeric_id}
+ */
+function isValidVariantGid(variantId) {
+  if (!variantId || typeof variantId !== 'string') return false;
+  return /^gid:\/\/shopify\/ProductVariant\/\d+$/.test(variantId);
+}
 
 // ============================================
 // SEARCH PRODUCTS
 // ============================================
 export async function searchProducts(searchQuery) {
-    if (!searchQuery || typeof searchQuery !== 'string') {
-          throw new Error('Search query is required');
-    }
+  if (!searchQuery || typeof searchQuery !== 'string') {
+    throw new Error('Search query is required');
+  }
 
-  // Read at call time - never freeze at module load
-  const SHOP_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || '';
-
-  console.log(`\uD83D\uDD0D Searching: "${searchQuery}"`);
+  console.log(`[StorefrontService] Searching: "${searchQuery}" on ${SHOP_DOMAIN}`);
 
   try {
-        const data = await shopifyStorefrontQuery({
-                query: SEARCH_PRODUCTS_QUERY,
-                variables: { query: searchQuery.trim(), first: 10 }
-        });
+    const data = await shopifyStorefrontQuery({
+      query: SEARCH_PRODUCTS_QUERY,
+      variables: {
+        query: searchQuery.trim(),
+        first: 10
+      }
+    });
 
-      const products = (data.products?.edges || []).map(({ node }) => ({
-              id: node.id,
-              title: node.title,
-              handle: node.handle,
-              description: node.description,
-              image_url: node.featuredImage?.url,
-              price: node.priceRange.minVariantPrice.amount,
-              currency: node.priceRange.minVariantPrice.currencyCode,
-              url: `https://${SHOP_DOMAIN}/products/${node.handle}`,
-              variant_id: node.variants.edges[0]?.node.id,
-              available: node.variants.edges[0]?.node.availableForSale || false,
-      }));
+    const products = (data.products?.edges || []).map(({ node }) => ({
+      id: node.id,
+      title: node.title,
+      handle: node.handle,
+      description: node.description,
+      image_url: node.featuredImage?.url,
+      price: node.priceRange.minVariantPrice.amount,
+      currency: node.priceRange.minVariantPrice.currencyCode,
+      url: node.handle ? `https://${SHOP_DOMAIN}/products/${node.handle}` : null,
+      variant_id: node.variants.edges[0]?.node.id,
+      available: node.variants.edges[0]?.node.availableForSale || false,
+    }));
 
-      console.log(`\u2705 Found ${products.length} products`);
-        return products;
+    console.log(`[StorefrontService] Found ${products.length} products`);
+    return products;
+
   } catch (error) {
-        console.error('\u274C Search failed:', error.message);
-        throw error;
+    console.error('[StorefrontService] Search failed:', error.message);
+    throw error;
   }
 }
 
@@ -56,57 +66,81 @@ export async function searchProducts(searchQuery) {
 // ADD TO CART
 // ============================================
 export async function addToCart({ variantId, quantity = 1, cartId = null }) {
-    if (!variantId) throw new Error('Variant ID is required');
+  if (!variantId) {
+    throw new Error('Variant ID is required');
+  }
 
-  console.log(`\uD83D\uDED2 Adding to cart: ${variantId} (qty: ${quantity})`);
+  // Validate GID format
+  if (!isValidVariantGid(variantId)) {
+    console.error(
+      `[StorefrontService] Invalid variant GID: "${variantId}". ` +
+      'Expected format: gid://shopify/ProductVariant/{id}'
+    );
+    throw new Error(
+      `Invalid variant ID format. Expected Shopify GID (gid://shopify/ProductVariant/...), got: ${variantId.substring(0, 60)}`
+    );
+  }
+
+  console.log(
+    `[StorefrontService] Adding to cart: variant=${variantId.substring(0, 50)} qty=${quantity} ` +
+    `cart=${cartId ? 'existing' : 'new'} domain=${SHOP_DOMAIN}`
+  );
 
   try {
-        const lines = [{ merchandiseId: variantId, quantity: parseInt(quantity) }];
-        let result;
+    const lines = [{
+      merchandiseId: variantId,
+      quantity: parseInt(quantity)
+    }];
 
-      if (!cartId) {
-              // Create new cart
-          result = await shopifyStorefrontQuery({
-                    query: CREATE_CART_MUTATION,
-                    variables: { lines }
-          });
+    let result;
 
-          const errors = result.cartCreate?.userErrors;
-              if (errors?.length) {
-                        throw new Error(errors[0].message);
-              }
+    if (!cartId) {
+      result = await shopifyStorefrontQuery({
+        query: CREATE_CART_MUTATION,
+        variables: { lines }
+      });
 
-          const cart = result.cartCreate.cart;
-              console.log(`\u2705 Cart created`);
-              return {
-                        status: 'success',
-                        cartId: cart.id,
-                        checkoutUrl: cart.checkoutUrl,
-                        totalQuantity: cart.totalQuantity,
-              };
-      } else {
-              // Add to existing cart
-          result = await shopifyStorefrontQuery({
-                    query: ADD_LINES_TO_CART_MUTATION,
-                    variables: { cartId, lines }
-          });
-
-          const errors = result.cartLinesAdd?.userErrors;
-              if (errors?.length) {
-                        throw new Error(errors[0].message);
-              }
-
-          const cart = result.cartLinesAdd.cart;
-              console.log(`\u2705 Item added to cart`);
-              return {
-                        status: 'success',
-                        cartId: cart.id,
-                        checkoutUrl: cart.checkoutUrl,
-                        totalQuantity: cart.totalQuantity,
-              };
+      const errors = result.cartCreate?.userErrors;
+      if (errors?.length) {
+        console.error('[StorefrontService] cartCreate userErrors:', errors);
+        throw new Error(errors[0].message);
       }
+
+      const cart = result.cartCreate.cart;
+      console.log(`[StorefrontService] Cart created: ${cart.id.substring(0, 30)}...`);
+
+      return {
+        status: 'success',
+        cartId: cart.id,
+        checkoutUrl: cart.checkoutUrl,
+        totalQuantity: cart.totalQuantity,
+      };
+
+    } else {
+      result = await shopifyStorefrontQuery({
+        query: ADD_LINES_TO_CART_MUTATION,
+        variables: { cartId, lines }
+      });
+
+      const errors = result.cartLinesAdd?.userErrors;
+      if (errors?.length) {
+        console.error('[StorefrontService] cartLinesAdd userErrors:', errors);
+        throw new Error(errors[0].message);
+      }
+
+      const cart = result.cartLinesAdd.cart;
+      console.log(`[StorefrontService] Item added to cart: ${cart.id.substring(0, 30)}...`);
+
+      return {
+        status: 'success',
+        cartId: cart.id,
+        checkoutUrl: cart.checkoutUrl,
+        totalQuantity: cart.totalQuantity,
+      };
+    }
+
   } catch (error) {
-        console.error('\u274C Add to cart failed:', error.message);
-        throw error;
+    console.error('[StorefrontService] Add to cart failed:', error.message);
+    throw error;
   }
 }

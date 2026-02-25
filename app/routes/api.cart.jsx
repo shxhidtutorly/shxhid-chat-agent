@@ -1,6 +1,6 @@
 /**
  * Cart API Endpoint
- * Integrates Storefront API for cart operations
+ * POST /api/cart — add item to cart via Storefront API
  */
 
 import { addToCart } from '../storefront-service.js';
@@ -21,9 +21,9 @@ export async function action({ request }) {
   }
 
   if (request.method !== 'POST') {
-    return new Response('Method not allowed', { 
-      status: 405, 
-      headers: getCorsHeaders(request) 
+    return new Response('Method not allowed', {
+      status: 405,
+      headers: getCorsHeaders(request)
     });
   }
 
@@ -31,12 +31,10 @@ export async function action({ request }) {
     const body = await request.json();
     const { variantId, quantity = 1, cartId } = body;
 
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`🛒 CART API REQUEST`);
-    console.log(`${'='.repeat(60)}`);
-    console.log(`  Variant: ${variantId?.substring(0, 50)}`);
-    console.log(`  Quantity: ${quantity}`);
-    console.log(`  Cart: ${cartId ? 'existing' : 'new'}`);
+    console.log(
+      `[CartAPI] Request: variant=${variantId?.substring(0, 50)} ` +
+      `qty=${quantity} cart=${cartId ? 'existing' : 'new'}`
+    );
 
     if (!variantId) {
       return Response.json(
@@ -45,39 +43,50 @@ export async function action({ request }) {
       );
     }
 
-    // ✅ Call Storefront Service
+    // Validate GID format before calling Storefront API
+    if (!/^gid:\/\/shopify\/ProductVariant\/\d+$/.test(variantId)) {
+      console.error(`[CartAPI] Invalid variant GID: "${variantId}"`);
+      return Response.json(
+        {
+          status: 'error',
+          message: `Invalid variantId format. Expected: gid://shopify/ProductVariant/{id}`
+        },
+        { status: 400, headers: getCorsHeaders(request) }
+      );
+    }
+
     const result = await addToCart({
       variantId,
       quantity,
       cartId: cartId || null
     });
 
-    console.log(`✅ SUCCESS`);
-    console.log(`  CartId: ${result.cartId?.substring(0, 30)}...`);
-    console.log(`  Checkout: ${result.checkoutUrl?.substring(0, 50)}...`);
-    console.log(`${'='.repeat(60)}\n`);
+    console.log(
+      `[CartAPI] Success: cartId=${result.cartId?.substring(0, 30)}... ` +
+      `checkout=${result.checkoutUrl ? 'present' : 'missing'}`
+    );
 
     return Response.json({
       status: 'success',
       cartId: result.cartId,
       checkoutUrl: result.checkoutUrl,
       totalQuantity: result.totalQuantity
-    }, { 
-      status: 200, 
-      headers: getCorsHeaders(request) 
+    }, {
+      status: 200,
+      headers: getCorsHeaders(request)
     });
 
   } catch (error) {
-    console.error(`❌ Cart API Error: ${error.message}\n`);
-    
+    console.error(`[CartAPI] Error: ${error.message}`);
+
     return Response.json(
-      { 
-        status: 'error', 
+      {
+        status: 'error',
         message: error.message || 'Failed to add to cart'
       },
-      { 
-        status: 500, 
-        headers: getCorsHeaders(request) 
+      {
+        status: 500,
+        headers: getCorsHeaders(request)
       }
     );
   }

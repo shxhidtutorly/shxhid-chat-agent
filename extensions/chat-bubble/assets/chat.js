@@ -523,13 +523,16 @@
         const actions = document.createElement('div');
         actions.className = 'shop-ai-product-actions';
 
-        const viewBtn = document.createElement('button');
-        viewBtn.type = 'button';
-        viewBtn.className = 'shop-ai-product-btn shop-ai-product-btn-secondary';
-        viewBtn.textContent = 'View';
-        viewBtn.dataset.productAction = 'view-product';
-        viewBtn.dataset.productId = productId;
-        actions.appendChild(viewBtn);
+        // Only show View button if the product has a valid URL
+        if (prod.url) {
+          const viewBtn = document.createElement('button');
+          viewBtn.type = 'button';
+          viewBtn.className = 'shop-ai-product-btn shop-ai-product-btn-secondary';
+          viewBtn.textContent = 'View';
+          viewBtn.dataset.productAction = 'view-product';
+          viewBtn.dataset.productId = productId;
+          actions.appendChild(viewBtn);
+        }
 
         const isAdded = this.state.addedByProductId[productId] === true;
         const addBtn = document.createElement('button');
@@ -586,11 +589,11 @@
             <div class="shop-ai-product-modal-description">${product.description || 'Premium quality product'}</div>
 
             <div class="shop-ai-product-modal-actions">
-              <button class="shop-ai-product-modal-secondary"
+              ${product.url ? `<button class="shop-ai-product-modal-secondary"
                 data-product-action="view-product"
                 data-product-id="${productId}">
                 View on Store
-              </button>
+              </button>` : ''}
               <button class="shop-ai-product-modal-primary"
                 data-product-action="${isAdded ? 'go-to-cart' : 'add-to-cart'}"
                 data-product-id="${productId}">

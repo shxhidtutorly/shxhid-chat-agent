@@ -1,21 +1,57 @@
 /**
- * Tool Service - FIXED VERSION
- * Gets REAL product handles from Shopify instead of generating fake URLs
+ * Tool Service
+ * Processes MCP tool responses (product search, cart updates)
  */
 
 export function createToolService() {
   const MAX_PRODUCTS_TO_DISPLAY = 8;
 
   /**
-   * ✅ CRITICAL FIX: Use product HANDLE from MCP response
-   * The MCP tool returns products with handles if they're available
+   * Resolve a product URL safely.
+   *
+   * Order of preference:
+   *   1. Use `handle` from MCP response → build /products/{handle}
+   *   2. Extract handle from a canonical URL containing /products/
+   *   3. Use the full product_url or url directly (no modification)
+   *   4. null — frontend should disable the "View" button
+   *
+   * NEVER fabricate a slug from the product title.
+   */
+  function resolveProductUrl(product, shopDomain) {
+    // 1. Explicit handle from MCP
+    if (product.handle) {
+      return `https://${shopDomain}/products/${product.handle}`;
+    }
+
+    // 2. Try to extract handle from an existing canonical URL
+    const rawUrl = product.product_url || product.url || '';
+    if (rawUrl) {
+      const productsMatch = rawUrl.match(/\/products\/([a-z0-9][a-z0-9\-]*)/i);
+      if (productsMatch && productsMatch[1]) {
+        return `https://${shopDomain}/products/${productsMatch[1]}`;
+      }
+      // 3. Has a URL but not a /products/ path — use it as-is
+      if (rawUrl.startsWith('http')) {
+        return rawUrl;
+      }
+    }
+
+    // 4. No reliable URL source
+    console.warn(
+      `[ToolService] Product "${product.title}" (${product.product_id || product.id}) ` +
+      'has no handle or canonical URL. View button will be disabled.'
+    );
+    return null;
+  }
+
+  /**
+   * Process product search results from MCP tool response.
+   * Preserves product_id, variant_id, and builds safe URLs.
    */
   const processProductSearchResult = (toolUseResponse, shopDomain) => {
     try {
-      console.log("🔍 Processing product search result for domain:", shopDomain);
-
       if (!toolUseResponse?.content || toolUseResponse.content.length === 0) {
-        console.log("❌ No content in tool response");
+        console.log('[ToolService] No content in tool response');
         return [];
       }
 
@@ -23,62 +59,37 @@ export function createToolService() {
       let responseData;
 
       try {
-        responseData = typeof contentText === "string" ? JSON.parse(contentText) : contentText;
+        responseData = typeof contentText === 'string' ? JSON.parse(contentText) : contentText;
       } catch (e) {
-        console.error("❌ Failed to parse tool content:", e);
+        console.error('[ToolService] Failed to parse tool content:', e.message);
         return [];
       }
 
       if (!responseData?.products || !Array.isArray(responseData.products)) {
-        console.log("❌ No products array in response");
+        console.log('[ToolService] No products array in response');
         return [];
       }
 
-      console.log(`✅ Found ${responseData.products.length} products in response`);
+      console.log(`[ToolService] Processing ${responseData.products.length} products for ${shopDomain}`);
 
-      // ✅ Process each product
       const fixedProducts = responseData.products.map((p) => {
-        // Get image URL
-        const rawImageUrl = p.image_url || p.featuredImage?.url || "";
+        const rawImageUrl = p.image_url || p.featuredImage?.url || '';
+        const productUrl = resolveProductUrl(p, shopDomain);
 
-        // ✅ CRITICAL: Use product HANDLE if available
-        // Otherwise extract from product_id (last number)
-        let productHandle = p.handle;
-        
-        if (!productHandle) {
-          // Fallback: extract ID from GID and create minimal slug
-          const productId = p.product_id?.replace('gid://shopify/Product/', '');
-          const titleSlug = (p.title || 'product')
-            .toLowerCase()
-            .trim()
-            .replace(/[^a-z0-9]+/g, '-')
-            .replace(/^-|-$/g, '')
-            .substring(0, 50); // Limit length
-          
-          productHandle = titleSlug;
-          console.warn(`⚠️ No handle for product, using slug: ${productHandle}`);
-        }
-
-        // ✅ Build real Shopify product URL using handle
-        const productUrl = `https://${shopDomain}/products/${productHandle}`;
-
-        console.log(`✅ Product URL: ${productUrl}`);
-
-        // Get variant info
+        // Extract variant info
         let firstVariant = null;
         if (Array.isArray(p.variants) && p.variants.length > 0) {
           firstVariant = p.variants[0];
         }
-
         const variantIdRaw = firstVariant?.id || firstVariant?.variant_id || null;
 
         // Format price
-        let priceText = "";
+        let priceText = '';
         if (p.price) {
           priceText = p.price;
         } else if (p.price_range) {
           const pr = p.price_range;
-          const currency = pr.currency || "USD";
+          const currency = pr.currency || 'USD';
           if (pr.min && pr.max && pr.min !== pr.max) {
             priceText = `${pr.min} - ${pr.max} ${currency}`;
           } else if (pr.min) {
@@ -88,27 +99,27 @@ export function createToolService() {
 
         return {
           id: p.product_id || p.id,
-          title: p.title || "Untitled Product",
-          handle: productHandle, // ✅ Store the handle
+          title: p.title || 'Untitled Product',
+          handle: p.handle || null,
           image_url: rawImageUrl,
-          url: productUrl, // ✅ Real product URL
+          url: productUrl,
           price: priceText,
-          description: p.description || "",
+          description: p.description || '',
           variant_id: variantIdRaw,
           merchandise_id: variantIdRaw,
           sku: p.sku || firstVariant?.sku || null,
         };
       });
 
-      console.log(`✅ Processed ${fixedProducts.length} products`);
-      
-      // Update tool response
+      console.log(`[ToolService] Processed ${fixedProducts.length} products`);
+
+      // Update tool response content so Claude sees the processed data
       responseData.products = fixedProducts;
       toolUseResponse.content[0].text = JSON.stringify(responseData);
 
       return fixedProducts.slice(0, MAX_PRODUCTS_TO_DISPLAY);
     } catch (error) {
-      console.error("❌ Error processing product search results:", error);
+      console.error('[ToolService] Error processing product search results:', error);
       return [];
     }
   };
@@ -120,13 +131,12 @@ export function createToolService() {
 
     try {
       const raw = toolUseResponse.content?.[0]?.text ?? toolUseResponse.content?.[0]?.data;
-      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
 
-      if (!parsed || typeof parsed !== "object") {
+      if (!parsed || typeof parsed !== 'object') {
         return { checkoutUrl: null, cart: null };
       }
 
-      // ✅ Try multiple checkout URL paths from Shopify
       const checkoutUrl =
         parsed.checkout_url ||
         parsed.checkoutUrl ||
@@ -138,11 +148,15 @@ export function createToolService() {
 
       const cart = parsed.cart || parsed.data?.cart || parsed;
 
-      console.log(`✅ Extracted checkoutUrl: ${checkoutUrl ? checkoutUrl.substring(0, 60) + "..." : "null"}`);
+      if (checkoutUrl) {
+        console.log(`[ToolService] Checkout URL: ${checkoutUrl.substring(0, 60)}...`);
+      } else {
+        console.warn('[ToolService] No checkout URL found in cart update response');
+      }
 
       return { checkoutUrl, cart };
     } catch (error) {
-      console.error("❌ Error processing cart update result:", error);
+      console.error('[ToolService] Error processing cart update result:', error);
       return { checkoutUrl: null, cart: null };
     }
   };

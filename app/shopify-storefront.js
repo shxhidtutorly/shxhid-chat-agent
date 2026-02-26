@@ -1,10 +1,12 @@
 /**
  * Shopify Storefront API Client (PRODUCTION SAFE)
  *
- * ✔ Dev Dashboard compatible
- * ✔ Creates Storefront token via Admin REST API
- * ✔ Caches token in-memory
- * ✔ Retries once on 401
+ * Token acquisition:
+ *   1. Use SHOPIFY_STOREFRONT_TOKEN env var if set (only on first load)
+ *   2. If env token returns 401: permanently discard it, never use again
+ *   3. Auto-create via Admin REST API:
+ *      POST /admin/api/{version}/storefront_access_tokens.json
+ *   4. Cache the new token in-memory for process lifetime
  *
  * Official docs:
  * - https://shopify.dev/docs/api/admin-rest/latest/resources/storefrontaccesstoken
@@ -18,15 +20,15 @@ const STOREFRONT_ENDPOINT = STORE_DOMAIN
   ? `https://${STORE_DOMAIN}/api/${API_VERSION}/graphql.json`
   : '';
 
-// In-memory cache (per process)
+// In-memory cache (per process). Initialized ONCE from env var.
+// After that, only the cache is used — env var is NEVER re-read at call time.
 let cachedToken = process.env.SHOPIFY_STOREFRONT_TOKEN || null;
+let envTokenDiscarded = false; // Set true after env token returns 401 — never use env token again
 
-// -----------------------------------------------------------------------------
-// Startup diagnostics (safe, no secrets)
-// -----------------------------------------------------------------------------
+// Startup diagnostics
 if (!STORE_DOMAIN) {
   console.error(
-    '[Storefront] ❌ SHOPIFY_STORE_DOMAIN not set. Storefront features will fail.'
+    '[Storefront] SHOPIFY_STORE_DOMAIN not set. Storefront features will fail.'
   );
 } else {
   console.log(
@@ -37,25 +39,39 @@ if (!STORE_DOMAIN) {
 }
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Token management
 // -----------------------------------------------------------------------------
+
+/**
+ * Get a valid Storefront API access token.
+ * Uses cached token or auto-creates via Admin REST API.
+ * NEVER re-reads process.env at call time.
+ */
+async function getStorefrontToken() {
+  if (cachedToken) return cachedToken;
+  console.log('[Storefront] No cached token — creating via Admin REST API...');
+  return await createStorefrontTokenViaAdminRest();
+}
+
+/**
+ * Permanently invalidate the cached Storefront token.
+ * If the env var token caused the 401, mark it as permanently discarded.
+ */
 function invalidateToken() {
-  if (process.env.SHOPIFY_STOREFRONT_TOKEN) {
+  if (process.env.SHOPIFY_STOREFRONT_TOKEN && !envTokenDiscarded) {
     console.error(
-      '[Storefront] ❌ Env Storefront token rejected (401). Fix or remove env var.'
+      '[Storefront] SHOPIFY_STOREFRONT_TOKEN env var returned 401 — PERMANENTLY DISCARDING. ' +
+      'Will auto-create a fresh token via Admin REST API.'
     );
+    envTokenDiscarded = true;
   }
   cachedToken = null;
 }
 
-// -----------------------------------------------------------------------------
-// Storefront token management (Admin REST API ONLY)
-// -----------------------------------------------------------------------------
-async function getStorefrontToken() {
-  if (cachedToken) return cachedToken;
-  return createStorefrontTokenViaAdminRest();
-}
-
+/**
+ * Create a Storefront access token via Admin REST API.
+ * POST /admin/api/{version}/storefront_access_tokens.json
+ */
 async function createStorefrontTokenViaAdminRest() {
   if (!STORE_DOMAIN) {
     throw new Error('[Storefront] Missing SHOPIFY_STORE_DOMAIN');
@@ -63,7 +79,6 @@ async function createStorefrontTokenViaAdminRest() {
 
   const { default: prisma } = await import('./db.server.js');
 
-  // Get latest offline admin session (created during OAuth install)
   const session = await prisma.session.findFirst({
     where: { shop: STORE_DOMAIN },
     orderBy: { id: 'desc' },
@@ -75,7 +90,7 @@ async function createStorefrontTokenViaAdminRest() {
     );
   }
 
-  console.log('[Storefront] 🔑 Creating Storefront token via Admin REST API');
+  console.log('[Storefront] Creating Storefront token via Admin REST API...');
 
   const response = await fetch(
     `https://${STORE_DOMAIN}/admin/api/${API_VERSION}/storefront_access_tokens.json`,
@@ -96,7 +111,7 @@ async function createStorefrontTokenViaAdminRest() {
   if (!response.ok) {
     const text = await response.text();
     console.error(
-      `[Storefront] ❌ Admin REST API ${response.status}: ${text.slice(0, 300)}`
+      `[Storefront] Admin REST API ${response.status}: ${text.slice(0, 300)}`
     );
 
     if (response.status === 403) {
@@ -120,7 +135,7 @@ async function createStorefrontTokenViaAdminRest() {
   }
 
   cachedToken = token;
-  console.log('[Storefront] ✅ Storefront token created successfully');
+  console.log('[Storefront] Storefront token created successfully via Admin REST API');
 
   return token;
 }
@@ -128,6 +143,11 @@ async function createStorefrontTokenViaAdminRest() {
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
+
+/**
+ * Execute a Storefront API GraphQL query/mutation.
+ * Uses cached token or auto-creates one. Retries once on 401.
+ */
 export async function shopifyStorefrontQuery({
   query,
   variables = {},
@@ -138,18 +158,14 @@ export async function shopifyStorefrontQuery({
 
   if (!domain) {
     throw new Error(
-      '[Storefront] No shop domain available. Pass shopDomain or set env.'
+      '[Storefront] No shop domain available. Pass shopDomain or set SHOPIFY_STORE_DOMAIN env.'
     );
   }
 
   const endpoint = `https://${domain}/api/${API_VERSION}/graphql.json`;
 
-  let token = process.env.SHOPIFY_STOREFRONT_TOKEN;
-  if (!token) {
-    token = await getStorefrontToken();
-  }
-
-  console.log(`🔗 Storefront GraphQL → ${endpoint}`);
+  // CRITICAL: Always use the cached token system. NEVER re-read env var at call time.
+  const token = await getStorefrontToken();
 
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -161,9 +177,9 @@ export async function shopifyStorefrontQuery({
     body: JSON.stringify({ query, variables }),
   });
 
-  // Retry once on 401
+  // On 401: permanently discard the failing token and retry with a fresh one
   if (response.status === 401 && !_retried) {
-    console.warn('[Storefront] ⚠️ 401 received. Refreshing token and retrying.');
+    console.warn('[Storefront] 401 — token rejected. Discarding and creating fresh token via Admin REST API...');
     invalidateToken();
     return shopifyStorefrontQuery({
       query,
@@ -176,7 +192,7 @@ export async function shopifyStorefrontQuery({
   if (!response.ok) {
     const text = await response.text();
     console.error(
-      `[Storefront] ❌ HTTP ${response.status}: ${text.slice(0, 300)}`
+      `[Storefront] HTTP ${response.status}: ${text.slice(0, 300)}`
     );
     throw new Error(`Storefront API HTTP ${response.status}`);
   }
@@ -185,7 +201,7 @@ export async function shopifyStorefrontQuery({
 
   if (json.errors?.length) {
     const message = json.errors[0]?.message || 'Unknown GraphQL error';
-    console.error('[Storefront] ❌ GraphQL Error:', message);
+    console.error('[Storefront] GraphQL Error:', message);
     throw new Error(message);
   }
 

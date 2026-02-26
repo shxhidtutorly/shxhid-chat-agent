@@ -439,7 +439,7 @@
   }
 
   /* ============================================
-     PRODUCT DISPLAY - CARD LAYOUT
+     PRODUCT DISPLAY - HORIZONTAL CAROUSEL
      ============================================ */
   @keyframes fadeInUp{
     from{ opacity: 0; transform: translateY(12px); }
@@ -448,48 +448,54 @@
 
   .shop-ai-product-grid{
     display: flex;
-    flex-direction: column;
-    gap: 8px;
-    width: 100%;
+    gap: 12px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    padding: 8px 2px 12px;
+    scrollbar-width: none;
     animation: fadeInUp 0.35s ease;
   }
 
+  .shop-ai-product-grid::-webkit-scrollbar{
+    display: none;
+  }
+
   .shop-ai-product-card{
-    display: flex;
-    gap: 12px;
+    flex: 0 0 148px;
+    scroll-snap-align: start;
     background: white;
     border: 1px solid var(--shop-ai-border);
-    border-radius: 12px;
-    padding: 10px;
-    align-items: center;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    border-radius: 14px;
+    overflow: hidden;
     cursor: pointer;
+    transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
   }
 
   .shop-ai-product-card:hover{
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.1);
     border-color: var(--shop-ai-primary);
-    box-shadow: 0 2px 8px rgba(255,157,92,0.12);
+  }
+
+  .shop-ai-product-card:active{
+    transform: translateY(-2px) scale(0.98);
   }
 
   .shop-ai-product-image{
-    width: 68px;
-    height: 68px;
-    border-radius: 8px;
+    width: 100%;
+    height: 148px;
     object-fit: cover;
     background: #f5f5f5;
-    flex-shrink: 0;
+    display: block;
   }
 
   .shop-ai-product-info{
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+    padding: 10px;
   }
 
   .shop-ai-product-title{
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--shop-ai-text);
     margin: 0;
@@ -502,43 +508,7 @@
     font-size: 13px;
     font-weight: 600;
     color: var(--shop-ai-primary);
-    margin: 0;
-  }
-
-  .shop-ai-product-actions{
-    display: flex;
-    gap: 6px;
-    margin-top: 4px;
-  }
-
-  .shop-ai-product-btn{
-    padding: 5px 12px;
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.15s ease;
-    border: none;
-    line-height: 1.4;
-  }
-
-  .shop-ai-product-btn-primary{
-    background: var(--shop-ai-gradient);
-    color: white;
-  }
-
-  .shop-ai-product-btn-primary:hover{
-    box-shadow: 0 3px 8px rgba(255,157,92,0.3);
-  }
-
-  .shop-ai-product-btn-secondary{
-    background: transparent;
-    color: var(--shop-ai-text);
-    border: 1px solid var(--shop-ai-border);
-  }
-
-  .shop-ai-product-btn-secondary:hover{
-    border-color: var(--shop-ai-primary);
+    margin: 4px 0 0;
   }
 
   /* ============================================
@@ -550,12 +520,12 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(0,0,0,0.45);
-    backdrop-filter: blur(10px);
+    background: rgba(0,0,0,0.5);
+    backdrop-filter: blur(12px);
     z-index: 2000000;
     opacity: 0;
     visibility: hidden;
-    transition: opacity 0.25s ease, visibility 0.25s ease;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
   }
 
   .shop-ai-product-modal-overlay.active{
@@ -565,24 +535,32 @@
 
   .shop-ai-product-modal{
     width: 100%;
-    max-width: 640px;
+    max-width: 580px;
     background: #ffffff;
     border-radius: 20px;
-    box-shadow: var(--shop-ai-shadow);
+    box-shadow: 0 32px 80px rgba(0,0,0,0.18);
     display: flex;
-    gap: 24px;
-    padding: 52px 24px 24px;
+    gap: 20px;
+    padding: 48px 24px 24px;
     position: relative;
+    transform: translateY(20px) scale(0.96);
+    transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    margin: 0 16px;
+  }
+
+  .shop-ai-product-modal-overlay.active .shop-ai-product-modal{
+    transform: translateY(0) scale(1);
   }
 
   .shop-ai-product-modal-left{
-    flex: 0 0 230px;
-    border-radius: 16px;
+    flex: 0 0 220px;
+    border-radius: 14px;
     overflow: hidden;
     background: #f5f5f5;
     display: flex;
     align-items: center;
     justify-content: center;
+    aspect-ratio: 1;
   }
 
   .shop-ai-product-modal-left img{
@@ -596,19 +574,26 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 8px;
   }
 
   .shop-ai-product-modal-title{
     font-size: 18px;
     font-weight: 700;
     color: var(--shop-ai-text);
+    line-height: 1.3;
   }
 
   .shop-ai-product-modal-price{
-    font-size: 16px;
-    font-weight: 600;
+    font-size: 18px;
+    font-weight: 700;
     color: var(--shop-ai-primary);
+  }
+
+  .shop-ai-product-modal-sku{
+    font-size: 12px;
+    color: var(--shop-ai-text-light);
+    font-weight: 500;
   }
 
   .shop-ai-product-modal-description{
@@ -616,11 +601,13 @@
     color: var(--shop-ai-text-light);
     line-height: 1.5;
     max-height: 80px;
-    overflow: hidden;
+    overflow-y: auto;
+    scrollbar-width: thin;
   }
 
   .shop-ai-product-modal-actions{
-    margin-top: 8px;
+    margin-top: auto;
+    padding-top: 12px;
     display: flex;
     gap: 10px;
     flex-wrap: wrap;
@@ -629,7 +616,7 @@
   .shop-ai-product-modal-primary{
     flex: 1;
     min-width: 0;
-    padding: 10px 18px;
+    padding: 12px 20px;
     border-radius: 999px;
     border: none;
     background: var(--shop-ai-gradient);
@@ -641,16 +628,20 @@
     align-items: center;
     justify-content: center;
     gap: 6px;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
   }
 
   .shop-ai-product-modal-primary:hover{
-    transform: translateY(-1px);
-    box-shadow: 0 8px 18px rgba(255,157,92,0.32);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(255,157,92,0.35);
+  }
+
+  .shop-ai-product-modal-primary:active{
+    transform: translateY(0);
   }
 
   .shop-ai-product-modal-secondary{
-    padding: 10px 18px;
+    padding: 12px 20px;
     border-radius: 999px;
     border: 1px solid var(--shop-ai-border);
     background: #ffffff;
@@ -658,14 +649,24 @@
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color 0.2s ease, background 0.2s ease;
+  }
+
+  .shop-ai-product-modal-secondary:hover{
+    border-color: var(--shop-ai-primary);
+    background: rgba(255,157,92,0.04);
   }
 
   .shop-ai-product-modal-close{
     position: absolute;
-    top: 16px;
-    right: 16px;
-    width: 36px;
-    height: 36px;
+    top: 14px;
+    right: 14px;
+    width: 34px;
+    height: 34px;
     border-radius: 50%;
     border: 1px solid var(--shop-ai-border);
     background: rgba(255,255,255,0.92);
@@ -673,6 +674,12 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
+    transition: background 0.15s ease, transform 0.15s ease;
+  }
+
+  .shop-ai-product-modal-close:hover{
+    background: rgba(0,0,0,0.06);
+    transform: scale(1.1);
   }
 
   .shop-ai-product-modal-close svg{
@@ -1026,7 +1033,7 @@
       left: 0;
       transform: translateY(100%);
     }
-    
+
     body.shop-ai-open .shop-ai-modal{
       transform: translateY(0);
     }
@@ -1037,36 +1044,34 @@
     .shop-ai-header{
       padding-top: max(20px, env(safe-area-inset-top));
     }
-    
-    .shop-ai-product-row{
-      flex-direction: column;
-      align-items: flex-start;
-    }
-    
-    .shop-ai-prod-img{
-      width: 100%;
-      height: 180px;
+
+    /* Carousel cards smaller on mobile */
+    .shop-ai-product-card{
+      flex: 0 0 130px;
     }
 
+    .shop-ai-product-image{
+      height: 130px;
+    }
+
+    /* Product modal stacks vertically on mobile */
     .shop-ai-product-modal{
       flex-direction: column;
       max-width: 100%;
-      margin: 0 16px;
+      margin: 0 12px;
+      padding: 44px 16px 16px;
+      gap: 16px;
     }
 
     .shop-ai-product-modal-left{
       flex: 0 0 auto;
       width: 100%;
-      max-height: 260px;
+      max-height: 240px;
+      aspect-ratio: auto;
     }
 
     .shop-ai-product-modal-right{
       width: 100%;
-    }
-
-    .shop-ai-product-image{
-      width: 56px;
-      height: 56px;
     }
   }
 </style>

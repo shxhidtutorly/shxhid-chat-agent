@@ -210,38 +210,44 @@
       this.state.isOpen = false;
     },
 
-    // ✅ NEW: Show email popup
+    // Show email capture using the built-in overlay inside the chat modal
     showEmailPopup() {
-      const modal = document.createElement('div');
-      modal.id = 'shop-ai-email-modal';
-      modal.className = 'shop-ai-email-popup';
-      modal.innerHTML = `
-        <div class="shop-ai-email-popup-content">
-          <h3>Get Exclusive Deals! 💌</h3>
-          <p>Sign up for updates and special offers</p>
-          <input type="email" id="shop-ai-email-input" placeholder="your@email.com" />
-          <button id="shop-ai-email-submit">Subscribe</button>
-          <button id="shop-ai-email-skip" class="skip">Skip for now</button>
-        </div>
-      `;
+      const overlay = document.getElementById('shop-ai-email-overlay');
+      if (!overlay) return;
 
-      document.body.appendChild(modal);
+      overlay.classList.add('active');
 
-      document.getElementById('shop-ai-email-submit')?.addEventListener('click', () => {
-        const email = document.getElementById('shop-ai-email-input')?.value;
-        if (email && email.includes('@')) {
-          console.log('📧 Email captured:', email);
+      const submitBtn = document.getElementById('shop-ai-email-submit');
+      const skipBtn = document.getElementById('shop-ai-email-skip');
+      const emailInput = document.getElementById('shop-ai-email-input');
+      const errorEl = document.getElementById('shop-ai-email-error');
+
+      const closeOverlay = () => overlay.classList.remove('active');
+
+      const onSubmit = () => {
+        const email = emailInput?.value?.trim();
+        if (email && email.includes('@') && email.includes('.')) {
           this.state.emailCaptured = true;
           localStorage.setItem('shopAiEmailCaptured', 'true');
-          modal.remove();
-          // Send to backend
+          closeOverlay();
           this.captureEmail(email);
+          submitBtn?.removeEventListener('click', onSubmit);
+          skipBtn?.removeEventListener('click', onSkip);
+        } else {
+          if (errorEl) errorEl.classList.add('visible');
         }
-      });
+      };
 
-      document.getElementById('shop-ai-email-skip')?.addEventListener('click', () => {
-        modal.remove();
-      });
+      const onSkip = () => {
+        closeOverlay();
+        submitBtn?.removeEventListener('click', onSubmit);
+        skipBtn?.removeEventListener('click', onSkip);
+      };
+
+      submitBtn?.addEventListener('click', onSubmit);
+      skipBtn?.addEventListener('click', onSkip);
+
+      setTimeout(() => emailInput?.focus(), 300);
     },
 
     async captureEmail(email) {
@@ -482,11 +488,12 @@
       this.state.isThinking = false;
     },
 
-    // ✅ NEW: Products in GRID ROWS (3 per row)
+    // Products displayed as horizontal scroll carousel — NO buttons on cards
+    // Click any card to open the product detail modal
     renderProductsGrid(products) {
       if (!products || !products.length) return;
 
-      console.log(`📦 Rendering ${products.length} products in grid`);
+      console.log(`Rendering ${products.length} products as carousel`);
 
       const container = document.createElement('div');
       container.className = 'shop-ai-product-grid';
@@ -498,60 +505,19 @@
         const card = document.createElement('div');
         card.className = 'shop-ai-product-card';
         card.dataset.productId = productId;
-        card.style.cursor = 'pointer';
 
-        const img = document.createElement('img');
-        img.className = 'shop-ai-product-image';
-        img.src = prod.image_url || '';
-        img.alt = prod.title || 'Product';
-        img.loading = 'lazy';
-        card.appendChild(img);
+        card.innerHTML = `
+          <img class="shop-ai-product-image" src="${prod.image_url || ''}" alt="${(prod.title || 'Product').replace(/"/g, '&quot;')}" loading="lazy" />
+          <div class="shop-ai-product-info">
+            <h4 class="shop-ai-product-title">${prod.title || 'Untitled'}</h4>
+            <div class="shop-ai-product-price">${prod.price || ''}</div>
+          </div>
+        `;
 
-        const info = document.createElement('div');
-        info.className = 'shop-ai-product-info';
-
-        const title = document.createElement('h4');
-        title.className = 'shop-ai-product-title';
-        title.textContent = prod.title || 'Untitled';
-        info.appendChild(title);
-
-        const price = document.createElement('div');
-        price.className = 'shop-ai-product-price';
-        price.textContent = prod.price || 'Price on request';
-        info.appendChild(price);
-
-        const actions = document.createElement('div');
-        actions.className = 'shop-ai-product-actions';
-
-        // Only show View button if the product has a valid URL
-        if (prod.url) {
-          const viewBtn = document.createElement('button');
-          viewBtn.type = 'button';
-          viewBtn.className = 'shop-ai-product-btn shop-ai-product-btn-secondary';
-          viewBtn.textContent = 'View';
-          viewBtn.dataset.productAction = 'view-product';
-          viewBtn.dataset.productId = productId;
-          actions.appendChild(viewBtn);
-        }
-
-        const isAdded = this.state.addedByProductId[productId] === true;
-        const addBtn = document.createElement('button');
-        addBtn.type = 'button';
-        addBtn.className = 'shop-ai-product-btn shop-ai-product-btn-primary';
-        addBtn.textContent = isAdded ? 'Go to Cart' : 'Add to Cart';
-        addBtn.dataset.productAction = isAdded ? 'go-to-cart' : 'add-to-cart';
-        addBtn.dataset.productId = productId;
-        actions.appendChild(addBtn);
-
-        // ✅ Click card to open modal
-        card.addEventListener('click', (e) => {
-          if (!e.target.closest('button')) {
-            this.handleOpenProductModal(productId);
-          }
+        card.addEventListener('click', () => {
+          this.handleOpenProductModal(productId);
         });
 
-        info.appendChild(actions);
-        card.appendChild(info);
         container.appendChild(card);
       });
 
@@ -559,18 +525,21 @@
       this.scrollToBottom();
     },
 
-    // ✅ NEW: Product modal popup
+    // Product detail modal — shows image, price, description, View + Add to Cart
     handleOpenProductModal(productId) {
       const product = this.state.productDataMap.get(productId);
       if (!product) return;
+
+      // Close any existing product modal first
+      this.handleCloseProductModal();
 
       const modal = document.createElement('div');
       modal.id = 'shop-ai-product-modal';
       modal.className = 'shop-ai-product-modal-overlay';
 
       const isAdded = this.state.addedByProductId[productId] === true;
+      const safeTitle = (product.title || 'Product').replace(/"/g, '&quot;');
 
-      // Class names must match the CSS in chat-interface.liquid
       modal.innerHTML = `
         <div class="shop-ai-product-modal">
           <button class="shop-ai-product-modal-close" data-product-action="modal-close">
@@ -580,43 +549,45 @@
           </button>
 
           <div class="shop-ai-product-modal-left">
-            <img src="${product.image_url}" alt="${product.title}" />
+            <img src="${product.image_url || ''}" alt="${safeTitle}" />
           </div>
 
           <div class="shop-ai-product-modal-right">
-            <div class="shop-ai-product-modal-title">${product.title}</div>
-            <div class="shop-ai-product-modal-price">${product.price}</div>
-            <div class="shop-ai-product-modal-description">${product.description || 'Premium quality product'}</div>
+            <div class="shop-ai-product-modal-title">${product.title || 'Product'}</div>
+            <div class="shop-ai-product-modal-price">${product.price || 'Price on request'}</div>
+            ${product.sku ? `<div class="shop-ai-product-modal-sku">SKU: ${product.sku}</div>` : ''}
+            ${product.description ? `<div class="shop-ai-product-modal-description">${product.description}</div>` : ''}
 
             <div class="shop-ai-product-modal-actions">
-              ${product.url ? `<button class="shop-ai-product-modal-secondary"
-                data-product-action="view-product"
-                data-product-id="${productId}">
+              ${product.url ? `<a href="${product.url}" target="_blank" rel="noopener noreferrer" class="shop-ai-product-modal-secondary">
                 View on Store
-              </button>` : ''}
-              <button class="shop-ai-product-modal-primary"
+              </a>` : ''}
+              ${(product.variant_id || product.merchandise_id) ? `<button class="shop-ai-product-modal-primary"
                 data-product-action="${isAdded ? 'go-to-cart' : 'add-to-cart'}"
                 data-product-id="${productId}">
                 ${isAdded ? 'Go to Cart' : 'Add to Cart'}
-              </button>
+              </button>` : ''}
             </div>
           </div>
         </div>
       `;
 
       document.body.appendChild(modal);
-      // Trigger CSS transition by adding active class on next frame
       requestAnimationFrame(() => modal.classList.add('active'));
       this.state.selectedProductModal = modal;
+
+      // Close on backdrop click
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) this.handleCloseProductModal();
+      });
     },
 
     handleCloseProductModal() {
       if (this.state.selectedProductModal) {
-        const modal = this.state.selectedProductModal;
-        modal.classList.remove('active');
+        const m = this.state.selectedProductModal;
+        m.classList.remove('active');
         this.state.selectedProductModal = null;
-        // Remove from DOM after transition completes
-        setTimeout(() => modal.remove(), 300);
+        setTimeout(() => m.remove(), 300);
       }
     },
 
@@ -771,12 +742,14 @@
       this.state.lastCheckoutUrlShown = null;
       this.state.conversationId = null;
       this.state.isFirstMessage = true;
+      this.state.emailPopupShown = false;
       this.state.productDataMap.clear();
 
       sessionStorage.removeItem('shopAiConversationId');
       sessionStorage.removeItem('shopAiCartId');
       sessionStorage.removeItem('shopAiCheckoutUrl');
       sessionStorage.removeItem('shopAiAddedByProductId');
+      sessionStorage.removeItem('shopAiEmailPopupShown');
 
       if (this.elements.messages) {
         this.elements.messages.innerHTML = '';

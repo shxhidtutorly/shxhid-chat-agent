@@ -16,10 +16,6 @@
 const API_VERSION = process.env.SHOPIFY_API_VERSION || '2025-01';
 const STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || '';
 
-const STOREFRONT_ENDPOINT = STORE_DOMAIN
-  ? `https://${STORE_DOMAIN}/api/${API_VERSION}/graphql.json`
-  : '';
-
 // In-memory cache (per process). Initialized ONCE from env var.
 // After that, only the cache is used — env var is NEVER re-read at call time.
 let cachedToken = process.env.SHOPIFY_STOREFRONT_TOKEN || null;

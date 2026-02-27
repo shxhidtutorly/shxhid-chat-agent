@@ -1,11 +1,11 @@
 /**
  * Shopify Chat Agent - Production Ready
- * ✅ CHANGES:
- * - Products show in GRID ROWS (3 per row)
- * - Text shows BEFORE products
- * - Click product to open MODAL POPUP
- * - Email popup on FIRST CHAT only
- * - Only ONE valid checkout link (no duplicates)
+ * Features:
+ * - Product carousel with click-to-open modal
+ * - Auto-expand textarea with smooth placeholder fade
+ * - Chat history with conversation loading
+ * - Email capture via built-in overlay
+ * - SSE streaming with thinking indicators
  */
 
 (function () {
@@ -69,7 +69,7 @@
       this.restoreState();
       this.exposeAPI();
       
-      console.log('✅ ShopAIChat initialized');
+      console.log('ShopAIChat initialized');
     },
 
     bindEvents() {
@@ -100,10 +100,13 @@
             this.send();
           }
         });
-        // Activate/deactivate send button based on input
+        // Auto-expand textarea + toggle send button
         this.elements.input.addEventListener('input', () => {
+          const el = this.elements.input;
+          el.style.height = 'auto';
+          el.style.height = Math.min(el.scrollHeight, 120) + 'px';
           if (this.elements.sendBtn) {
-            this.elements.sendBtn.classList.toggle('active', !!this.elements.input.value.trim());
+            this.elements.sendBtn.classList.toggle('active', !!el.value.trim());
           }
         });
       }
@@ -175,11 +178,16 @@
 
     startPlaceholderRotation() {
       setInterval(() => {
-        if (this.elements.input && !this.elements.input.value) {
-          this.state.placeholderIndex = (this.state.placeholderIndex + 1) % this.placeholders.length;
-          this.elements.input.placeholder = this.placeholders[this.state.placeholderIndex];
+        const input = this.elements.input;
+        if (input && !input.value) {
+          input.classList.add('placeholder-fade');
+          setTimeout(() => {
+            this.state.placeholderIndex = (this.state.placeholderIndex + 1) % this.placeholders.length;
+            input.placeholder = this.placeholders[this.state.placeholderIndex];
+            input.classList.remove('placeholder-fade');
+          }, 300);
         }
-      }, 5000);
+      }, 4000);
     },
 
     open() {
@@ -289,12 +297,21 @@
       }
 
       this.addMessage(message, 'user');
-      if (this.elements.input) this.elements.input.value = '';
+      if (this.elements.input) {
+        this.elements.input.value = '';
+        this.elements.input.style.height = 'auto';
+      }
+      if (this.elements.sendBtn) {
+        this.elements.sendBtn.classList.remove('active');
+      }
 
       if (!this.state.conversationId) {
         this.state.conversationId = 'conv_' + Date.now();
         sessionStorage.setItem('shopAiConversationId', this.state.conversationId);
       }
+
+      // Save to history on first message of this conversation
+      this.saveToHistory(message);
 
       this.showThinking();
 
@@ -304,7 +321,7 @@
           throw new Error('Chat API URL not configured. Set Backend API URL in theme editor.');
         }
 
-        console.log('📡 Sending to:', apiUrl);
+        // Send to backend
 
         const response = await fetch(apiUrl, {
           method: 'POST',
@@ -601,7 +618,7 @@
         return;
       }
 
-      console.log(`🔗 Opening product: ${url}`);
+      // Open product page
       window.open(url, '_blank');
     },
 
@@ -660,7 +677,7 @@
             }
           });
 
-          console.log(`✅ Product added!`);
+          // Product added successfully
           this.addMessage('Added to cart! 🎉', 'assistant');
         } else {
           throw new Error(data.message || 'Failed to add to cart');
@@ -683,7 +700,7 @@
 
     updateCheckoutState(checkoutUrl, cartId) {
       if (checkoutUrl && checkoutUrl !== this.state.lastCheckoutUrlShown) {
-        console.log(`💾 Storing checkoutUrl: ${checkoutUrl.substring(0, 60)}...`);
+        // Store checkout URL
         this.state.checkoutUrl = checkoutUrl;
         this.state.lastCheckoutUrlShown = checkoutUrl;
         sessionStorage.setItem('shopAiCheckoutUrl', checkoutUrl);
@@ -697,10 +714,10 @@
     openCheckout() {
       const url = this.state.checkoutUrl;
       
-      console.log(`🔗 openCheckout() called`);
+      // Open checkout
 
       if (!url || typeof url !== 'string') {
-        console.error('❌ No checkout URL:', url);
+        console.error('No checkout URL available');
         this.addMessage('Could not open cart.', 'assistant');
         return;
       }
@@ -708,23 +725,23 @@
       const safeUrl = String(url).trim();
 
       if (!safeUrl.startsWith('https://') && !safeUrl.startsWith('http://')) {
-        console.error('❌ Invalid protocol:', safeUrl.substring(0, 30));
+        console.error('Invalid protocol:', safeUrl.substring(0, 30));
         this.addMessage('Invalid cart link.', 'assistant');
         return;
       }
 
       if (!safeUrl.includes('/cart/c/')) {
-        console.error('❌ Invalid checkout path:', safeUrl.substring(0, 60));
+        console.error('Invalid checkout path:', safeUrl.substring(0, 60));
         this.addMessage('Invalid cart link format.', 'assistant');
         return;
       }
 
-      console.log(`✅ Opening checkout: ${safeUrl.substring(0, 60)}...`);
+      // Opening checkout
       
       try {
         window.open(safeUrl, '_blank');
       } catch (err) {
-        console.warn('⚠️ Fallback to same window');
+        console.warn('Popup blocked, using redirect');
         window.location.href = safeUrl;
       }
     },
@@ -754,23 +771,143 @@
       if (this.elements.messages) {
         this.elements.messages.innerHTML = '';
       }
-      // Re-show suggestions
+
+      // Re-show suggestions — reset display AND add visible class
       if (this.elements.suggestions) {
+        this.elements.suggestions.style.display = '';
         this.elements.messages?.appendChild(this.elements.suggestions);
         this.elements.suggestions.classList.add('visible');
+      }
+
+      // Reset input
+      if (this.elements.input) {
+        this.elements.input.value = '';
+        this.elements.input.style.height = 'auto';
+        this.elements.input.focus();
+      }
+      if (this.elements.sendBtn) {
+        this.elements.sendBtn.classList.remove('active');
       }
     },
 
     openHistory() {
       this.elements.historyPanel?.classList.add('active');
+      this.renderHistoryList();
     },
 
     closeHistory() {
       this.elements.historyPanel?.classList.remove('active');
     },
 
+    renderHistoryList() {
+      const list = this.elements.historyList;
+      if (!list) return;
+
+      const history = JSON.parse(localStorage.getItem('shopAiChatHistory') || '[]');
+
+      if (!history.length) {
+        list.innerHTML = '<div class="shop-ai-history-empty">No previous conversations yet</div>';
+        return;
+      }
+
+      list.innerHTML = '';
+      history.forEach(conv => {
+        const item = document.createElement('div');
+        item.className = 'shop-ai-history-item';
+
+        const timeStr = conv.timestamp
+          ? new Date(conv.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+          : '';
+
+        item.innerHTML = `
+          <div class="shop-ai-history-item-title">${conv.title || 'Conversation'}</div>
+          <div class="shop-ai-history-item-time">${timeStr}</div>
+        `;
+
+        item.addEventListener('click', () => this.loadConversation(conv.id));
+        list.appendChild(item);
+      });
+    },
+
+    async loadConversation(conversationId) {
+      this.closeHistory();
+
+      // Clear current messages
+      if (this.elements.messages) {
+        this.elements.messages.innerHTML = '';
+      }
+
+      // Set as current conversation
+      this.state.conversationId = conversationId;
+      this.state.isFirstMessage = false;
+      sessionStorage.setItem('shopAiConversationId', conversationId);
+
+      // Hide suggestions
+      if (this.elements.suggestions) {
+        this.elements.suggestions.classList.remove('visible');
+        this.elements.suggestions.style.display = 'none';
+      }
+
+      this.showThinking('Loading conversation...');
+
+      try {
+        const apiUrl = window.shopChatConfig?.apiUrl;
+        if (!apiUrl) throw new Error('API URL not configured');
+
+        const historyUrl = `${apiUrl}?history=true&conversation_id=${encodeURIComponent(conversationId)}`;
+        const response = await fetch(historyUrl);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const data = await response.json();
+        this.removeThinking();
+
+        if (data.messages && data.messages.length) {
+          data.messages.forEach(msg => {
+            if (msg.role === 'user' || msg.role === 'assistant') {
+              const content = typeof msg.content === 'string' ? msg.content : '';
+              if (content) this.addMessage(content, msg.role);
+            }
+          });
+          this.scrollToBottom();
+        } else {
+          this.addMessage('This conversation has no messages.', 'assistant');
+        }
+      } catch (err) {
+        this.removeThinking();
+        console.error('Failed to load conversation:', err);
+        this.addMessage('Could not load conversation history.', 'assistant');
+      }
+    },
+
+    saveToHistory(firstMessage) {
+      if (!this.state.conversationId) return;
+
+      const history = JSON.parse(localStorage.getItem('shopAiChatHistory') || '[]');
+
+      // Don't add duplicates
+      if (history.some(h => h.id === this.state.conversationId)) return;
+
+      history.unshift({
+        id: this.state.conversationId,
+        title: (firstMessage || 'Chat').substring(0, 60),
+        timestamp: Date.now(),
+      });
+
+      // Keep only last 30
+      if (history.length > 30) history.length = 30;
+
+      localStorage.setItem('shopAiChatHistory', JSON.stringify(history));
+    },
+
     restoreState() {
-      // Restore from session
+      // Restore from session — if there's an active conversation, hide suggestions
+      if (this.state.conversationId) {
+        this.state.isFirstMessage = false;
+        if (this.elements.suggestions) {
+          this.elements.suggestions.classList.remove('visible');
+          this.elements.suggestions.style.display = 'none';
+        }
+      }
     },
 
     openAndSend(message) {

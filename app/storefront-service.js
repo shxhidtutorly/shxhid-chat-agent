@@ -29,7 +29,7 @@ export async function searchProducts(searchQuery) {
     throw new Error('Search query is required');
   }
 
-  console.log(`[StorefrontService] Searching: "${searchQuery}" on ${SHOP_DOMAIN}`);
+  console.log(`[StorefrontService] Search: "${searchQuery.substring(0, 40)}"`);
 
   try {
     const data = await shopifyStorefrontQuery({
@@ -53,7 +53,7 @@ export async function searchProducts(searchQuery) {
       available: node.variants.edges[0]?.node.availableForSale || false,
     }));
 
-    console.log(`[StorefrontService] Found ${products.length} products`);
+    if (!products.length) console.warn('[StorefrontService] No products found');
     return products;
 
   } catch (error) {
@@ -81,10 +81,7 @@ export async function addToCart({ variantId, quantity = 1, cartId = null }) {
     );
   }
 
-  console.log(
-    `[StorefrontService] Adding to cart: variant=${variantId.substring(0, 50)} qty=${quantity} ` +
-    `cart=${cartId ? 'existing' : 'new'} domain=${SHOP_DOMAIN}`
-  );
+  console.log(`[StorefrontService] Add to cart: qty=${quantity} cart=${cartId ? 'existing' : 'new'}`);
 
   try {
     const lines = [{
@@ -107,7 +104,7 @@ export async function addToCart({ variantId, quantity = 1, cartId = null }) {
       }
 
       const cart = result.cartCreate.cart;
-      console.log(`[StorefrontService] Cart created: ${cart.id.substring(0, 30)}...`);
+      console.log('[StorefrontService] Cart created');
 
       return {
         status: 'success',
@@ -129,7 +126,7 @@ export async function addToCart({ variantId, quantity = 1, cartId = null }) {
       }
 
       const cart = result.cartLinesAdd.cart;
-      console.log(`[StorefrontService] Item added to cart: ${cart.id.substring(0, 30)}...`);
+      console.log('[StorefrontService] Item added to cart');
 
       return {
         status: 'success',

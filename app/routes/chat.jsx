@@ -162,7 +162,9 @@ async function handleChatRequest(request) {
     const shopFromOrigin = origin ? new URL(origin).hostname : null;
     const shopDomain = shopFromProxy || shopFromBody || shopFromOrigin || process.env.SHOPIFY_STORE_DOMAIN || null;
 
-    console.log(`🏪 Shop domain resolved: ${shopDomain} (proxy=${shopFromProxy}, body=${shopFromBody}, origin=${shopFromOrigin}, env=${process.env.SHOPIFY_STORE_DOMAIN || 'unset'})`);
+    if (!shopDomain) {
+      console.warn('[Chat] Could not resolve shop domain from request');
+    }
 
     const trackingId = visitorId || fingerprintId || conversationId;
 
@@ -419,11 +421,9 @@ async function handleChatSession({
     state: thinkingStates[toolName] || 'Thinking...'
   });
 
-  const toolUseMessage = `Calling tool: ${toolName} with arguments: ${JSON.stringify(toolArgs)}`;
-
   stream.sendMessage({
     type: 'tool_use',
-    tool_use_message: toolUseMessage
+    tool_name: toolName,
   });
 
   const trackingId = visitorId || fingerprintId || conversationId;
@@ -437,16 +437,13 @@ async function handleChatSession({
     console.warn("Analytics failed:", e);
   }
 
-  // Call the tool
   const toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
-  console.log(`🔧 Tool response for ${toolName}:`, JSON.stringify(toolUseResponse).slice(0, 2000));
 
   // ✅ Process and send products to frontend
   if (toolName === "search_shop_catalog" && !toolUseResponse.error) {
     const products = toolService.processProductSearchResult(toolUseResponse, shopDomain);
     
     if (products && products.length > 0) {
-      console.log(`📦 Sending ${products.length} products to frontend`);
       stream.sendMessage({
         type: "product_results",
         products: products
@@ -460,7 +457,6 @@ async function handleChatSession({
     const { checkoutUrl, cart } = processCartUpdateResult(toolUseResponse);
 
     if (checkoutUrl) {
-      console.log(`🛒 Cart updated, checkout URL: ${checkoutUrl}`);
       stream.sendMessage({
         type: "cart_updated",
         checkout_url: checkoutUrl,

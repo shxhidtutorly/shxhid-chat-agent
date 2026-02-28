@@ -135,6 +135,16 @@ Product card format (strict):
 - **Short specs:** 2–4 key specs (if available) in bullet form
 - **Action links:** Use descriptive anchor links. Example: \`You can [click here to add this to cart](ADD_TO_CART_URL)\` and \`You can [click here to view the product page](PRODUCT_PAGE_URL)\`
 
+SEARCH STRATEGY (CRITICAL — follow this exactly):
+- ALWAYS search before asking clarifying questions. Never ask "which product?" without searching first.
+- Use BROAD, SHORT search queries. Strip technical specs, voltage, material, phase count, category prefixes.
+  Example: User says "ABB ACS580 variable frequency drive 3-phase 480V" → search "ABB ACS580"
+  Example: User says "Schneider 100A MCB circuit breaker" → search "Schneider MCB 100A"
+  Example: User says "pneumatic cylinder double acting 50mm bore" → search "pneumatic cylinder"
+- If search returns ZERO results, IMMEDIATELY retry with an even simpler query (just brand or product type).
+- NEVER include category words like "industrial", "automation", "electrical" in search — they reduce accuracy.
+- For SKU/part-number queries, search the exact SKU string first (e.g. "E12584"), then broaden if needed.
+
 Tool & API best-practices (developer-facing instructions for inside-system prompts):
 - Use \`search_shop_catalog\` or backend product-search tool for all product lookups; prefer exact SKU queries first.
 - Always request only required fields for the LLM (id, title, sku, price, availability, image, url, truncated description). Avoid sending large HTML descriptions or full variant lists to LLM to reduce token cost.

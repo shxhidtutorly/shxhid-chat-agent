@@ -27,6 +27,12 @@
     -webkit-font-smoothing: antialiased;
   }
 
+  /* Override Shopify global *:focus-visible outline/box-shadow conflict */
+  .shop-ai-reset *:focus-visible{
+    outline: none !important;
+    box-shadow: none !important;
+  }
+
   /* ============================================
      FLOATING LAUNCHER
      ============================================ */
@@ -58,7 +64,7 @@
     font-weight: 600;
     cursor: pointer;
     box-shadow: var(--shop-ai-shadow-sm);
-    transition: all 0.2s ease;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     border: none;
     background: white;
   }
@@ -90,12 +96,12 @@
   .shop-ai-backdrop{
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(8px);
+    background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(6px);
     z-index: 999998;
     opacity: 0;
     visibility: hidden;
-    transition: all 0.3s ease;
+    transition: opacity 0.25s ease, visibility 0.25s ease;
   }
   
   body.shop-ai-open .shop-ai-backdrop{
@@ -107,24 +113,24 @@
     position: fixed;
     top: 50%;
     left: 50%;
-    transform: translate(-50%, -48%) scale(0.95);
+    transform: translate(-50%, -48%) scale(0.96);
     width: 92%;
     max-width: 720px;
     height: 75vh;
     max-height: 90vh;
-    background: rgba(255,255,255,0.88);
-    backdrop-filter: blur(24px) saturate(180%);
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    background: rgba(255,255,255,0.94);
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
     border-radius: var(--shop-ai-radius);
-    box-shadow: 0 24px 80px rgba(0,0,0,0.14), 0 0 0 1px rgba(255,255,255,0.3) inset;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.1), 0 0 0 1px rgba(255,255,255,0.2) inset;
     z-index: 999999;
     display: flex;
     flex-direction: column;
     overflow: hidden;
     opacity: 0;
     visibility: hidden;
-    transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-    border: 1px solid rgba(255,255,255,0.4);
+    transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    border: 1px solid rgba(255,255,255,0.35);
   }
 
   body.shop-ai-open .shop-ai-modal{
@@ -209,12 +215,17 @@
     border: 1px solid var(--shop-ai-border);
     color: var(--shop-ai-text);
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   }
-  
+
   .shop-ai-icon-btn:hover{
     background: rgba(255,157,92,0.1);
-    transform: translateY(-2px);
+    transform: translateY(-1px);
+  }
+
+  .shop-ai-icon-btn:active{
+    transform: scale(0.94);
+    transition-duration: 0.1s;
   }
 
   .shop-ai-menu-btn{
@@ -254,8 +265,8 @@
     min-width: 200px;
     opacity: 0;
     visibility: hidden;
-    transform: translateY(-10px);
-    transition: all 0.25s ease;
+    transform: translateY(-8px);
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     overflow: hidden;
     z-index: 1000;
   }
@@ -276,7 +287,7 @@
     font-weight: 500;
     color: var(--shop-ai-text);
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background 0.15s ease;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -299,21 +310,37 @@
     padding: 24px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 14px;
     background: transparent;
     scroll-behavior: smooth;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0,0,0,0.1) transparent;
+  }
+
+  .shop-ai-messages::-webkit-scrollbar{
+    width: 4px;
+  }
+  .shop-ai-messages::-webkit-scrollbar-track{
+    background: transparent;
+  }
+  .shop-ai-messages::-webkit-scrollbar-thumb{
+    background: rgba(0,0,0,0.1);
+    border-radius: 4px;
+  }
+  .shop-ai-messages::-webkit-scrollbar-thumb:hover{
+    background: rgba(0,0,0,0.2);
   }
 
   .shop-ai-message{
     display: flex;
     flex-direction: column;
-    animation: messageSlide 0.3s ease;
+    animation: messageSlide 0.22s cubic-bezier(0.16, 1, 0.3, 1);
   }
-  
+
   @keyframes messageSlide{
     from{
       opacity: 0;
-      transform: translateY(10px);
+      transform: translateY(8px);
     }
     to{
       opacity: 1;
@@ -422,7 +449,7 @@
     background: white;
     border: 1px solid var(--shop-ai-border);
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     font-size: 14px;
     font-weight: 500;
     color: var(--shop-ai-text);
@@ -472,17 +499,18 @@
     border-radius: 14px;
     overflow: hidden;
     cursor: pointer;
-    transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
   }
 
   .shop-ai-product-card:hover{
-    transform: translateY(-4px);
-    box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.08);
     border-color: var(--shop-ai-primary);
   }
 
   .shop-ai-product-card:active{
-    transform: translateY(-2px) scale(0.98);
+    transform: translateY(-1px) scale(0.98);
+    transition-duration: 0.1s;
   }
 
   .shop-ai-product-image{
@@ -523,12 +551,12 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(0,0,0,0.5);
-    backdrop-filter: blur(12px);
+    background: rgba(0,0,0,0.4);
+    backdrop-filter: blur(8px);
     z-index: 2000000;
     opacity: 0;
     visibility: hidden;
-    transition: opacity 0.3s ease, visibility 0.3s ease;
+    transition: opacity 0.25s ease, visibility 0.25s ease;
   }
 
   .shop-ai-product-modal-overlay.active{
@@ -539,19 +567,19 @@
   .shop-ai-product-modal{
     width: 100%;
     max-width: 580px;
-    background: rgba(255,255,255,0.92);
-    backdrop-filter: blur(20px) saturate(180%);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    background: rgba(255,255,255,0.95);
+    backdrop-filter: blur(14px) saturate(130%);
+    -webkit-backdrop-filter: blur(14px) saturate(130%);
     border-radius: 24px;
-    box-shadow: 0 32px 80px rgba(0,0,0,0.18), 0 0 0 1px rgba(255,255,255,0.3) inset;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.14), 0 0 0 1px rgba(255,255,255,0.2) inset;
     display: flex;
     gap: 20px;
     padding: 48px 24px 24px;
     position: relative;
-    transform: translateY(20px) scale(0.96);
-    transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    transform: translateY(16px) scale(0.97);
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease;
     margin: 0 16px;
-    border: 1px solid rgba(255,255,255,0.4);
+    border: 1px solid rgba(255,255,255,0.3);
   }
 
   .shop-ai-product-modal-overlay.active .shop-ai-product-modal{
@@ -634,16 +662,17 @@
     align-items: center;
     justify-content: center;
     gap: 6px;
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease;
   }
 
   .shop-ai-product-modal-primary:hover{
     transform: translateY(-2px);
-    box-shadow: 0 8px 24px rgba(255,157,92,0.35);
+    box-shadow: 0 6px 20px rgba(255,157,92,0.3);
   }
 
   .shop-ai-product-modal-primary:active{
-    transform: translateY(0);
+    transform: translateY(0) scale(0.97);
+    transition-duration: 0.1s;
   }
 
   .shop-ai-product-modal-secondary{
@@ -680,12 +709,16 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: background 0.15s ease, transform 0.15s ease;
+    transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .shop-ai-product-modal-close:hover{
     background: rgba(0,0,0,0.06);
-    transform: scale(1.1);
+    transform: scale(1.08);
+  }
+
+  .shop-ai-product-modal-close:active{
+    transform: scale(0.94);
   }
 
   .shop-ai-product-modal-close svg{
@@ -770,16 +803,16 @@
     align-items: flex-end;
     gap: 8px;
     padding: 10px 10px 10px 18px;
-    background: rgba(255,255,255,0.9);
-    border: 1px solid rgba(0,0,0,0.08);
+    background: rgba(255,255,255,0.92);
+    border: 1px solid rgba(0,0,0,0.07);
     border-radius: 24px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-    transition: border-color 0.25s ease, box-shadow 0.25s ease;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.03);
+    transition: border-color 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .shop-ai-input-wrapper:focus-within{
-    border-color: rgba(255,157,92,0.4);
-    box-shadow: 0 2px 12px rgba(255,157,92,0.1), 0 0 0 3px rgba(255,157,92,0.06);
+    border-color: rgba(255,157,92,0.35);
+    box-shadow: 0 2px 10px rgba(255,157,92,0.08), 0 0 0 3px rgba(255,157,92,0.05);
   }
 
   .shop-ai-textarea{
@@ -812,7 +845,7 @@
     width: 36px;
     height: 36px;
     min-width: 36px;
-    border-radius: 12px;
+    border-radius: 50%;
     background: var(--shop-ai-gradient);
     border: none;
     color: white;
@@ -821,9 +854,9 @@
     justify-content: center;
     cursor: pointer;
     transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-    opacity: 0.35;
+    opacity: 0.3;
     pointer-events: none;
-    transform: scale(0.9);
+    transform: scale(0.85);
   }
 
   .shop-ai-send-btn.active{
@@ -833,12 +866,13 @@
   }
 
   .shop-ai-send-btn:hover{
-    transform: scale(1.08);
-    box-shadow: 0 4px 16px rgba(255,157,92,0.4);
+    transform: translateY(-1px) scale(1.06);
+    box-shadow: 0 4px 14px rgba(255,157,92,0.35);
   }
 
   .shop-ai-send-btn:active{
-    transform: scale(0.95);
+    transform: scale(0.92);
+    transition-duration: 0.1s;
   }
 
   .shop-ai-send-btn svg{
@@ -869,16 +903,16 @@
   }
   
   .shop-ai-email-popup{
-    background: rgba(255,255,255,0.94);
-    backdrop-filter: blur(20px) saturate(180%);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    background: rgba(255,255,255,0.96);
+    backdrop-filter: blur(14px) saturate(130%);
+    -webkit-backdrop-filter: blur(14px) saturate(130%);
     border-radius: 24px;
     padding: 36px 32px;
     max-width: 420px;
     width: 90%;
-    box-shadow: 0 24px 80px rgba(0,0,0,0.14), 0 0 0 1px rgba(255,255,255,0.3) inset;
-    border: 1px solid rgba(255,255,255,0.4);
-    animation: popupSlide 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.12), 0 0 0 1px rgba(255,255,255,0.2) inset;
+    border: 1px solid rgba(255,255,255,0.3);
+    animation: popupSlide 0.3s cubic-bezier(0.16, 1, 0.3, 1);
     text-align: center;
   }
   
@@ -963,13 +997,18 @@
     font-size: 16px;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     margin-bottom: 12px;
   }
-  
+
   .shop-ai-email-submit:hover{
     transform: translateY(-2px);
     box-shadow: 0 6px 20px rgba(255,157,92,0.3);
+  }
+
+  .shop-ai-email-submit:active{
+    transform: translateY(0) scale(0.98);
+    transition-duration: 0.1s;
   }
   
   .shop-ai-email-skip{
@@ -997,7 +1036,7 @@
     display: flex;
     flex-direction: column;
     transform: translateX(100%);
-    transition: transform 0.3s ease;
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   }
   
   .shop-ai-history-panel.active{
@@ -1283,9 +1322,9 @@
           rows="1"
         ></textarea>
         <button class="shop-ai-send-btn" id="shop-ai-send-btn" aria-label="Send">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M22 2L11 13"/>
-            <path d="M22 2L15 22L11 13L2 9L22 2Z"/>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 19V5"/>
+            <path d="M5 12l7-7 7 7"/>
           </svg>
         </button>
       </div>

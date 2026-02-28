@@ -441,13 +441,24 @@ async function handleChatSession({
 
   // ✅ Process and send products to frontend
   if (toolName === "search_shop_catalog" && !toolUseResponse.error) {
+    const searchQuery = toolArgs?.query || toolArgs?.searchQuery || JSON.stringify(toolArgs);
     const products = toolService.processProductSearchResult(toolUseResponse, shopDomain);
-    
+
     if (products && products.length > 0) {
+      console.log(`[Search] ${products.length} results for: "${searchQuery}"`);
       stream.sendMessage({
         type: "product_results",
         products: products
       });
+    } else {
+      // Zero results — inject retry hint so Claude retries with broader query
+      console.log(`[Search] Zero results for: "${searchQuery}" — injecting retry hint`);
+      const retryHint = JSON.stringify({
+        products: [],
+        total_count: 0,
+        _system_hint: "IMPORTANT: Zero products found for this query. You MUST immediately retry with a simpler, broader search query. Remove all technical specifications, material details, voltage ratings, category prefixes, and adjectives. Use ONLY the core product name or brand name. For example: if you searched 'ABB ACS580 variable frequency drive 3-phase 480V', retry with just 'ACS580'. If you searched 'Schneider 100A MCB circuit breaker', retry with 'Schneider MCB'. Try at least one more search before telling the user no results were found."
+      });
+      toolUseResponse.content = [{ type: "text", text: retryHint }];
     }
   }
 

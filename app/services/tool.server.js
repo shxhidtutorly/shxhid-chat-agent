@@ -66,11 +66,12 @@ export function createToolService() {
       }
 
       if (!responseData?.products || !Array.isArray(responseData.products)) {
-        console.log('[ToolService] No products array in response');
+        console.log('[ToolService] No products array in response data:', Object.keys(responseData || {}));
         return [];
       }
 
-      console.log(`[ToolService] Processing ${responseData.products.length} products for ${shopDomain}`);
+      const resultCount = responseData.products.length;
+      console.log(`[ToolService] Search returned ${resultCount} products for ${shopDomain}`);
 
       const fixedProducts = responseData.products.map((p) => {
         const rawImageUrl = p.image_url || p.featuredImage?.url || '';

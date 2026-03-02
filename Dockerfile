@@ -27,9 +27,8 @@ RUN npm run build
 # Expose port (Railway uses PORT env variable, default 8080)
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:8080/', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"
+# Railway handles health checks via healthcheckPath in railway.json.
+# Do NOT add Docker HEALTHCHECK — it conflicts with Railway's orchestrator.
 
 # Start command: Run migrations then start server
 CMD npx prisma migrate deploy && npm run docker-start

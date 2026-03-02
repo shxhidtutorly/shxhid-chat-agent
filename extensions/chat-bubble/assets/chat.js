@@ -317,8 +317,8 @@
 
       try {
         const apiUrl = window.shopChatConfig?.apiUrl;
-        if (!apiUrl || apiUrl === '/chat') {
-          throw new Error('Chat API URL not configured. Set Backend API URL in theme editor.');
+        if (!apiUrl) {
+          throw new Error('Chat API URL not configured. Check theme extension settings.');
         }
 
         // Send to backend

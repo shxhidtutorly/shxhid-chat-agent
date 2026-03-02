@@ -1681,14 +1681,33 @@
 <script src="{{ 'chat.js' | asset_url }}" defer></script>
 
 <script>
-  window.shopChatConfig = {
-    apiUrl: '{{ block.settings.backend_url | default: "https://shxhid-chat-agent-production.up.railway.app" }}/chat',
-    leadsUrl: '{{ block.settings.backend_url | default: "https://shxhid-chat-agent-production.up.railway.app" }}/leads',    cartUrl: '{{ block.settings.backend_url | default: "" }}/api/cart',
-    shopDomain: '{{ shop.permanent_domain }}',
-    shopId: '{{ shop.id }}',
-    promptType: 'creativeAutomationAssistant',
-    welcomeMessage: '{{ block.settings.welcome_message }}'
-  };
+  (function() {
+    var backend = '{{ block.settings.backend_url | default: "" }}';
+    // Use Shopify app proxy by default (same-origin, no DNS issues).
+    // Only use direct backend URL if explicitly set in theme editor.
+    if (backend && backend !== 'https://shxhid-chat-agent-production.up.railway.app') {
+      window.shopChatConfig = {
+        apiUrl: backend + '/chat',
+        leadsUrl: backend + '/leads',
+        cartUrl: backend + '/api/cart',
+        shopDomain: '{{ shop.permanent_domain }}',
+        shopId: '{{ shop.id }}',
+        promptType: 'creativeAutomationAssistant',
+        welcomeMessage: '{{ block.settings.welcome_message }}'
+      };
+    } else {
+      // App proxy: /apps/shop-chat/* → Railway backend (server-side DNS)
+      window.shopChatConfig = {
+        apiUrl: '/apps/shop-chat/chat',
+        leadsUrl: '/apps/shop-chat/leads',
+        cartUrl: '/apps/shop-chat/api/cart',
+        shopDomain: '{{ shop.permanent_domain }}',
+        shopId: '{{ shop.id }}',
+        promptType: 'creativeAutomationAssistant',
+        welcomeMessage: '{{ block.settings.welcome_message }}'
+      };
+    }
+  })();
 </script>
 
 {% schema %}
@@ -1696,7 +1715,7 @@
   "name": "AI Chat Assistant",
   "target": "body",
   "settings": [
-    {"type":"text","id":"backend_url","label":"Backend API URL","default":"https://shxhid-chat-agent-production.up.railway.app","info":"Direct URL to the Railway backend. Required for SSE streaming."},
+    {"type":"text","id":"backend_url","label":"Backend API URL","default":"","info":"Leave empty to use Shopify app proxy (recommended). Only set for custom/staging backend URL."},
     {"type":"text","id":"chat_title","label":"Chat Title","default":"AI Assistant"},
     {"type":"text","id":"welcome_message","label":"Welcome Message","default":"Hi! How can I help you today?"}
   ]

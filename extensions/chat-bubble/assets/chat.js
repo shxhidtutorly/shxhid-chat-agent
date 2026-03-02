@@ -1,6 +1,5 @@
 /**
  * Shopify Chat Agent - Production Ready
- * Features:
  * - Product carousel with click-to-open modal
  * - Auto-expand textarea with smooth placeholder fade
  * - Chat history with conversation loading

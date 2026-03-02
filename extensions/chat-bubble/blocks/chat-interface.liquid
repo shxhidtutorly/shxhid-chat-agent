@@ -1122,6 +1122,8 @@
   /* ============================================
      MOBILE RESPONSIVE
      ============================================ */
+
+  /* ---- Tablet (768px) ---- */
   @media (max-width: 768px){
     .shop-ai-modal{
       width: 100%;
@@ -1142,10 +1144,23 @@
     }
 
     .shop-ai-header{
-      padding-top: max(20px, env(safe-area-inset-top));
+      padding: max(16px, env(safe-area-inset-top)) 16px 14px;
     }
 
-    /* Carousel cards smaller on mobile */
+    .shop-ai-messages{
+      padding: 16px;
+      gap: 12px;
+    }
+
+    .shop-ai-input-area{
+      padding: 10px 12px max(12px, env(safe-area-inset-bottom));
+    }
+
+    .shop-ai-input-wrapper{
+      padding: 8px 8px 8px 14px;
+    }
+
+    /* Carousel cards smaller on tablet */
     .shop-ai-product-card{
       flex: 0 0 130px;
     }
@@ -1154,25 +1169,320 @@
       height: 130px;
     }
 
-    /* Product modal stacks vertically on mobile */
+    /* Product modal stacks vertically */
     .shop-ai-product-modal{
       flex-direction: column;
       max-width: 100%;
       margin: 0 12px;
       padding: 44px 16px 16px;
       gap: 16px;
+      max-height: 85vh;
+      overflow-y: auto;
     }
 
     .shop-ai-product-modal-left{
       flex: 0 0 auto;
       width: 100%;
-      max-height: 240px;
+      max-height: 220px;
       aspect-ratio: auto;
     }
 
     .shop-ai-product-modal-right{
       width: 100%;
     }
+
+    .shop-ai-product-modal-actions{
+      flex-direction: column;
+    }
+
+    .shop-ai-product-modal-secondary{
+      text-align: center;
+    }
+
+    /* Floating buttons */
+    .shop-ai-floating-group{
+      bottom: 16px;
+      right: 16px;
+      gap: 8px;
+    }
+
+    .shop-ai-pill-btn{
+      padding: 12px 18px;
+      font-size: 14px;
+    }
+
+    /* Message bubbles */
+    .shop-ai-message.user{
+      max-width: 85%;
+    }
+
+    .shop-ai-message.assistant{
+      max-width: 92%;
+    }
+
+    /* Suggestions */
+    .shop-ai-sugg-item{
+      padding: 12px 14px;
+      font-size: 13px;
+    }
+
+    .shop-ai-sugg-item:hover{
+      transform: none;
+    }
+
+    /* Email popup */
+    .shop-ai-email-popup{
+      padding: 28px 20px;
+      width: 94%;
+    }
+
+    .shop-ai-email-title{
+      font-size: 20px;
+    }
+  }
+
+  /* ---- Small phone (480px) ---- */
+  @media (max-width: 480px){
+    .shop-ai-header h3{
+      font-size: 16px;
+    }
+
+    .shop-ai-messages{
+      padding: 12px;
+      gap: 10px;
+    }
+
+    .shop-ai-input-area{
+      padding: 8px 8px max(10px, env(safe-area-inset-bottom));
+    }
+
+    .shop-ai-input-wrapper{
+      padding: 6px 6px 6px 12px;
+      border-radius: 20px;
+    }
+
+    .shop-ai-textarea{
+      font-size: 14px;
+      min-height: 22px;
+    }
+
+    .shop-ai-send-btn{
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+    }
+
+    .shop-ai-send-btn svg{
+      width: 16px;
+      height: 16px;
+    }
+
+    /* Product carousel */
+    .shop-ai-product-grid{
+      gap: 8px;
+      padding: 6px 1px 10px;
+    }
+
+    .shop-ai-product-card{
+      flex: 0 0 120px;
+    }
+
+    .shop-ai-product-image{
+      height: 110px;
+    }
+
+    .shop-ai-product-info{
+      padding: 8px;
+    }
+
+    .shop-ai-product-title{
+      font-size: 12px;
+    }
+
+    .shop-ai-product-price{
+      font-size: 12px;
+    }
+
+    /* Product modal full-width on small phones */
+    .shop-ai-product-modal{
+      margin: 0 8px;
+      padding: 40px 14px 14px;
+      border-radius: 18px;
+      gap: 12px;
+    }
+
+    .shop-ai-product-modal-left{
+      max-height: 180px;
+      border-radius: 10px;
+    }
+
+    .shop-ai-product-modal-title{
+      font-size: 16px;
+    }
+
+    .shop-ai-product-modal-price{
+      font-size: 16px;
+    }
+
+    .shop-ai-product-modal-primary,
+    .shop-ai-product-modal-secondary{
+      padding: 10px 16px;
+      font-size: 13px;
+    }
+
+    /* Message bubbles */
+    .shop-ai-message.user .shop-ai-bubble{
+      padding: 8px 12px;
+      font-size: 14px;
+    }
+
+    .shop-ai-message.assistant .shop-ai-bubble{
+      padding: 12px 14px;
+      font-size: 14px;
+    }
+
+    /* Thinking */
+    .shop-ai-thinking-container{
+      padding: 10px 14px;
+    }
+
+    .shop-ai-thinking-text{
+      font-size: 12px;
+    }
+
+    /* Suggestion items */
+    .shop-ai-sugg-item{
+      padding: 10px 12px;
+      font-size: 12px;
+      gap: 8px;
+    }
+
+    .shop-ai-sugg-item svg{
+      width: 16px;
+      height: 16px;
+    }
+
+    /* Floating launcher smaller */
+    .shop-ai-floating-group{
+      bottom: 12px;
+      right: 12px;
+    }
+
+    .shop-ai-pill-btn{
+      padding: 10px 14px;
+      font-size: 13px;
+      gap: 6px;
+    }
+
+    .shop-ai-pill-btn svg{
+      width: 16px;
+      height: 16px;
+    }
+
+    /* Email popup compact */
+    .shop-ai-email-popup{
+      padding: 24px 16px;
+      border-radius: 18px;
+    }
+
+    .shop-ai-email-icon{
+      width: 52px;
+      height: 52px;
+      margin-bottom: 16px;
+    }
+
+    .shop-ai-email-icon svg{
+      width: 24px;
+      height: 24px;
+    }
+
+    .shop-ai-email-title{
+      font-size: 18px;
+    }
+
+    .shop-ai-email-subtitle{
+      font-size: 13px;
+      margin-bottom: 18px;
+    }
+
+    /* Menu dropdown */
+    .shop-ai-menu-dropdown{
+      min-width: 180px;
+    }
+
+    .shop-ai-menu-item{
+      padding: 12px 14px;
+      font-size: 13px;
+    }
+
+    /* History panel */
+    .shop-ai-history-header{
+      padding: 16px;
+    }
+
+    .shop-ai-history-header h3{
+      font-size: 16px;
+    }
+
+    .shop-ai-history-list{
+      padding: 12px;
+    }
+
+    .shop-ai-history-item{
+      padding: 12px;
+      margin-bottom: 8px;
+    }
+  }
+
+  /* ---- Extra small phone (320px) ---- */
+  @media (max-width: 320px){
+    .shop-ai-header h3{
+      font-size: 14px;
+    }
+
+    .shop-ai-icon-btn{
+      width: 34px;
+      height: 34px;
+    }
+
+    .shop-ai-product-card{
+      flex: 0 0 100px;
+    }
+
+    .shop-ai-product-image{
+      height: 90px;
+    }
+
+    .shop-ai-product-info{
+      padding: 6px;
+    }
+
+    .shop-ai-product-title{
+      font-size: 11px;
+    }
+
+    .shop-ai-product-price{
+      font-size: 11px;
+    }
+
+    .shop-ai-pill-btn{
+      padding: 8px 12px;
+      font-size: 12px;
+    }
+  }
+
+  /* ---- Prevent overflow on all sizes ---- */
+  .shop-ai-reset,
+  .shop-ai-modal,
+  .shop-ai-messages,
+  .shop-ai-input-area{
+    overflow-x: hidden;
+  }
+
+  .shop-ai-bubble{
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    word-break: break-word;
   }
 </style>
 

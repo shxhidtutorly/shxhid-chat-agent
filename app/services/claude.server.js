@@ -1,5 +1,8 @@
 // app/services/claude.server.js
 import Anthropic from "@anthropic-ai/sdk";
+import { readFileSync } from "fs";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 
 export function createClaudeService() {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -97,6 +100,21 @@ export function createClaudeService() {
 }
 
 function getSystemPrompt(promptType) {
+  // Try loading from prompts.json first — allows prompt updates without code deploy
+  try {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const promptsPath = join(__dirname, '..', 'prompts', 'prompts.json');
+    const promptsData = JSON.parse(readFileSync(promptsPath, 'utf-8'));
+    const promptEntry = promptsData.systemPrompts?.[promptType];
+    if (promptEntry?.content) {
+      console.log(`[Prompt] Loaded "${promptType}" from prompts.json (v${promptEntry.version || '?'})`);
+      return promptEntry.content;
+    }
+  } catch (e) {
+    console.warn('[Prompt] Could not load prompts.json, using hardcoded fallback:', e.message);
+  }
+
+  // Hardcoded fallback — used if prompts.json is missing or doesn't have the requested type
   const prompts = {
     // Primary Sales & Support Assistant
     creativeAutomationAssistant: `You are the official AI sales & support assistant for Creative Industrial Automation L.L.C (Creative Automation). Speak with confident, professional, and technically accurate language appropriate for technical buyers (engineers, procurement, maintenance). Your role is to help visitors discover products, confirm SKUs, show images and pricing, create carts/checkouts, provide shipping and returns information, and route complex or commercial enquiries to human experts.
@@ -137,13 +155,15 @@ Product card format (strict):
 
 SEARCH STRATEGY (CRITICAL — follow this exactly):
 - ALWAYS search before asking clarifying questions. Never ask "which product?" without searching first.
+- SKU-FIRST: If the query contains an SKU or model number (e.g. "3NA7836", "6SL3220-1YE34-0UF0", "5SL4363-8"), search that exact string first.
 - Use BROAD, SHORT search queries. Strip technical specs, voltage, material, phase count, category prefixes.
   Example: User says "ABB ACS580 variable frequency drive 3-phase 480V" → search "ABB ACS580"
   Example: User says "Schneider 100A MCB circuit breaker" → search "Schneider MCB 100A"
   Example: User says "pneumatic cylinder double acting 50mm bore" → search "pneumatic cylinder"
+- DIMENSION QUERIES: When user specifies dimensions (e.g. "77mm length, 30mm width"), search the product TYPE first (e.g. "tag fuses"), then use get_product_details to verify the specific variant matches the dimensions. Do NOT include dimensions in the search query — they cause zero results.
 - If search returns ZERO results, IMMEDIATELY retry with an even simpler query (just brand or product type).
 - NEVER include category words like "industrial", "automation", "electrical" in search — they reduce accuracy.
-- For SKU/part-number queries, search the exact SKU string first (e.g. "E12584"), then broaden if needed.
+- VARIANT VERIFICATION: After finding products, if the user requested specific dimensions or specs, verify variant titles/descriptions match before recommending. Do NOT mix different SKU families or return incorrect variants.
 
 Tool & API best-practices (developer-facing instructions for inside-system prompts):
 - Use \`search_shop_catalog\` or backend product-search tool for all product lookups; prefer exact SKU queries first.

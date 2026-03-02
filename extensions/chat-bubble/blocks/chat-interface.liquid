@@ -478,13 +478,16 @@
 
   .shop-ai-product-grid{
     display: flex;
+    flex-wrap: nowrap;
     gap: 12px;
     overflow-x: auto;
+    overflow-y: hidden;
     scroll-snap-type: x mandatory;
     -webkit-overflow-scrolling: touch;
     padding: 8px 2px 12px;
     scrollbar-width: none;
     animation: fadeInUp 0.35s ease;
+    min-width: 0;
   }
 
   .shop-ai-product-grid::-webkit-scrollbar{
@@ -493,6 +496,7 @@
 
   .shop-ai-product-card{
     flex: 0 0 148px;
+    min-width: 0;
     scroll-snap-align: start;
     background: white;
     border: 1px solid var(--shop-ai-border);
@@ -519,10 +523,13 @@
     object-fit: cover;
     background: #f5f5f5;
     display: block;
+    flex-shrink: 0;
   }
 
   .shop-ai-product-info{
     padding: 10px;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .shop-ai-product-title{
@@ -1160,7 +1167,12 @@
       padding: 8px 8px 8px 14px;
     }
 
-    /* Carousel cards smaller on tablet */
+    /* Carousel always horizontal on mobile */
+    .shop-ai-product-grid{
+      gap: 10px;
+      padding: 6px 2px 10px;
+    }
+
     .shop-ai-product-card{
       flex: 0 0 130px;
     }
@@ -1474,15 +1486,24 @@
   /* ---- Prevent overflow on all sizes ---- */
   .shop-ai-reset,
   .shop-ai-modal,
-  .shop-ai-messages,
   .shop-ai-input-area{
     overflow-x: hidden;
   }
+
+  /* Messages area: DO NOT set overflow-x: hidden here — it clips
+     the product carousel's horizontal scroll. Bubble word-break
+     handles text overflow instead. */
 
   .shop-ai-bubble{
     word-wrap: break-word;
     overflow-wrap: break-word;
     word-break: break-word;
+    max-width: 100%;
+  }
+
+  .shop-ai-message{
+    max-width: 100%;
+    min-width: 0;
   }
 </style>
 

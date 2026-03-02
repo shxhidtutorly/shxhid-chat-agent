@@ -442,7 +442,7 @@ async function handleChatSession({
   // ✅ Process and send products to frontend
   if (toolName === "search_shop_catalog" && !toolUseResponse.error) {
     const searchQuery = toolArgs?.query || toolArgs?.searchQuery || JSON.stringify(toolArgs);
-    const products = toolService.processProductSearchResult(toolUseResponse, shopDomain);
+    const products = toolService.processProductSearchResult(toolUseResponse, shopDomain, userMessage, searchQuery);
 
     if (products && products.length > 0) {
       console.log(`[Search] ${products.length} results for: "${searchQuery}"`);

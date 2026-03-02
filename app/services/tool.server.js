@@ -1,7 +1,91 @@
 /**
  * Tool Service
  * Processes MCP tool responses (product search, cart updates)
+ * Includes variant-level spec matching and dimension parsing
  */
+
+/**
+ * Extract specs (dimensions, SKU patterns) from a query string.
+ * Used to filter/rank search results by relevance.
+ */
+function extractQuerySpecs(query) {
+  if (!query || typeof query !== 'string') return { dimensions: [], skuPatterns: [] };
+
+  // Extract dimensions like "77mm", "30mm", "239 mm", "200mm", "50 mm"
+  const dimRegex = /(\d+(?:\.\d+)?)\s*(?:mm|cm)\b/gi;
+  const dimensions = [];
+  let m;
+  while ((m = dimRegex.exec(query)) !== null) {
+    dimensions.push(parseFloat(m[1]));
+  }
+
+  // Extract SKU-like patterns (alphanumeric with hyphens/dots, 4+ chars, must have digit+letter)
+  const skuRegex = /\b([A-Z0-9][A-Z0-9\-\.]{2,}[A-Z0-9])\b/gi;
+  const skuPatterns = [];
+  while ((m = skuRegex.exec(query)) !== null) {
+    const token = m[1].toUpperCase();
+    if (/\d/.test(token) && /[A-Z]/i.test(token)) {
+      skuPatterns.push(token);
+    }
+  }
+
+  return { dimensions, skuPatterns };
+}
+
+/**
+ * Score a product by how well it matches extracted specs.
+ * Higher score = better match. 0 = no spec match (neutral).
+ */
+function scoreProductBySpecs(product, specs) {
+  if (!specs.dimensions.length && !specs.skuPatterns.length) return 0;
+
+  let score = 0;
+
+  // Build searchable text from all product data
+  const textParts = [
+    product.title || '',
+    product.description || '',
+    product.sku || '',
+  ];
+
+  // Include variant data
+  if (Array.isArray(product.variants)) {
+    for (const v of product.variants) {
+      textParts.push(v.title || '', v.sku || '');
+    }
+  }
+
+  // Include tags
+  if (Array.isArray(product.tags)) {
+    textParts.push(...product.tags);
+  }
+
+  const searchText = textParts.join(' ');
+  const searchTextUpper = searchText.toUpperCase();
+
+  // SKU matching — highest priority
+  for (const sku of specs.skuPatterns) {
+    if (searchTextUpper.includes(sku)) {
+      score += 100;
+    } else if (searchTextUpper.includes(sku.replace(/[-\.]/g, ''))) {
+      score += 80; // Match without separators
+    }
+  }
+
+  // Dimension matching
+  for (const dim of specs.dimensions) {
+    const dimStr = String(dim);
+    const searchLower = searchText.toLowerCase();
+    // Check "77mm" or "77 mm"
+    if (searchLower.includes(dimStr + 'mm') || searchLower.includes(dimStr + ' mm')) {
+      score += 25;
+    } else if (searchText.includes(dimStr)) {
+      score += 10;
+    }
+  }
+
+  return score;
+}
 
 export function createToolService() {
   const MAX_PRODUCTS_TO_DISPLAY = 8;
@@ -47,8 +131,13 @@ export function createToolService() {
   /**
    * Process product search results from MCP tool response.
    * Preserves product_id, variant_id, and builds safe URLs.
+   *
+   * @param {Object} toolUseResponse - Raw MCP tool response
+   * @param {string} shopDomain - Shop domain for URL building
+   * @param {string} [userQuery] - Original user message for spec extraction
+   * @param {string} [searchQuery] - The search query Claude used
    */
-  const processProductSearchResult = (toolUseResponse, shopDomain) => {
+  const processProductSearchResult = (toolUseResponse, shopDomain, userQuery, searchQuery) => {
     try {
       if (!toolUseResponse?.content || toolUseResponse.content.length === 0) {
         console.log('[ToolService] No content in tool response');
@@ -72,6 +161,15 @@ export function createToolService() {
 
       const resultCount = responseData.products.length;
       console.log(`[ToolService] Search returned ${resultCount} products for ${shopDomain}`);
+
+      // Extract specs from user query for filtering
+      const queryForSpecs = userQuery || searchQuery || '';
+      const specs = extractQuerySpecs(queryForSpecs);
+      const hasSpecs = specs.dimensions.length > 0 || specs.skuPatterns.length > 0;
+
+      if (hasSpecs) {
+        console.log(`[ToolService] Extracted specs — dimensions: [${specs.dimensions.join(', ')}], SKUs: [${specs.skuPatterns.join(', ')}]`);
+      }
 
       const fixedProducts = responseData.products.map((p) => {
         const rawImageUrl = p.image_url || p.featuredImage?.url || '';
@@ -98,6 +196,9 @@ export function createToolService() {
           }
         }
 
+        // Score product by spec match
+        const specScore = hasSpecs ? scoreProductBySpecs(p, specs) : 0;
+
         return {
           id: p.product_id || p.id,
           title: p.title || 'Untitled Product',
@@ -109,16 +210,37 @@ export function createToolService() {
           variant_id: variantIdRaw,
           merchandise_id: variantIdRaw,
           sku: p.sku || firstVariant?.sku || null,
+          _specScore: specScore,
         };
       });
 
-      console.log(`[ToolService] Processed ${fixedProducts.length} products`);
+      // If specs were extracted, sort by spec score (best matches first)
+      // and filter out zero-score products if there are high-score ones
+      let rankedProducts = fixedProducts;
+      if (hasSpecs) {
+        rankedProducts.sort((a, b) => b._specScore - a._specScore);
+
+        const topScore = rankedProducts[0]?._specScore || 0;
+        if (topScore > 0) {
+          // Keep only products that scored (matched at least one spec)
+          const matched = rankedProducts.filter(p => p._specScore > 0);
+          if (matched.length > 0) {
+            console.log(`[ToolService] Spec filtering: ${matched.length}/${fixedProducts.length} products matched specs (top score: ${topScore})`);
+            rankedProducts = matched;
+          }
+        }
+      }
+
+      // Remove internal scoring field before sending
+      rankedProducts.forEach(p => delete p._specScore);
+
+      console.log(`[ToolService] Returning ${Math.min(rankedProducts.length, MAX_PRODUCTS_TO_DISPLAY)} products`);
 
       // Update tool response content so Claude sees the processed data
-      responseData.products = fixedProducts;
+      responseData.products = rankedProducts;
       toolUseResponse.content[0].text = JSON.stringify(responseData);
 
-      return fixedProducts.slice(0, MAX_PRODUCTS_TO_DISPLAY);
+      return rankedProducts.slice(0, MAX_PRODUCTS_TO_DISPLAY);
     } catch (error) {
       console.error('[ToolService] Error processing product search results:', error);
       return [];

@@ -23,3 +23,15 @@
   display: grid;
   gap: 2rem;
 }
+
+.glowText {
+  pointer-events: none;
+  z-index: 10;
+  margin: 2rem;
+  text-align: center;
+  font-size: clamp(2rem, 6vw, 5rem);
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: -0.05em;
+  color: white;
+}

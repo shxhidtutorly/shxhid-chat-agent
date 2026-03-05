@@ -1,5 +1,6 @@
 import { redirect } from "react-router";
 import styles from "./styles.module.css";
+import { GlowingShadow } from "../../components/ui/glowing-shadow";
 
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
@@ -15,9 +16,13 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>Shop chat agent reference app</h1>
+        <GlowingShadow>
+          <span className={styles.glowText}>
+            Shop Chat Agent
+          </span>
+        </GlowingShadow>
         <p className={styles.text}>
-          A reference app for shop chat agent.
+          AI-powered shopping assistant for your store.
         </p>
       </div>
     </div>

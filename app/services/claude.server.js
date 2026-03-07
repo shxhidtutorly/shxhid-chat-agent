@@ -22,7 +22,7 @@ export function createClaudeService() {
         const systemPrompt = getSystemPrompt(promptType);
 
         const apiParams = {
-          model: "claude-haiku-4-5",
+          model: "claude-haiku-4-5-20251001",
           max_tokens: 4096,
           system: systemPrompt,
           messages: messages,
@@ -32,6 +32,8 @@ export function createClaudeService() {
         if (tools && tools.length > 0) {
           apiParams.tools = tools;
         }
+
+        console.log(`[Claude] Calling API | model=${apiParams.model} | messages=${messages.length} | tools=${(tools || []).length}`);
 
         const stream = await client.messages.stream(apiParams);
 
@@ -50,7 +52,7 @@ export function createClaudeService() {
         });
 
         stream.on("message_delta", (event) => {
-          if (event.delta.stop_reason) {
+          if (event.delta?.stop_reason) {
             currentMessage.stop_reason = event.delta.stop_reason;
           }
         });
@@ -60,11 +62,13 @@ export function createClaudeService() {
         currentMessage.content = finalMessage.content;
         currentMessage.stop_reason = finalMessage.stop_reason;
 
+        console.log(`[Claude] Response received | stop_reason=${currentMessage.stop_reason} | blocks=${Array.isArray(finalMessage.content) ? finalMessage.content.length : 1}`);
+
         if (onMessage) {
           await onMessage(currentMessage);
         }
 
-        const toolUses = finalMessage.content.filter((c) => c.type === "tool_use");
+        const toolUses = (finalMessage.content || []).filter((c) => c.type === "tool_use");
 
         for (const toolUse of toolUses) {
           if (onToolUse) {
@@ -75,7 +79,9 @@ export function createClaudeService() {
         return currentMessage;
 
       } catch (error) {
-        console.error("Claude API Error:", error);
+        console.error("[Claude] API Error:", error.message);
+        console.error("[Claude] Status:", error.status || "N/A");
+        console.error("[Claude] Stack:", error.stack);
 
         if (error.message?.includes("api_key") || error.status === 401) {
           throw new Error("Invalid Anthropic API key. Please check your ANTHROPIC_API_KEY environment variable.");

@@ -430,7 +430,11 @@
       } catch (err) {
         this.removeThinking();
         console.error('❌ Chat error:', err);
-        this.addMessage('Sorry, there was an error. Please try again.', 'assistant');
+        if (err.message && err.message.includes('Failed to fetch')) {
+          this.addMessage('Unable to reach the server. The backend may be offline. Please try again later.', 'assistant');
+        } else {
+          this.addMessage('Sorry, there was an error. Please try again.', 'assistant');
+        }
       }
     },
 

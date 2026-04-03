@@ -758,14 +758,12 @@
       this.state.lastCheckoutUrlShown = null;
       this.state.conversationId = null;
       this.state.isFirstMessage = true;
-      this.state.emailPopupShown = false;
       this.state.productDataMap.clear();
 
       sessionStorage.removeItem('shopAiConversationId');
       sessionStorage.removeItem('shopAiCartId');
       sessionStorage.removeItem('shopAiCheckoutUrl');
       sessionStorage.removeItem('shopAiAddedByProductId');
-      sessionStorage.removeItem('shopAiEmailPopupShown');
 
       if (this.elements.messages) {
         this.elements.messages.innerHTML = '';

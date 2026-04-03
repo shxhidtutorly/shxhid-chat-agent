@@ -49,26 +49,40 @@
     gap: 6px;
     padding: 8px 16px;
     border-radius: 999px;
-    background: var(--shop-ai-gradient);
-    color: #fff !important;
+    background: rgba(255,157,92,0.13);
+    color: var(--shop-ai-primary-dark) !important;
     font-size: 13px;
     font-weight: 600;
     font-family: var(--shop-ai-font);
-    border: none;
+    border: 1px solid rgba(255,157,92,0.2);
     cursor: pointer;
     white-space: nowrap;
     line-height: 1;
     letter-spacing: 0.01em;
-    transition: transform 0.2s cubic-bezier(0.16,1,0.3,1), box-shadow 0.2s ease, opacity 0.2s ease;
-    box-shadow: 0 2px 8px rgba(255,133,52,0.25);
+    transition: transform 0.2s cubic-bezier(0.16,1,0.3,1), box-shadow 0.2s ease, background 0.2s ease, opacity 0.2s ease;
+    box-shadow: 0 2px 8px rgba(255,133,52,0.1);
     vertical-align: middle;
     text-decoration: none !important;
     -webkit-font-smoothing: antialiased;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .shop-ai-header-trigger::after{
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(110deg, transparent 25%, rgba(255,157,92,0.18) 37%, transparent 63%);
+    background-size: 200% 100%;
+    animation: shimmer 3s ease-in-out infinite;
+    pointer-events: none;
   }
 
   .shop-ai-header-trigger:hover{
     transform: translateY(-1px);
-    box-shadow: 0 4px 16px rgba(255,133,52,0.35);
+    background: rgba(255,157,92,0.22);
+    box-shadow: 0 4px 16px rgba(255,133,52,0.18);
   }
 
   .shop-ai-header-trigger:active{
@@ -80,6 +94,8 @@
     width: 16px;
     height: 16px;
     flex-shrink: 0;
+    fill: var(--shop-ai-primary-dark);
+    color: var(--shop-ai-primary-dark);
   }
 
   /* Wrapper so it sits nicely in Dawn header__icons */
@@ -126,8 +142,9 @@
   .shop-ai-backdrop{
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.35);
-    backdrop-filter: blur(6px);
+    background: rgba(225, 232, 240, 0.35);
+    backdrop-filter: blur(14px) saturate(120%);
+    -webkit-backdrop-filter: blur(14px) saturate(120%);
     z-index: 999998;
     opacity: 0;
     visibility: hidden;
@@ -145,14 +162,14 @@
     left: 50%;
     transform: translate(-50%, -48%) scale(0.96);
     width: 92%;
-    max-width: 720px;
-    height: 75vh;
-    max-height: 90vh;
+    max-width: 860px;
+    height: 82vh;
+    max-height: 92vh;
     background: rgba(255,255,255,0.94);
     backdrop-filter: blur(16px) saturate(140%);
     -webkit-backdrop-filter: blur(16px) saturate(140%);
     border-radius: var(--shop-ai-radius);
-    box-shadow: 0 20px 60px rgba(0,0,0,0.1), 0 0 0 1px rgba(255,255,255,0.2) inset;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.1), 0 0 30px rgba(255,157,92,0.06), 0 0 0 1px rgba(255,255,255,0.2) inset;
     z-index: 999999;
     display: flex;
     flex-direction: column;
@@ -160,7 +177,7 @@
     opacity: 0;
     visibility: hidden;
     transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
-    border: 1px solid rgba(255,255,255,0.35);
+    border: 1.5px solid rgba(255,157,92,0.2);
   }
 
   body.shop-ai-open .shop-ai-modal{
@@ -181,7 +198,64 @@
   }
 
   /* ============================================
-     HEADER - TRANSLUCENT TEXT ON BORDER
+     FLOATING TITLE — OUTSIDE MODAL, ON BORDER
+     ============================================ */
+  .shop-ai-floating-title{
+    position: fixed;
+    left: 50%;
+    top: calc(50% - 41vh - 16px);
+    transform: translateX(-50%) translateY(0);
+    z-index: 1000000;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.35s cubic-bezier(0.16, 1, 0.3, 1) 0.08s, visibility 0.35s ease 0.08s, transform 0.35s cubic-bezier(0.16, 1, 0.3, 1) 0.08s;
+    pointer-events: none;
+    padding: 6px 28px;
+    background: rgba(255,255,255,0.92);
+    border-radius: 999px;
+    border: 1.5px solid rgba(255,157,92,0.2);
+  }
+
+  body.shop-ai-open .shop-ai-floating-title{
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  .shop-ai-floating-title::before{
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 140%;
+    height: 280%;
+    background: radial-gradient(ellipse at center, rgba(255,157,92,0.30) 0%, rgba(255,133,52,0.12) 40%, transparent 70%);
+    filter: blur(18px);
+    pointer-events: none;
+    z-index: -1;
+    animation: glowPulse 3s ease-in-out infinite;
+  }
+
+  @keyframes glowPulse{
+    0%, 100%{ opacity: 0.75; }
+    50%{ opacity: 1; }
+  }
+
+  .shop-ai-floating-title h3{
+    margin: 0;
+    font-size: 20px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #FF9D5C 0%, #FF8534 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: -0.3px;
+    white-space: nowrap;
+  }
+
+  /* ============================================
+     HEADER — ACTION BUTTONS ONLY
      ============================================ */
   .shop-ai-header{
     position: relative;
@@ -190,7 +264,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    min-height: 100px;
+    min-height: 56px;
     border-bottom: 1px solid transparent;
     background: linear-gradient(180deg, rgba(255,157,92,0.03) 0%, rgba(255,255,255,0) 100%);
   }
@@ -211,17 +285,17 @@
     opacity: 0.8;
   }
 
-  .shop-ai-header h3{
+  /* Mobile-only title (hidden on desktop) */
+  .shop-ai-header-title-mobile{
+    display: none;
     margin: 0;
-    font-size: 22px;
+    font-size: 20px;
     font-weight: 700;
     background: linear-gradient(135deg, #FF9D5C 0%, #FF8534 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
-    position: relative;
-    z-index: 2;
-    letter-spacing: -0.5px;
+    letter-spacing: -0.3px;
   }
 
   /* Header actions - minimalist 3-dot menu */
@@ -1162,6 +1236,20 @@
 
   /* ---- Tablet (768px) ---- */
   @media (max-width: 768px){
+    /* Hide floating title on mobile */
+    .shop-ai-floating-title{
+      display: none !important;
+    }
+
+    /* Show mobile title inside header */
+    .shop-ai-header-title-mobile{
+      display: block;
+    }
+
+    .shop-ai-header{
+      min-height: 80px;
+    }
+
     .shop-ai-modal{
       width: 100%;
       height: 100%;
@@ -1509,11 +1597,16 @@
   <!-- Backdrop -->
   <div class="shop-ai-backdrop" id="shop-ai-backdrop"></div>
 
+  <!-- Floating Title (sits on top of modal border) -->
+  <div class="shop-ai-floating-title" id="shop-ai-floating-title">
+    <h3>Hi, how can I help you?</h3>
+  </div>
+
   <!-- Main Modal -->
   <div class="shop-ai-modal" id="shop-ai-modal" role="dialog" aria-modal="true" aria-label="AI Assistant">
     <!-- Header -->
     <div class="shop-ai-header">
-      <h3>Hi, how can I help you?</h3>
+      <h3 class="shop-ai-header-title-mobile">Hi, how can I help you?</h3>
 
       <div class="shop-ai-header-actions">
         <button class="shop-ai-icon-btn shop-ai-menu-btn" id="shop-ai-menu-btn" aria-label="Menu">

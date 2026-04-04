@@ -1,10 +1,12 @@
 // app/routes/chat.jsx
 /**
- * Chat API Route - FIXED VERSION
- * Fixes: 
- * 1. P2025 (Visitor ID errors)
- * 2. invalid_request_error (Tool Use Order/Data Loss)
- * 3. Broken Product URLs & Images (Passes shopDomain to tool processor)
+ * Chat API Route — v2.0
+ *
+ * CHANGES (v2.0):
+ *   - Added automatic server-side search fallback when MCP returns zero products
+ *   - Fallback tries: remove hyphens → first 2 words → first word only
+ *   - Improved retry hint with clearer instructions
+ *   - Original fixes preserved: P2025, invalid_request_error, broken URLs
  */
 
 export async function loader({ request }) {
@@ -221,6 +223,108 @@ async function handleChatRequest(request) {
   }
 }
 
+/* -------------------------------------------------
+   Server-side automatic search fallback
+   When MCP returns zero products, try progressively
+   simpler queries before sending to Claude.
+   ------------------------------------------------- */
+async function tryFallbackSearches(mcpClient, originalQuery) {
+  const fallbackQueries = generateFallbackQueries(originalQuery);
+
+  for (const fallbackQuery of fallbackQueries) {
+    try {
+      console.log(`[Search-Fallback] Trying: "${fallbackQuery}"`);
+      const result = await mcpClient.callStorefrontTool("search_shop_catalog", {
+        query: fallbackQuery,
+        context: "automatic fallback search",
+      });
+
+      // Check if this fallback returned products
+      if (result && !result.error) {
+        let parsed;
+        try {
+          const text = result.content?.[0]?.text;
+          parsed = typeof text === 'string' ? JSON.parse(text) : text;
+        } catch (e) {
+          continue;
+        }
+
+        if (parsed?.products && Array.isArray(parsed.products) && parsed.products.length > 0) {
+          console.log(`[Search-Fallback] SUCCESS: "${fallbackQuery}" returned ${parsed.products.length} products`);
+          return { result, query: fallbackQuery };
+        }
+      }
+    } catch (e) {
+      console.warn(`[Search-Fallback] Error on "${fallbackQuery}":`, e.message);
+    }
+  }
+
+  return null; // All fallbacks failed
+}
+
+/**
+ * Generate progressively simpler fallback queries from the original.
+ */
+function generateFallbackQueries(originalQuery) {
+  if (!originalQuery || typeof originalQuery !== 'string') return [];
+
+  const queries = [];
+  const trimmed = originalQuery.trim();
+
+  // 1. Remove hyphens, dots, slashes (SKU normalization)
+  const noSeparators = trimmed.replace(/[-\.\/]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (noSeparators !== trimmed) {
+    queries.push(noSeparators);
+  }
+
+  // 2. Remove all units and technical specs from the query
+  const noUnits = trimmed
+    .replace(/\d+\s*(?:VDC|VAC|V|mm|cm|inch|A|W|kW|HP)\b/gi, '')
+    .replace(/\b(?:IP\d{2}|AC\d|DC\d|CAT\d[A-Z]?|RJ\d+)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (noUnits && noUnits !== trimmed && noUnits.length >= 3) {
+    queries.push(noUnits);
+  }
+
+  // 3. Split into words and try first 2-3 meaningful words
+  const words = trimmed.split(/\s+/).filter(w => w.length >= 2);
+  if (words.length > 2) {
+    queries.push(words.slice(0, 3).join(' '));
+    queries.push(words.slice(0, 2).join(' '));
+  }
+
+  // 4. Try just the first word (likely the brand or product type)
+  if (words.length > 1 && words[0].length >= 3) {
+    queries.push(words[0]);
+  }
+
+  // 5. If the query looks like a SKU (alphanumeric with separators), try without separators as one token
+  const skuLike = trimmed.replace(/\s+/g, '');
+  if (/^[A-Z0-9\-\.\/]{4,}$/i.test(skuLike) && skuLike !== trimmed) {
+    const noSep = skuLike.replace(/[-\.\/]/g, '');
+    if (!queries.includes(noSep)) {
+      queries.push(noSep);
+    }
+    // Also try first half of the SKU
+    if (skuLike.length >= 6) {
+      const firstHalf = skuLike.substring(0, Math.ceil(skuLike.length / 2));
+      if (firstHalf.length >= 3 && !queries.includes(firstHalf)) {
+        queries.push(firstHalf);
+      }
+    }
+  }
+
+  // Deduplicate and remove the original query (we already tried that)
+  const seen = new Set([trimmed.toLowerCase()]);
+  return queries.filter(q => {
+    const lower = q.toLowerCase();
+    if (seen.has(lower)) return false;
+    seen.add(lower);
+    return true;
+  });
+}
+
 /* ------------------------
   Core chat session
   Handles the conversation flow for Claude API with tool use loop
@@ -425,6 +529,7 @@ async function handleChatSession({
               'update_cart': 'Adding to cart...',
               'get_cart': 'Checking availability...',
               'get_product': 'Looking up product...',
+              'get_product_details': 'Looking up product details...',
             };
             stream.sendMessage({
               type: 'thinking_state',
@@ -460,7 +565,34 @@ async function handleChatSession({
             // Process and send products to frontend
             if (toolName === "search_shop_catalog" && !toolUseResponse.error) {
               const searchQuery = toolArgs?.query || toolArgs?.searchQuery || JSON.stringify(toolArgs);
-              const products = toolService.processProductSearchResult(toolUseResponse, shopDomain, userMessage, searchQuery);
+              let products = toolService.processProductSearchResult(toolUseResponse, shopDomain, userMessage, searchQuery);
+
+              // ─────────────────────────────────────────────
+              // SERVER-SIDE AUTOMATIC FALLBACK (v2.0)
+              // If zero products found, try simpler queries
+              // automatically before asking Claude to retry.
+              // ─────────────────────────────────────────────
+              if ((!products || products.length === 0) && searchQuery) {
+                console.log(`[Search] Zero results for: "${searchQuery}" — trying automatic fallbacks`);
+
+                const fallbackResult = await tryFallbackSearches(mcpClient, searchQuery);
+
+                if (fallbackResult) {
+                  // Re-process the successful fallback result
+                  products = toolService.processProductSearchResult(
+                    fallbackResult.result,
+                    shopDomain,
+                    userMessage,
+                    fallbackResult.query
+                  );
+
+                  // Update the tool response so Claude sees the fallback results
+                  if (products && products.length > 0) {
+                    toolUseResponse = fallbackResult.result;
+                    console.log(`[Search-Fallback] Recovered ${products.length} products via fallback query: "${fallbackResult.query}"`);
+                  }
+                }
+              }
 
               if (products && products.length > 0) {
                 console.log(`[Search] ${products.length} results for: "${searchQuery}"`);
@@ -470,12 +602,12 @@ async function handleChatSession({
                 });
                 productsSentToFrontend = true;
               } else {
-                // Zero results — inject retry hint so Claude retries with broader query
-                console.log(`[Search] Zero results for: "${searchQuery}" — injecting retry hint`);
+                // Still zero results after all fallbacks — inject retry hint for Claude
+                console.log(`[Search] Zero results for: "${searchQuery}" (all fallbacks exhausted) — injecting retry hint`);
                 const retryHint = JSON.stringify({
                   products: [],
                   total_count: 0,
-                  _system_hint: "IMPORTANT: Zero products found for this query. You MUST immediately retry with a simpler, broader search query. Remove all technical specifications, material details, voltage ratings, category prefixes, and adjectives. Use ONLY the core product name or brand name. For example: if you searched 'ABB ACS580 variable frequency drive 3-phase 480V', retry with just 'ACS580'. If you searched 'Schneider 100A MCB circuit breaker', retry with 'Schneider MCB'. Try at least one more search before telling the user no results were found."
+                  _system_hint: `IMPORTANT: Zero products found for "${searchQuery}" even after automatic fallback searches. You MUST try a COMPLETELY DIFFERENT search approach. Try: 1) Just the brand name alone. 2) Just the product category alone (e.g. "circuit breaker", "sensor", "valve"). 3) A single generic keyword. Do NOT repeat similar queries. If 3 different searches all return zero, then tell the user the product may not be in our catalog and offer to connect them with our sales team.`
                 });
                 toolUseResponse.content = [{ type: "text", text: retryHint }];
               }

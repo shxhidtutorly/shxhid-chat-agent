@@ -1,13 +1,13 @@
 /**
- * Configuration Service
+ * Configuration Service — v2.0
  * Centralizes all configuration values for the chat service
  */
 
 export const AppConfig = {
   // API Configuration
   api: {
-    defaultModel: 'claude-haiku-4-5-20251001',
-    maxTokens: 2000,
+    defaultModel: 'claude-sonnet-4-20250514',
+    maxTokens: 4096,
     defaultPromptType: 'standardAssistant',
   },
 
@@ -25,7 +25,7 @@ export const AppConfig = {
   // Tool Configuration
   tools: {
     productSearchName: "search_shop_catalog",
-    maxProductsToDisplay: 15
+    maxProductsToDisplay: 12
   }
 };
 

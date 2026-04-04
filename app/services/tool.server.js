@@ -1,8 +1,64 @@
 /**
- * Tool Service
+ * Tool Service — v2.0
  * Processes MCP tool responses (product search, cart updates)
- * Includes variant-level spec matching and dimension parsing
+ * 
+ * CHANGES (v2.0):
+ *   - Fixed false-positive SKU detection (24VDC, CAT5, RJ45, 25MM no longer treated as SKUs)
+ *   - Added blocklist for common industrial spec tokens
+ *   - Tightened SKU regex: requires 5+ chars OR must contain a separator (- . /)
+ *   - Moved "NNmm" pattern from SKU matching to dimension matching
+ *   - Increased MAX_PRODUCTS_TO_DISPLAY from 8 to 12
  */
+
+// ──────────────────────────────────────────────
+// Blocklist: tokens that LOOK like SKUs but are
+// actually voltage ratings, cable categories,
+// dimension strings, or protocol names.
+// ──────────────────────────────────────────────
+const SPEC_TOKEN_BLOCKLIST = new Set([
+  // Voltage ratings
+  '24VDC', '12VDC', '48VDC', '5VDC', '24VAC', '110VAC', '120VAC',
+  '220VAC', '230VAC', '240VAC', '380VAC', '400VAC', '415VAC', '480VAC',
+  '600VAC', '24V', '12V', '48V', '5V', '110V', '120V', '220V', '230V',
+  '240V', '380V', '400V', '415V', '480V', '600V',
+  // Cable categories
+  'CAT5', 'CAT5E', 'CAT6', 'CAT6A', 'CAT7', 'CAT7A', 'CAT8',
+  // Connector types
+  'RJ45', 'RJ11', 'RJ12', 'DB9', 'DB15', 'DB25',
+  // Protocols & standards
+  'RS232', 'RS485', 'RS422', 'IP67', 'IP68', 'IP65', 'IP54', 'IP55',
+  'IP20', 'IP44', 'IEC61131', 'NEMA4', 'NEMA12',
+  // Dimension strings (NNmm / NNcm patterns) — handled by dimension regex instead
+  // Generic amp / watt tokens that are too short
+  'AC1', 'DC1', 'AC3', 'DC3',
+  // Common non-SKU acronyms
+  'HTTP', 'HTTPS', 'HTML', 'JSON', 'UUID', 'MQTT', 'OPCUA',
+  'MODBUS', 'TCPIP', 'PROFINET', 'PROFIBUS', 'CANOPEN', 'ETHERCAT',
+  'USB', 'HDMI', 'DVI', 'VGA',
+  // Pipe sizes that look alphanumeric
+  'NPT', 'BSP', 'BSPT', 'BSPP',
+]);
+
+/**
+ * Check if a token is a blocklisted spec token.
+ * Also blocks "NNmm" and "NNcm" dimension patterns.
+ */
+function isBlocklistedToken(token) {
+  const upper = token.toUpperCase();
+  if (SPEC_TOKEN_BLOCKLIST.has(upper)) return true;
+
+  // Block dimension strings like "25MM", "50MM", "100CM"
+  if (/^\d+MM$/i.test(token)) return true;
+  if (/^\d+CM$/i.test(token)) return true;
+
+  // Block pure amp/volt/watt ratings like "100A", "24V", "500W"
+  if (/^\d+[AVWW]$/i.test(token)) return true;
+
+  // Block IP ratings like "IP67"
+  if (/^IP\d{2}$/i.test(token)) return true;
+
+  return false;
+}
 
 /**
  * Extract specs (dimensions, SKU patterns) from a query string.
@@ -23,7 +79,7 @@ function extractQuerySpecs(query) {
 
   // Also extract standalone numbers near dimension keywords:
   // "length 77", "width 30", "77 length", "30 width", "bore 50"
-  const contextDimRegex = /(?:length|width|height|bore|diameter|size|thick)\s*[:\-]?\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*(?:length|width|height|bore|diameter|size|thick)/gi;
+  const contextDimRegex = /(?:length|width|height|bore|diameter|size|thick|stroke)\s*[:\-]?\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*(?:length|width|height|bore|diameter|size|thick|stroke)/gi;
   while ((m = contextDimRegex.exec(query)) !== null) {
     const val = parseFloat(m[1] || m[2]);
     if (val && !dimensions.includes(val)) {
@@ -31,18 +87,33 @@ function extractQuerySpecs(query) {
     }
   }
 
-  // Extract SKU-like patterns: alphanumeric with hyphens/dots, 3+ chars, must have digit+letter
-  const skuRegex = /\b([A-Z0-9][A-Z0-9\-\.\/]{2,}[A-Z0-9])\b/gi;
+  // ──────────────────────────────────────────────
+  // SKU DETECTION — v2.0 (tightened)
+  //
+  // Real industrial SKUs look like:
+  //   3NA7836, 6SL3220-1YE34-0UF0, 5SL4363-8, MGPM12-10Z, EC2016
+  //
+  // Rules:
+  //   1. Must contain at least one digit AND one letter
+  //   2. Must be ≥5 chars, OR contain a separator (- . /)
+  //   3. Must NOT be in the blocklist
+  // ──────────────────────────────────────────────
+  const skuRegex = /\b([A-Z0-9][A-Z0-9\-\.\/]{1,}[A-Z0-9])\b/gi;
   const skuPatterns = [];
   while ((m = skuRegex.exec(query)) !== null) {
     const token = m[1].toUpperCase();
+
     // Must contain at least one digit and one letter
-    if (/\d/.test(token) && /[A-Z]/i.test(token)) {
-      // Filter out common non-SKU words
-      if (!['HTTP', 'HTTPS', 'HTML', 'JSON', 'UUID'].includes(token)) {
-        skuPatterns.push(token);
-      }
-    }
+    if (!/\d/.test(token) || !/[A-Z]/i.test(token)) continue;
+
+    // Must be 5+ chars OR contain a separator
+    const hasSeparator = /[-\.\/]/.test(token);
+    if (token.length < 5 && !hasSeparator) continue;
+
+    // Must not be blocklisted
+    if (isBlocklistedToken(token)) continue;
+
+    skuPatterns.push(token);
   }
 
   // Extract raw numbers that might be amp/volt/watt ratings: "100A", "200A", "63A"
@@ -137,7 +208,7 @@ function scoreProductBySpecs(product, specs) {
 }
 
 export function createToolService() {
-  const MAX_PRODUCTS_TO_DISPLAY = 8;
+  const MAX_PRODUCTS_TO_DISPLAY = 12;
 
   /**
    * Resolve a product URL safely.

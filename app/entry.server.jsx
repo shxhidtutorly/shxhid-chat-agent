@@ -13,21 +13,33 @@ export default async function handleRequest(
   responseHeaders,
   reactRouterContext,
 ) {
-  // Quick healthcheck: respond immediately for /health to satisfy Railway
+  // Quick healthcheck & static routes: respond immediately to avoid stack traces
   try {
     const reqUrl = new URL(request.url);
+
+    // Health check for Railway
     if (reqUrl.pathname === "/health") {
-      // minimal, fast response
       return new Response("ok", {
         status: 200,
-        headers: {
-          "Content-Type": "text/plain",
-        },
+        headers: { "Content-Type": "text/plain" },
       });
+    }
+
+    // Silence /robots.txt — prevents 404 stack trace spam in logs
+    if (reqUrl.pathname === "/robots.txt") {
+      return new Response("User-agent: *\nDisallow: /apps/\nDisallow: /chat\nDisallow: /api/\n", {
+        status: 200,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }
+
+    // Silence /favicon.ico if no favicon exists
+    if (reqUrl.pathname === "/favicon.ico") {
+      return new Response(null, { status: 204 });
     }
   } catch (err) {
     // If URL parsing fails for some reason, continue to normal rendering path
-    console.warn("healthcheck URL parse warning:", err?.message || err);
+    console.warn("URL parse warning:", err?.message || err);
   }
 
   // Normal rendering code follows

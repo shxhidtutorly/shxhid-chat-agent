@@ -1,13 +1,35 @@
 // app/routes/chat.jsx
 /**
- * Chat API Route — v2.0
+ * Chat API Route — v2.1
+ *
+ * CHANGES (v2.1 — April 2026 production fix):
+ *   - Accept BOTH legacy `search_shop_catalog` and current `search_catalog` tool names
+ *     (Shopify's Storefront MCP renamed the tool; hardcoded check was silently no-op'ing
+ *      the entire product pipeline).
+ *   - Log failing tool args so schema drift is visible ("Invalid params" cases).
+ *   - Fallback function no longer hardcodes the tool name — it receives whatever
+ *     catalog-search tool the MCP actually advertises.
+ *   - Fallback requests drop the `context` parameter to avoid schema mismatch on the
+ *     new tool (one of the observed causes of "Invalid params" in prod logs).
+ *   - thinkingStates map covers both tool names.
  *
  * CHANGES (v2.0):
  *   - Added automatic server-side search fallback when MCP returns zero products
  *   - Fallback tries: remove hyphens → first 2 words → first word only
  *   - Improved retry hint with clearer instructions
- *   - Original fixes preserved: P2025, invalid_request_error, broken URLs
  */
+
+// Names Shopify's Storefront MCP has used for catalog search across versions.
+// Checked case-insensitively so new minor variants are easy to add.
+const CATALOG_SEARCH_TOOL_NAMES = new Set([
+  "search_shop_catalog",  // legacy
+  "search_catalog",       // current (confirmed in prod logs April 2026)
+  "search_products",      // defensive — observed in some rollouts
+]);
+
+function isCatalogSearchTool(toolName) {
+  return CATALOG_SEARCH_TOOL_NAMES.has(String(toolName || "").toLowerCase());
+}
 
 export async function loader({ request }) {
   // Handle OPTIONS (CORS preflight)
@@ -32,7 +54,7 @@ export async function loader({ request }) {
 
   // Default response
   return new Response(
-    JSON.stringify({ 
+    JSON.stringify({
       status: "ok",
       message: "Chat API is running",
       endpoints: {
@@ -40,9 +62,9 @@ export async function loader({ request }) {
         history: "GET /chat?history=true&conversation_id=xxx"
       }
     }),
-    { 
-      status: 200, 
-      headers: getCorsHeaders(request) 
+    {
+      status: 200,
+      headers: getCorsHeaders(request)
     }
   );
 }
@@ -72,10 +94,9 @@ async function handleHistoryRequest(request, conversationId) {
       let parsedContent = msg.content;
       try {
         const parsed = JSON.parse(msg.content);
-        // If the content is an array (likely rich content with tools), keep it as JSON
         if (Array.isArray(parsed)) {
           parsedContent = parsed;
-        } 
+        }
       } catch (e) {
         parsedContent = msg.content;
       }
@@ -98,7 +119,7 @@ async function handleHistoryRequest(request, conversationId) {
   } catch (error) {
     console.error("Error fetching history:", error);
     return new Response(
-      JSON.stringify({ messages: [], error: error.message }), 
+      JSON.stringify({ messages: [], error: error.message }),
       {
         status: 500,
         headers: {
@@ -156,10 +177,9 @@ async function handleChatRequest(request) {
     const MCPClient = MCPClientMod.default ?? MCPClientMod;
 
     // Get shop domain from request
-    // Priority: 1) Shopify app proxy ?shop= param  2) POST body shop_domain  3) Origin header  4) env var fallback
     const reqUrl = new URL(request.url);
-    const shopFromProxy = reqUrl.searchParams.get("shop"); // Shopify app proxy adds this
-    const shopFromBody = body.shop_domain || null; // Direct connection sends this
+    const shopFromProxy = reqUrl.searchParams.get("shop");
+    const shopFromBody = body.shop_domain || null;
     const origin = request.headers.get("Origin");
     const shopFromOrigin = origin ? new URL(origin).hostname : null;
     const shopDomain = shopFromProxy || shopFromBody || shopFromOrigin || process.env.SHOPIFY_STORE_DOMAIN || null;
@@ -211,10 +231,10 @@ async function handleChatRequest(request) {
   } catch (error) {
     console.error("Error in chat request handler:", error);
     return new Response(
-      JSON.stringify({ 
+      JSON.stringify({
         error: "Internal server error",
-        message: error.message 
-      }), 
+        message: error.message
+      }),
       {
         status: 500,
         headers: getCorsHeaders(request),
@@ -227,19 +247,25 @@ async function handleChatRequest(request) {
    Server-side automatic search fallback
    When MCP returns zero products, try progressively
    simpler queries before sending to Claude.
+   --
+   v2.1: toolName now passed in so we call whatever
+   catalog-search tool the MCP actually advertises,
+   not the hardcoded legacy name. Also drops the
+   `context` param to avoid schema mismatches.
    ------------------------------------------------- */
-async function tryFallbackSearches(mcpClient, originalQuery) {
+async function tryFallbackSearches(mcpClient, originalQuery, toolName) {
   const fallbackQueries = generateFallbackQueries(originalQuery);
 
   for (const fallbackQuery of fallbackQueries) {
     try {
-      console.log(`[Search-Fallback] Trying: "${fallbackQuery}"`);
-      const result = await mcpClient.callStorefrontTool("search_shop_catalog", {
+      console.log(`[Search-Fallback] Trying: "${fallbackQuery}" with tool "${toolName}"`);
+      // Intentionally only send `query` — the `context` param is not accepted
+      // by every version of the Shopify catalog-search tool and was observed
+      // to cause "Invalid params" errors in production.
+      const result = await mcpClient.callStorefrontTool(toolName, {
         query: fallbackQuery,
-        context: "automatic fallback search",
       });
 
-      // Check if this fallback returned products
       if (result && !result.error) {
         let parsed;
         try {
@@ -249,8 +275,10 @@ async function tryFallbackSearches(mcpClient, originalQuery) {
           continue;
         }
 
-        if (parsed?.products && Array.isArray(parsed.products) && parsed.products.length > 0) {
-          console.log(`[Search-Fallback] SUCCESS: "${fallbackQuery}" returned ${parsed.products.length} products`);
+        // Accept multiple product-list key names
+        const products = parsed?.products || parsed?.items || parsed?.results;
+        if (Array.isArray(products) && products.length > 0) {
+          console.log(`[Search-Fallback] SUCCESS: "${fallbackQuery}" returned ${products.length} products`);
           return { result, query: fallbackQuery };
         }
       }
@@ -259,7 +287,7 @@ async function tryFallbackSearches(mcpClient, originalQuery) {
     }
   }
 
-  return null; // All fallbacks failed
+  return null;
 }
 
 /**
@@ -299,14 +327,13 @@ function generateFallbackQueries(originalQuery) {
     queries.push(words[0]);
   }
 
-  // 5. If the query looks like a SKU (alphanumeric with separators), try without separators as one token
+  // 5. If the query looks like a SKU, try without separators
   const skuLike = trimmed.replace(/\s+/g, '');
   if (/^[A-Z0-9\-\.\/]{4,}$/i.test(skuLike) && skuLike !== trimmed) {
     const noSep = skuLike.replace(/[-\.\/]/g, '');
     if (!queries.includes(noSep)) {
       queries.push(noSep);
     }
-    // Also try first half of the SKU
     if (skuLike.length >= 6) {
       const firstHalf = skuLike.substring(0, Math.ceil(skuLike.length / 2));
       if (firstHalf.length >= 3 && !queries.includes(firstHalf)) {
@@ -315,7 +342,6 @@ function generateFallbackQueries(originalQuery) {
     }
   }
 
-  // Deduplicate and remove the original query (we already tried that)
   const seen = new Set([trimmed.toLowerCase()]);
   return queries.filter(q => {
     const lower = q.toLowerCase();
@@ -326,9 +352,8 @@ function generateFallbackQueries(originalQuery) {
 }
 
 /* ------------------------
-  Core chat session
-  Handles the conversation flow for Claude API with tool use loop
-  ------------------------ */
+   Core chat session
+   ------------------------ */
 async function handleChatSession({
   request,
   userMessage,
@@ -354,12 +379,10 @@ async function handleChatSession({
     MCPClient,
   } = helpers;
 
-  // Send conversation ID immediately — establishes the SSE connection for the client
   stream.sendMessage({ type: "id", conversation_id: conversationId });
 
   console.log(`[Chat] New request | conversation=${conversationId} | shop=${shopDomain}`);
 
-  // Check for Anthropic API key
   if (!process.env.ANTHROPIC_API_KEY) {
     console.error("[Chat] ANTHROPIC_API_KEY missing from environment");
     stream.sendMessage({
@@ -372,7 +395,6 @@ async function handleChatSession({
   const claudeService = createClaudeService();
   const toolService = createToolService();
 
-  // Get MCP URL (with timeout to prevent hanging)
   let mcpApiUrl = null;
   try {
     const urlResult = await Promise.race([
@@ -390,7 +412,6 @@ async function handleChatSession({
 
   const mcpClient = new MCPClient(shopDomain, conversationId, null, mcpApiUrl);
 
-  // Track whether products were already sent to the frontend
   let productsSentToFrontend = false;
 
   try {
@@ -411,6 +432,15 @@ async function handleChatSession({
         customerMcpTools = mcpResult.cu;
       }
       console.log(`Connected to MCP: ${storefrontMcpTools.length + customerMcpTools.length} tools`);
+
+      // Diagnostic: log which catalog-search tool name the MCP is actually advertising.
+      const catalogTool = (storefrontMcpTools || []).find(t => isCatalogSearchTool(t.name));
+      if (catalogTool) {
+        console.log(`[Chat] MCP advertises catalog-search tool as: "${catalogTool.name}"`);
+      } else {
+        console.warn(`[Chat] WARNING: No known catalog-search tool found in MCP tools list. Available storefront tools:`,
+          (storefrontMcpTools || []).map(t => t.name).join(", "));
+      }
     } catch (error) {
       console.warn("[Chat] MCP connection failed, continuing without tools:", error.message);
     }
@@ -442,13 +472,11 @@ async function handleChatSession({
       console.error("[Chat] Failed to get conversation history:", historyError.message);
     }
 
-    // Ensure user message is in history even if DB save or read failed
     const lastMsg = conversationHistory[conversationHistory.length - 1];
     if (!lastMsg || lastMsg.role !== "user" || lastMsg.content !== userMessage) {
       conversationHistory.push({ role: "user", content: userMessage });
     }
 
-    // Stream from Claude with tool-use loop
     let finalMessage = { role: "user", content: userMessage };
     let fullResponseText = "";
     let currentAssistantMessage = null;
@@ -456,7 +484,6 @@ async function handleChatSession({
 
     while (finalMessage.stop_reason !== "end_turn" && loopCount < MAX_TOOL_LOOPS) {
       loopCount++;
-      // Reset for each turn
       currentAssistantMessage = null;
 
       console.log(`[Chat] Claude call #${loopCount} | history=${conversationHistory.length} messages`);
@@ -474,11 +501,8 @@ async function handleChatSession({
           },
 
           onMessage: async (message) => {
-            // Store the message but DON'T add to history yet
-            // We'll add it after all tool uses are processed
             currentAssistantMessage = message;
 
-            // Extract text content for saving to database
             let textContent = "";
             if (Array.isArray(message.content)) {
               textContent = message.content
@@ -491,7 +515,6 @@ async function handleChatSession({
 
             const responseTime = Date.now() - startTime;
 
-            // Save message to database (non-blocking) - only if there's text
             if (textContent.trim()) {
               saveMessage(conversationId, message.role, textContent, {
                 contentType: "TEXT",
@@ -501,7 +524,6 @@ async function handleChatSession({
               }).catch((err) => console.error("[Chat] Error saving assistant message:", err.message));
             }
 
-            // Track analytics (non-blocking)
             const trackingId = visitorId || fingerprintId || conversationId;
             try {
               ChatEvents.messageReceived(trackingId, {
@@ -523,9 +545,11 @@ async function handleChatSession({
 
             console.log(`[Chat] Tool use: ${toolName} (id=${toolUseId})`);
 
-            // Send dynamic thinking state to frontend
+            // Cover both legacy and current catalog-search names for the thinking state.
             const thinkingStates = {
               'search_shop_catalog': 'Searching products...',
+              'search_catalog': 'Searching products...',
+              'search_products': 'Searching products...',
               'update_cart': 'Adding to cart...',
               'get_cart': 'Checking availability...',
               'get_product': 'Looking up product...',
@@ -556,29 +580,32 @@ async function handleChatSession({
             try {
               toolUseResponse = await mcpClient.callTool(toolName, toolArgs);
             } catch (toolError) {
-              console.error(`[Chat] Tool call failed: ${toolName}`, toolError.message);
+              // v2.1: Log the args so schema drift is visible.
+              console.error(
+                `[Chat] Tool call failed: ${toolName}`,
+                toolError.message,
+                "args:",
+                JSON.stringify(toolArgs)
+              );
               toolUseResponse = {
                 error: { type: "tool_error", message: toolError.message, data: toolError.message },
               };
             }
 
-            // Process and send products to frontend
-            if (toolName === "search_shop_catalog" && !toolUseResponse.error) {
-              const searchQuery = toolArgs?.query || toolArgs?.searchQuery || JSON.stringify(toolArgs);
+            // Process and send products to frontend — now matches any known catalog-search tool name.
+            const isCatalogSearch = isCatalogSearchTool(toolName);
+
+            if (isCatalogSearch && !toolUseResponse.error) {
+              const searchQuery = toolArgs?.query || toolArgs?.searchQuery || toolArgs?.q || JSON.stringify(toolArgs);
               let products = toolService.processProductSearchResult(toolUseResponse, shopDomain, userMessage, searchQuery);
 
-              // ─────────────────────────────────────────────
-              // SERVER-SIDE AUTOMATIC FALLBACK (v2.0)
-              // If zero products found, try simpler queries
-              // automatically before asking Claude to retry.
-              // ─────────────────────────────────────────────
               if ((!products || products.length === 0) && searchQuery) {
-                console.log(`[Search] Zero results for: "${searchQuery}" — trying automatic fallbacks`);
+                console.log(`[Search] Zero relevant results for: "${searchQuery}" — trying automatic fallbacks`);
 
-                const fallbackResult = await tryFallbackSearches(mcpClient, searchQuery);
+                // Pass the actual tool name so fallback uses the right tool.
+                const fallbackResult = await tryFallbackSearches(mcpClient, searchQuery, toolName);
 
                 if (fallbackResult) {
-                  // Re-process the successful fallback result
                   products = toolService.processProductSearchResult(
                     fallbackResult.result,
                     shopDomain,
@@ -586,7 +613,6 @@ async function handleChatSession({
                     fallbackResult.query
                   );
 
-                  // Update the tool response so Claude sees the fallback results
                   if (products && products.length > 0) {
                     toolUseResponse = fallbackResult.result;
                     console.log(`[Search-Fallback] Recovered ${products.length} products via fallback query: "${fallbackResult.query}"`);
@@ -602,18 +628,20 @@ async function handleChatSession({
                 });
                 productsSentToFrontend = true;
               } else {
-                // Still zero results after all fallbacks — inject retry hint for Claude
                 console.log(`[Search] Zero results for: "${searchQuery}" (all fallbacks exhausted) — injecting retry hint`);
                 const retryHint = JSON.stringify({
                   products: [],
                   total_count: 0,
                   _system_hint: `IMPORTANT: Zero products found for "${searchQuery}" even after automatic fallback searches. You MUST try a COMPLETELY DIFFERENT search approach. Try: 1) Just the brand name alone. 2) Just the product category alone (e.g. "circuit breaker", "sensor", "valve"). 3) A single generic keyword. Do NOT repeat similar queries. If 3 different searches all return zero, then tell the user the product may not be in our catalog and offer to connect them with our sales team.`
                 });
+                // Preserve content array shape
+                if (!Array.isArray(toolUseResponse.content)) {
+                  toolUseResponse.content = [];
+                }
                 toolUseResponse.content = [{ type: "text", text: retryHint }];
               }
             }
 
-            // Process cart updates (update_cart) and surface checkout URL to UI
             if (toolName === "update_cart" && !toolUseResponse.error) {
               const { processCartUpdateResult } = toolService;
               const { checkoutUrl, cart } = processCartUpdateResult(toolUseResponse);
@@ -629,16 +657,14 @@ async function handleChatSession({
               }
             }
 
-            // Add assistant message to history FIRST (required by Claude API: assistant before tool_result)
             if (currentAssistantMessage) {
               conversationHistory.push({
                 role: currentAssistantMessage.role,
                 content: currentAssistantMessage.content
               });
-              currentAssistantMessage = null; // Mark as added
+              currentAssistantMessage = null;
             }
 
-            // Then add tool_result to conversation history
             if (toolUseResponse.error) {
               const errorContent = {
                 type: "tool_result",
@@ -660,7 +686,6 @@ async function handleChatSession({
                 error: toolUseResponse.error.data || toolUseResponse.error,
               });
             } else {
-              // Safely convert tool content to a string to avoid format issues with Claude API
               let toolResultContent;
               try {
                 if (Array.isArray(toolUseResponse.content)) {
@@ -690,7 +715,6 @@ async function handleChatSession({
               });
             }
 
-            // Signal new message to client
             stream.sendMessage({ type: 'new_message' });
           },
 
@@ -705,7 +729,6 @@ async function handleChatSession({
         }
       );
 
-      // If no tools were used, add the assistant message to history now
       if (currentAssistantMessage) {
         conversationHistory.push({
           role: currentAssistantMessage.role,
@@ -738,8 +761,6 @@ async function handleChatSession({
       // Ignore analytics errors
     }
 
-    // If products were already sent to the frontend, send a fallback message
-    // instead of an error so the user still sees the product results
     if (productsSentToFrontend) {
       console.log("[Chat] Products already sent — sending fallback text instead of error");
       stream.sendMessage({
@@ -756,6 +777,7 @@ async function handleChatSession({
     }
   }
 }
+
 /* ------------------------
    Get customer URLs helper
    ------------------------ */
@@ -766,8 +788,8 @@ async function getCustomerAccountUrls(conversationIdOrDomain, conversationId, db
 
     if (!conversationIdOrDomain) return { mcpApiUrl: null };
 
-    const hostname = conversationIdOrDomain.includes('.') 
-      ? conversationIdOrDomain 
+    const hostname = conversationIdOrDomain.includes('.')
+      ? conversationIdOrDomain
       : new URL(conversationIdOrDomain).hostname;
 
     const fetchWithTimeout = (url, ms = 4000) => {
@@ -806,7 +828,6 @@ async function getCustomerAccountUrls(conversationIdOrDomain, conversationId, db
    ------------------------ */
 function getCorsHeaders(request) {
   const origin = request.headers.get("Origin");
-  // For app proxy requests there's no Origin — use wildcard
   const allowOrigin = origin || "*";
   return {
     "Content-Type": "application/json",

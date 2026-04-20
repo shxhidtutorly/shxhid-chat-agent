@@ -278,7 +278,11 @@ async function tryFallbackSearches(mcpClient, originalQuery, toolName) {
         // Accept multiple product-list key names
         const products = parsed?.products || parsed?.items || parsed?.results;
         if (Array.isArray(products) && products.length > 0) {
-          console.log(`[Search-Fallback] SUCCESS: "${fallbackQuery}" returned ${products.length} products`);
+          // Shopify returned products — but the relevance gate in
+          // tool.server.js still decides whether they actually match the
+          // user's intent. Log honestly so readers don't assume "SUCCESS"
+          // means cards will be shown.
+          console.log(`[Search-Fallback] "${fallbackQuery}" returned ${products.length} products (pending relevance gate)`);
           return { result, query: fallbackQuery };
         }
       }

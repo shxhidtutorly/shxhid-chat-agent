@@ -1,7 +1,17 @@
 /**
- * Tool Service — v2.0
+ * Tool Service — v2.1
  * Processes MCP tool responses (product search, cart updates)
- * 
+ *
+ * CHANGES (v2.1 — April 2026 production fix):
+ *   - Accept multiple product-list shapes: { products }, { items }, { results }.
+ *     The new Shopify `search_catalog` tool may use a different key than the
+ *     legacy `search_shop_catalog` tool did.
+ *   - Added brand/keyword relevance gate: if the user's distinctive query tokens
+ *     match NO returned products, drop everything and return []. Shopify's search
+ *     is fuzzy — for "ifm sensors" against a catalog with no IFM items it was
+ *     returning Mindman pneumatic cylinders. Returning [] routes execution into
+ *     the zero-results fallback + retry-hint path in chat.jsx.
+ *
  * CHANGES (v2.0):
  *   - Fixed false-positive SKU detection (24VDC, CAT5, RJ45, 25MM no longer treated as SKUs)
  *   - Added blocklist for common industrial spec tokens
@@ -28,48 +38,48 @@ const SPEC_TOKEN_BLOCKLIST = new Set([
   // Protocols & standards
   'RS232', 'RS485', 'RS422', 'IP67', 'IP68', 'IP65', 'IP54', 'IP55',
   'IP20', 'IP44', 'IEC61131', 'NEMA4', 'NEMA12',
-  // Dimension strings (NNmm / NNcm patterns) — handled by dimension regex instead
   // Generic amp / watt tokens that are too short
   'AC1', 'DC1', 'AC3', 'DC3',
   // Common non-SKU acronyms
   'HTTP', 'HTTPS', 'HTML', 'JSON', 'UUID', 'MQTT', 'OPCUA',
   'MODBUS', 'TCPIP', 'PROFINET', 'PROFIBUS', 'CANOPEN', 'ETHERCAT',
   'USB', 'HDMI', 'DVI', 'VGA',
-  // Pipe sizes that look alphanumeric
+  // Pipe sizes
   'NPT', 'BSP', 'BSPT', 'BSPP',
 ]);
 
-/**
- * Check if a token is a blocklisted spec token.
- * Also blocks "NNmm" and "NNcm" dimension patterns.
- */
+// ──────────────────────────────────────────────
+// v2.1: Stopwords used by the relevance gate.
+// Words on this list do NOT count as distinctive
+// query tokens, so "show me sensors" still shows
+// whatever the store has under "sensor".
+// ──────────────────────────────────────────────
+const RELEVANCE_STOPWORDS = new Set([
+  "the", "a", "an", "and", "or", "for", "of", "with", "in", "on", "to", "me", "my",
+  "show", "find", "need", "want", "do", "you", "have", "got", "some", "any", "please",
+  "i", "is", "are", "can", "could", "would", "looking", "search",
+  "product", "products", "part", "parts", "item", "items",
+  // Generic product categories — intentionally allowed to pass through
+  // so users browsing "sensors" or "cables" still see results.
+  "sensor", "sensors", "cable", "cables", "valve", "valves",
+  "breaker", "breakers", "fuse", "fuses", "relay", "relays",
+]);
+
 function isBlocklistedToken(token) {
   const upper = token.toUpperCase();
   if (SPEC_TOKEN_BLOCKLIST.has(upper)) return true;
 
-  // Block dimension strings like "25MM", "50MM", "100CM"
   if (/^\d+MM$/i.test(token)) return true;
   if (/^\d+CM$/i.test(token)) return true;
-
-  // Block pure amp/volt/watt ratings like "100A", "24V", "500W"
   if (/^\d+[AVWW]$/i.test(token)) return true;
-
-  // Block IP ratings like "IP67"
   if (/^IP\d{2}$/i.test(token)) return true;
 
   return false;
 }
 
-/**
- * Extract specs (dimensions, SKU patterns) from a query string.
- * Handles patterns like:
- *   - "77mm", "30 mm", "77 mm length", "body width 30mm"
- *   - SKU: "3NA7836", "6SL3220-1YE34-0UF0", "5SL4363-8"
- */
 function extractQuerySpecs(query) {
   if (!query || typeof query !== 'string') return { dimensions: [], skuPatterns: [], rawNumbers: [] };
 
-  // Extract dimensions: "77mm", "30 mm", "200mm", "50cm"
   const dimRegex = /(\d+(?:\.\d+)?)\s*(?:mm|cm)\b/gi;
   const dimensions = [];
   let m;
@@ -77,8 +87,6 @@ function extractQuerySpecs(query) {
     dimensions.push(parseFloat(m[1]));
   }
 
-  // Also extract standalone numbers near dimension keywords:
-  // "length 77", "width 30", "77 length", "30 width", "bore 50"
   const contextDimRegex = /(?:length|width|height|bore|diameter|size|thick|stroke)\s*[:\-]?\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*(?:length|width|height|bore|diameter|size|thick|stroke)/gi;
   while ((m = contextDimRegex.exec(query)) !== null) {
     const val = parseFloat(m[1] || m[2]);
@@ -87,36 +95,17 @@ function extractQuerySpecs(query) {
     }
   }
 
-  // ──────────────────────────────────────────────
-  // SKU DETECTION — v2.0 (tightened)
-  //
-  // Real industrial SKUs look like:
-  //   3NA7836, 6SL3220-1YE34-0UF0, 5SL4363-8, MGPM12-10Z, EC2016
-  //
-  // Rules:
-  //   1. Must contain at least one digit AND one letter
-  //   2. Must be ≥5 chars, OR contain a separator (- . /)
-  //   3. Must NOT be in the blocklist
-  // ──────────────────────────────────────────────
   const skuRegex = /\b([A-Z0-9][A-Z0-9\-\.\/]{1,}[A-Z0-9])\b/gi;
   const skuPatterns = [];
   while ((m = skuRegex.exec(query)) !== null) {
     const token = m[1].toUpperCase();
-
-    // Must contain at least one digit and one letter
     if (!/\d/.test(token) || !/[A-Z]/i.test(token)) continue;
-
-    // Must be 5+ chars OR contain a separator
     const hasSeparator = /[-\.\/]/.test(token);
     if (token.length < 5 && !hasSeparator) continue;
-
-    // Must not be blocklisted
     if (isBlocklistedToken(token)) continue;
-
     skuPatterns.push(token);
   }
 
-  // Extract raw numbers that might be amp/volt/watt ratings: "100A", "200A", "63A"
   const ratingRegex = /(\d+)\s*[AaVvWw]\b/g;
   const rawNumbers = [];
   while ((m = ratingRegex.exec(query)) !== null) {
@@ -126,9 +115,6 @@ function extractQuerySpecs(query) {
   return { dimensions, skuPatterns, rawNumbers };
 }
 
-/**
- * Build searchable text from all product data including variants.
- */
 function buildProductSearchText(product) {
   const parts = [
     product.title || '',
@@ -153,10 +139,6 @@ function buildProductSearchText(product) {
   return parts.join(' ');
 }
 
-/**
- * Score a product by how well it matches extracted specs.
- * Higher score = better match. 0 = no spec match (neutral).
- */
 function scoreProductBySpecs(product, specs) {
   if (!specs.dimensions.length && !specs.skuPatterns.length && !specs.rawNumbers.length) return 0;
 
@@ -165,12 +147,10 @@ function scoreProductBySpecs(product, specs) {
   const searchUpper = searchText.toUpperCase();
   const searchLower = searchText.toLowerCase();
 
-  // 1. SKU matching — highest priority (100 points per exact match)
   for (const sku of specs.skuPatterns) {
     if (searchUpper.includes(sku)) {
       score += 100;
     } else {
-      // Try without separators
       const skuNorm = sku.replace(/[-\.\/]/g, '');
       const searchNorm = searchUpper.replace(/[-\.\/]/g, '');
       if (searchNorm.includes(skuNorm)) {
@@ -179,24 +159,17 @@ function scoreProductBySpecs(product, specs) {
     }
   }
 
-  // 2. Dimension matching (25 points per dimension match)
   for (const dim of specs.dimensions) {
     const dimStr = String(dim);
-    // "77mm" or "77 mm"
     if (searchLower.includes(dimStr + 'mm') || searchLower.includes(dimStr + ' mm')) {
       score += 25;
-    }
-    // "77cm" or "77 cm"
-    else if (searchLower.includes(dimStr + 'cm') || searchLower.includes(dimStr + ' cm')) {
+    } else if (searchLower.includes(dimStr + 'cm') || searchLower.includes(dimStr + ' cm')) {
       score += 25;
-    }
-    // Just the number present in text (weaker signal)
-    else if (searchText.includes(dimStr)) {
+    } else if (searchText.includes(dimStr)) {
       score += 5;
     }
   }
 
-  // 3. Rating matching (10 points per match) — e.g. "63A", "200A"
   for (const num of specs.rawNumbers) {
     const numStr = String(num);
     if (searchLower.includes(numStr + 'a') || searchLower.includes(numStr + ' a')) {
@@ -207,13 +180,26 @@ function scoreProductBySpecs(product, specs) {
   return score;
 }
 
+/**
+ * v2.1: Extract distinctive tokens from the user/search query for the relevance gate.
+ * Returns tokens that are ≥3 chars, alphanumeric, not stopwords, not blocklisted specs.
+ * These are the words that MUST appear in a product for it to be considered relevant.
+ */
+function extractDistinctiveTokens(query) {
+  if (!query || typeof query !== 'string') return [];
+  return query
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .filter(t =>
+      t.length >= 3 &&
+      !RELEVANCE_STOPWORDS.has(t) &&
+      !isBlocklistedToken(t)
+    );
+}
+
 export function createToolService() {
   const MAX_PRODUCTS_TO_DISPLAY = 12;
 
-  /**
-   * Resolve a product URL safely.
-   * NEVER fabricate a slug from the product title.
-   */
   function resolveProductUrl(product, shopDomain) {
     if (product.handle) {
       return `https://${shopDomain}/products/${product.handle}`;
@@ -233,15 +219,6 @@ export function createToolService() {
     return null;
   }
 
-  /**
-   * Process product search results from MCP tool response.
-   * Includes variant-level spec matching and dimension filtering.
-   *
-   * @param {Object} toolUseResponse - Raw MCP tool response
-   * @param {string} shopDomain - Shop domain for URL building
-   * @param {string} [userQuery] - Original user message for spec extraction
-   * @param {string} [searchQuery] - The search query Claude used
-   */
   const processProductSearchResult = (toolUseResponse, shopDomain, userQuery, searchQuery) => {
     try {
       if (!toolUseResponse?.content || toolUseResponse.content.length === 0) {
@@ -258,18 +235,60 @@ export function createToolService() {
         return [];
       }
 
-      if (!responseData?.products || !Array.isArray(responseData.products)) {
+      // v2.1: accept multiple product-list keys and normalise into .products.
+      const rawProducts =
+        (Array.isArray(responseData?.products) && responseData.products) ||
+        (Array.isArray(responseData?.items)    && responseData.items)    ||
+        (Array.isArray(responseData?.results)  && responseData.results)  ||
+        [];
+
+      if (rawProducts.length === 0) {
         return [];
       }
+      responseData.products = rawProducts;
 
-      const resultCount = responseData.products.length;
+      const resultCount = rawProducts.length;
       console.log(`[ToolService] Search returned ${resultCount} products`);
 
-      // Extract specs from BOTH user query and search query for maximum coverage
+      // ─────────────────────────────────────────────
+      // v2.1: BRAND / KEYWORD RELEVANCE GATE
+      // Drop fuzzy-match junk before it reaches Claude or the UI.
+      // If the user typed a distinctive token (likely a brand or model)
+      // and NO product contains any of those tokens, return [] so the
+      // zero-results fallback path fires in chat.jsx.
+      // ─────────────────────────────────────────────
+      const distinctiveTokens = Array.from(new Set([
+        ...extractDistinctiveTokens(searchQuery || ''),
+        ...extractDistinctiveTokens(userQuery || ''),
+      ]));
+
+      if (distinctiveTokens.length > 0) {
+        const matched = responseData.products.filter(p => {
+          const hay = buildProductSearchText(p).toLowerCase();
+          return distinctiveTokens.some(t => hay.includes(t));
+        });
+
+        if (matched.length === 0) {
+          console.log(
+            `[ToolService] Relevance gate: 0/${responseData.products.length} products match ` +
+            `tokens [${distinctiveTokens.join(', ')}] — dropping all, will trigger fallback`
+          );
+          return [];
+        }
+
+        if (matched.length < responseData.products.length) {
+          console.log(
+            `[ToolService] Relevance gate: kept ${matched.length}/${responseData.products.length} ` +
+            `(tokens: ${distinctiveTokens.join(', ')})`
+          );
+          responseData.products = matched;
+        }
+      }
+
+      // Spec extraction and scoring (unchanged behaviour).
       const userSpecs = extractQuerySpecs(userQuery || '');
       const searchSpecs = extractQuerySpecs(searchQuery || '');
 
-      // Merge specs (deduplicate)
       const mergedSpecs = {
         dimensions: [...new Set([...userSpecs.dimensions, ...searchSpecs.dimensions])],
         skuPatterns: [...new Set([...userSpecs.skuPatterns, ...searchSpecs.skuPatterns])],
@@ -322,7 +341,6 @@ export function createToolService() {
         };
       });
 
-      // Sort by spec score and filter if specs were found
       let rankedProducts = fixedProducts;
       if (hasSpecs) {
         rankedProducts.sort((a, b) => b._specScore - a._specScore);
@@ -334,7 +352,6 @@ export function createToolService() {
             console.log(`[ToolService] Spec filter: ${matched.length}/${fixedProducts.length} matched (top: ${topScore})`);
             rankedProducts = matched;
 
-            // If exact SKU match (score >= 100), return ONLY exact matches
             if (topScore >= 100) {
               const exactMatches = rankedProducts.filter(p => p._specScore >= 100);
               if (exactMatches.length > 0) {
@@ -346,12 +363,10 @@ export function createToolService() {
         }
       }
 
-      // Remove internal scoring field
       rankedProducts.forEach(p => delete p._specScore);
 
       console.log(`[ToolService] Returning ${Math.min(rankedProducts.length, MAX_PRODUCTS_TO_DISPLAY)} products`);
 
-      // Update tool response so Claude sees processed data
       responseData.products = rankedProducts;
       toolUseResponse.content[0].text = JSON.stringify(responseData);
 

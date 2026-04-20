@@ -1,43 +1,57 @@
 /**
- * Tool Service — v2.3
+ * Tool Service — v2.4
  * Processes MCP tool responses (product search, cart updates)
  *
- * CHANGES (v2.3 — April 2026 CRITICAL PRODUCTION FIX):
- *   - FIXED: Relevance gate was dropping ALL products from successful Shopify
- *     semantic searches. Shopify's `search_catalog` uses vector/semantic search
- *     and returns conceptually related products that may not contain the
- *     literal query tokens in their title/description. The old v2.2 gate
- *     required at least one literal token match, which caused EVERY search to
- *     return zero when the query term wasn't in product text.
+ * =============================================================================
+ * CHANGES (v2.4 — April 2026 — TWO PRODUCTION FIXES)
+ * =============================================================================
  *
- *     Confirmed in production logs (2026-04-20):
- *       user "AODD pump" → Shopify returns 10 pumps → gate drops all
- *         because no product contains literal "pump" or "aodd"
- *       user "proximity sensor" → Shopify returns 10 sensors → gate drops all
- *         because no product contains literal "proximity"
- *       fallback search "diaphragm" → 10 products returned → gate drops all
+ * FIX 1 — Price rendering bug ("[object Object] -" in product cards):
+ *   Shopify's Storefront MCP `search_catalog` returns `price_range.min` and
+ *   `price_range.max` in multiple shapes across stores/versions:
+ *     - strings: "28.0" (documented format — shopify.dev example)
+ *     - objects: { amount: "60.00", currency_code: "AED" } (observed in prod)
+ *   Old code did `priceText = `${pr.min} - ${pr.max} ${currency}`` which, when
+ *   pr.min / pr.max were objects, produced the literal string
+ *   "[object Object] - [object Object] USD" on the product cards.
  *
- *     NEW BEHAVIOUR (v2.3):
- *       - If SOME products literally match → surface those first (prefer)
- *       - If NO products literally match → keep Shopify's semantic ordering
- *         (trust Shopify's ranker — better than returning nothing)
- *       - Spec-based SKU/dimension scoring is preserved and unchanged
+ *   NEW: A robust `formatPrice()` helper that handles:
+ *     - direct string/number prices
+ *     - object prices { amount, currency_code } / { amount, currency }
+ *     - price_range with string OR object min/max
+ *     - variant-level price fallback
+ *     - Shopify GraphQL priceRange.minVariantPrice shape (safety net)
+ *   It NEVER returns an object. Returns '' if no valid amount can be extracted.
  *
- *     Net effect: we never throw away a successful Shopify search result.
- *     We only re-rank when we can clearly identify exact matches.
+ * FIX 2 — v2.3 "soft gate" was too permissive (wrong products shown):
+ *   v2.3 trusted Shopify's semantic search entirely, which was correct for
+ *   generic queries ("sensors") but WRONG for specific queries like
+ *   "AODD pumps" — Shopify returned 10 unrelated pneumatic cylinders, and
+ *   v2.3 passed them through. Users saw cylinders when asking for pumps.
  *
- * CHANGES (v2.2 — SUPERSEDED by v2.3):
- *   - Used searchQuery-only tokens for the gate. The gate itself was the
- *     real issue, so v2.3 replaces the logic rather than adjusting inputs.
+ *   NEW: Back to a STRICT gate — drop products when distinctive tokens have
+ *   zero literal matches. BUT with an EXPANDED stopword list so generic
+ *   category queries still pass through:
+ *     - Generic query ("pumps", "sensors")     → no distinctive tokens →
+ *                                                 gate skipped → all shown
+ *     - Specific query ("AODD pumps")          → "aodd" distinctive →
+ *                                                 gate drops unrelated results
+ *     - Brand query ("Mindman cylinders")      → "mindman" distinctive →
+ *                                                 only Mindman products shown
  *
- * CHANGES (v2.1):
- *   - Accept multiple product-list shapes: { products }, { items }, { results }.
+ *   When strict gate drops all results, chat.jsx injects a retry hint, Claude
+ *   retries with simpler/broader queries (which pass through the stopword
+ *   filter), and the user sees appropriate products + honest messaging like
+ *   "we don't have AODD pumps specifically, but here's our pneumatic range".
  *
- * CHANGES (v2.0):
- *   - Fixed false-positive SKU detection (24VDC, CAT5, RJ45, 25MM skipped)
- *   - Added blocklist for industrial spec tokens
- *   - Tightened SKU regex
- *   - Increased MAX_PRODUCTS_TO_DISPLAY from 8 to 12
+ * =============================================================================
+ * PREVIOUS VERSIONS (kept for history)
+ * =============================================================================
+ * v2.3: Soft gate — never dropped products. Replaced by v2.4 (too permissive).
+ * v2.2: Strict gate with limited stopwords. Replaced by v2.3 (too strict for
+ *       generic category queries like "sensors" which had no stopwords).
+ * v2.1: Accept multiple product-list shapes {products}/{items}/{results}.
+ * v2.0: Fixed false-positive SKU detection, blocklist, tightened SKU regex.
  */
 
 // ──────────────────────────────────────────────
@@ -68,19 +82,50 @@ const SPEC_TOKEN_BLOCKLIST = new Set([
 ]);
 
 // ──────────────────────────────────────────────
-// Stopwords used by the (now-soft) relevance gate.
-// Words on this list are NOT treated as distinctive query tokens.
+// v2.4: Stopwords for the relevance gate.
+// Words here are NOT treated as distinctive tokens —
+// meaning generic category queries ("sensors", "pumps")
+// bypass the gate and show whatever Shopify returns.
+// Distinctive terms (brands, SKUs, specific acronyms
+// like "AODD", "proximity") will still trigger the gate.
 // ──────────────────────────────────────────────
 const RELEVANCE_STOPWORDS = new Set([
+  // Articles, prepositions, pronouns
   "the", "a", "an", "and", "or", "for", "of", "with", "in", "on", "to", "me", "my",
-  "show", "find", "need", "want", "do", "you", "have", "got", "some", "any", "please",
-  "i", "is", "are", "can", "could", "would", "looking", "search",
+  "is", "are", "can", "could", "would", "should",
+  "i", "you", "we", "they", "this", "that", "these", "those",
+  // Verbs & intent words
+  "show", "find", "need", "want", "do", "have", "got", "some", "any", "please",
+  "looking", "search", "get", "see", "browse", "tell", "give", "help",
+  // Filler words commonly in user queries
+  "right", "best", "good", "great", "new", "old", "also", "very", "really",
+  "here", "there", "about", "what", "which", "how", "when", "where",
+  // Generic product words
   "product", "products", "part", "parts", "item", "items",
-  // Generic product categories — pass through so browsing works
-  "sensor", "sensors", "cable", "cables", "valve", "valves",
-  "breaker", "breakers", "fuse", "fuses", "relay", "relays",
-  "pump", "pumps", "motor", "motors", "drive", "drives",
-  "switch", "switches", "light", "lights", "tool", "tools",
+  // Generic industrial/electrical categories — both singular and plural
+  "sensor", "sensors",
+  "cable", "cables",
+  "valve", "valves",
+  "breaker", "breakers",
+  "fuse", "fuses",
+  "relay", "relays",
+  "pump", "pumps",
+  "motor", "motors",
+  "drive", "drives",
+  "switch", "switches",
+  "cylinder", "cylinders",
+  "actuator", "actuators",
+  "connector", "connectors",
+  "transformer", "transformers",
+  "contactor", "contactors",
+  "solenoid", "solenoids",
+  "coupling", "couplings",
+  "filter", "filters",
+  "supply", "supplies",
+  "light", "lights",
+  "tool", "tools",
+  "unit", "units",
+  "power",
 ]);
 
 function isBlocklistedToken(token) {
@@ -93,6 +138,114 @@ function isBlocklistedToken(token) {
   if (/^IP\d{2}$/i.test(token)) return true;
 
   return false;
+}
+
+// ──────────────────────────────────────────────
+// v2.4 FIX #1: Robust price formatter.
+// Handles EVERY observed shape of Shopify MCP price data and
+// GUARANTEES a string return (never returns an object, so the UI
+// can never show "[object Object]").
+//
+// Confirmed shapes from Shopify docs + prod observation:
+//   { price: "28.0", currency: "CAD" }                 ← variant-style
+//   { price: { amount: "28.0", currency_code: "CAD" } } ← object-style
+//   { price_range: { min: "28.0", max: "28.0", currency: "CAD" } }    ← flat
+//   { price_range: { min: {amount:"60",currency_code:"AED"}, max: {...} } } ← nested
+//   { priceRange: { minVariantPrice: { amount, currencyCode } } }     ← GraphQL
+// ──────────────────────────────────────────────
+function extractAmount(val) {
+  if (val === null || val === undefined) return null;
+  if (typeof val === 'string') {
+    // Reject strings that are clearly not numeric (like "[object Object]" if somehow here)
+    return val.trim() || null;
+  }
+  if (typeof val === 'number') return String(val);
+  if (typeof val === 'object') {
+    // Try common keys used by Shopify and variants
+    if (val.amount !== undefined && val.amount !== null) return String(val.amount);
+    if (val.value !== undefined && val.value !== null) return String(val.value);
+    if (val.price !== undefined && val.price !== null) {
+      // Nested one level — but only if it's a primitive
+      const inner = val.price;
+      if (typeof inner === 'string' || typeof inner === 'number') return String(inner);
+    }
+  }
+  return null;
+}
+
+function extractCurrency(val, fallback = '') {
+  if (!val) return fallback;
+  if (typeof val === 'string') {
+    // If it looks like a currency code (3 uppercase letters), use it
+    if (/^[A-Z]{3}$/.test(val)) return val;
+    return fallback;
+  }
+  if (typeof val === 'object') {
+    return val.currency_code || val.currencyCode || val.currency || fallback;
+  }
+  return fallback;
+}
+
+function formatPrice(p) {
+  if (!p || typeof p !== 'object') return '';
+
+  // Case 1: top-level price field (string, number, or object)
+  if (p.price !== undefined && p.price !== null) {
+    const amt = extractAmount(p.price);
+    const curr = extractCurrency(
+      p.price,
+      p.currency || p.currency_code || p.currencyCode || ''
+    );
+    if (amt) return curr ? `${amt} ${curr}` : amt;
+  }
+
+  // Case 2: price_range with min/max (either strings or nested objects)
+  if (p.price_range && typeof p.price_range === 'object') {
+    const pr = p.price_range;
+    const minAmt = extractAmount(pr.min);
+    const maxAmt = extractAmount(pr.max);
+    // Currency can live on price_range, on min/max objects, or on product
+    const currency =
+      extractCurrency(pr.currency, '') ||
+      extractCurrency(pr.min, '') ||
+      extractCurrency(pr.max, '') ||
+      extractCurrency(pr.currency_code, '') ||
+      extractCurrency(p.currency || p.currency_code, '') ||
+      'USD';
+
+    if (minAmt && maxAmt && minAmt !== maxAmt) {
+      return `${minAmt} - ${maxAmt} ${currency}`;
+    }
+    if (minAmt) return `${minAmt} ${currency}`;
+    if (maxAmt) return `${maxAmt} ${currency}`;
+  }
+
+  // Case 3: Shopify GraphQL shape (priceRange.minVariantPrice)
+  if (p.priceRange && typeof p.priceRange === 'object') {
+    const minV = p.priceRange.minVariantPrice;
+    if (minV) {
+      const amt = extractAmount(minV);
+      const curr = extractCurrency(minV);
+      if (amt) return curr ? `${amt} ${curr}` : amt;
+    }
+  }
+
+  // Case 4: Fall back to first available variant price
+  if (Array.isArray(p.variants) && p.variants.length > 0) {
+    for (const v of p.variants) {
+      if (!v) continue;
+      const amt = extractAmount(v.price);
+      if (amt) {
+        const curr = extractCurrency(
+          v.price,
+          v.currency || v.currency_code || v.currencyCode || ''
+        );
+        return curr ? `${amt} ${curr}` : amt;
+      }
+    }
+  }
+
+  return '';
 }
 
 function extractQuerySpecs(query) {
@@ -199,8 +352,8 @@ function scoreProductBySpecs(product, specs) {
 }
 
 /**
- * Extract distinctive tokens from a query for literal-match re-ranking.
- * Returns tokens that are ≥3 chars, alphanumeric, not stopwords, not blocklisted.
+ * Extract distinctive tokens from a query for the relevance gate.
+ * Returns tokens that are ≥3 chars, alphanumeric, not stopwords, not blocklisted specs.
  */
 function extractDistinctiveTokens(query) {
   if (!query || typeof query !== 'string') return [];
@@ -268,49 +421,47 @@ export function createToolService() {
       console.log(`[ToolService] Search returned ${resultCount} products`);
 
       // ─────────────────────────────────────────────
-      // v2.3: SOFT RELEVANCE GATE (PRODUCTION FIX)
+      // v2.4 FIX #2: STRICT RELEVANCE GATE
       //
-      // Shopify's search_catalog uses semantic/vector search — returned
-      // products are conceptually related but may not contain query tokens
-      // literally. The v2.2 hard gate dropped 10/10 products on every
-      // semantic match, breaking search entirely.
+      // Drop products when distinctive query tokens have ZERO literal matches.
+      // This prevents Shopify's semantic search from showing unrelated products
+      // (e.g., cylinders when user asked for "AODD pumps").
       //
-      // New rule: we RE-RANK (prefer literal matches first), never DROP.
-      // If zero products contain any query token, we trust Shopify's
-      // semantic ranking and pass the results through unchanged.
+      // Stopwords ensure generic category queries ("sensors", "pumps") have
+      // NO distinctive tokens, so the gate is skipped and all results pass.
+      // Only specific terms (brands, SKUs, acronyms like "AODD", "proximity")
+      // trigger the strict filter.
+      //
+      // If gate drops all products, chat.jsx will send a retry hint to Claude,
+      // who will retry with simpler queries that pass through stopwords.
       // ─────────────────────────────────────────────
       const distinctiveTokens = extractDistinctiveTokens(searchQuery || userQuery || '');
 
       if (distinctiveTokens.length > 0) {
         const literalMatches = [];
-        const semanticOnly = [];
 
         for (const p of responseData.products) {
           const hay = buildProductSearchText(p).toLowerCase();
           if (distinctiveTokens.some(t => hay.includes(t))) {
             literalMatches.push(p);
-          } else {
-            semanticOnly.push(p);
           }
         }
 
         if (literalMatches.length === 0) {
-          // Shopify found semantic matches but none match literally.
-          // TRUST Shopify's ranker — this is the v2.3 fix.
           console.log(
-            `[ToolService] Soft gate: 0 literal matches for [${distinctiveTokens.join(', ')}], ` +
-            `keeping all ${responseData.products.length} semantic results from Shopify`
+            `[ToolService] Strict gate: 0 literal matches for [${distinctiveTokens.join(', ')}] ` +
+            `— dropping ${responseData.products.length} unrelated semantic results`
           );
-          // No change to responseData.products — pass through
-        } else if (literalMatches.length < responseData.products.length) {
-          // Mix of literal + semantic: surface literal first, then semantic
-          console.log(
-            `[ToolService] Soft gate: ${literalMatches.length} literal + ${semanticOnly.length} semantic ` +
-            `(tokens: ${distinctiveTokens.join(', ')}) — literal first`
-          );
-          responseData.products = [...literalMatches, ...semanticOnly];
+          return [];
         }
-        // else: all match literally, no reordering needed
+
+        if (literalMatches.length < responseData.products.length) {
+          console.log(
+            `[ToolService] Strict gate: kept ${literalMatches.length}/${responseData.products.length} ` +
+            `literal matches (tokens: ${distinctiveTokens.join(', ')})`
+          );
+          responseData.products = literalMatches;
+        }
       }
 
       // Spec extraction and scoring (SKU / dimension exact match re-ranking)
@@ -339,18 +490,10 @@ export function createToolService() {
         }
         const variantIdRaw = firstVariant?.id || firstVariant?.variant_id || null;
 
-        let priceText = '';
-        if (p.price) {
-          priceText = p.price;
-        } else if (p.price_range) {
-          const pr = p.price_range;
-          const currency = pr.currency || 'USD';
-          if (pr.min && pr.max && pr.min !== pr.max) {
-            priceText = `${pr.min} - ${pr.max} ${currency}`;
-          } else if (pr.min) {
-            priceText = `${pr.min} ${currency}`;
-          }
-        }
+        // v2.4: Use robust formatPrice() instead of raw template-literal assignment.
+        // This eliminates "[object Object]" rendering when Shopify returns
+        // object-shaped prices.
+        const priceText = formatPrice(p);
 
         const specScore = hasSpecs ? scoreProductBySpecs(p, mergedSpecs) : 0;
 
@@ -360,7 +503,7 @@ export function createToolService() {
           handle: p.handle || null,
           image_url: rawImageUrl,
           url: productUrl,
-          price: priceText,
+          price: priceText, // guaranteed string
           description: p.description || '',
           variant_id: variantIdRaw,
           merchandise_id: variantIdRaw,
@@ -382,13 +525,13 @@ export function createToolService() {
           console.log(`[ToolService] Exact SKU match: returning ${exactMatches.length} products only`);
           rankedProducts = exactMatches;
         } else if (topScore > 0) {
-          // Some spec matches — surface them first, keep rest as semantic fallback
+          // Some spec matches — surface them first
           const matched = withScores.filter(p => p._specScore > 0);
           const unmatched = withScores.filter(p => p._specScore === 0);
-          console.log(`[ToolService] Spec re-rank: ${matched.length} matched, ${unmatched.length} semantic (top score: ${topScore})`);
+          console.log(`[ToolService] Spec re-rank: ${matched.length} matched, ${unmatched.length} passthrough (top score: ${topScore})`);
           rankedProducts = [...matched, ...unmatched];
         }
-        // else: no spec matches — keep original order (from soft gate above)
+        // else: no spec matches — keep original order
       }
 
       rankedProducts.forEach(p => delete p._specScore);

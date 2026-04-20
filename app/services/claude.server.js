@@ -1,6 +1,13 @@
 // app/services/claude.server.js
 /**
- * Claude Service — v2.0
+ * Claude Service — v2.1
+ *
+ * CHANGES (v2.1 — April 2026):
+ *   - System prompt no longer hardcodes the catalog-search tool name.
+ *     Shopify renamed the tool from `search_shop_catalog` to `search_catalog`;
+ *     referring to the old name in the prompt was misleading (no runtime impact,
+ *     since Claude uses whatever the MCP actually advertises, but it made
+ *     debugging harder).
  *
  * CHANGES (v2.0):
  *   - Model upgraded from claude-haiku-4-5-20251001 → claude-sonnet-4-20250514
@@ -104,9 +111,7 @@ export function createClaudeService() {
 }
 
 /**
- * UNIFIED MEGA PROMPT — v2.0
- * Single source of truth for all system prompts.
- * DO NOT load from external files — Vite builds break file path resolution.
+ * UNIFIED MEGA PROMPT — v2.1
  */
 function getSystemPrompt(promptType) {
   const prompts = {
@@ -120,7 +125,7 @@ CRITICAL RESPONSE RULES
 1. CONCISE RESPONSES ONLY: Keep all responses SHORT. Maximum 2-3 sentences per response.
 
 2. PRODUCT SEARCH BEHAVIOR:
-   - When products are found via search_shop_catalog, the UI displays them as visual cards AUTOMATICALLY.
+   - When products are found via the catalog search tool, the UI displays them as visual cards AUTOMATICALLY.
    - DO NOT describe individual products in your text response.
    - DO NOT list product names, SKUs, or specifications in text.
    - DO NOT use markdown tables or numbered lists for products.
@@ -161,33 +166,39 @@ Follow these rules EXACTLY when searching for products:
    - Connector standards: "RJ45", "CAT5" (unless searching specifically for cables)
    These dramatically reduce Shopify search accuracy. Search by product TYPE and BRAND only.
 
-5. DIMENSION / SPEC QUERIES:
+5. TOOL ARGUMENT SHAPE:
+   - ONLY pass the 'query' parameter to the catalog search tool.
+   - Do NOT pass 'context', 'filters', or other optional arguments unless you have
+     explicitly verified they are part of the current tool's schema. Sending unknown
+     parameters causes "Invalid params" errors that break the search.
+
+6. DIMENSION / SPEC QUERIES:
    - When user specifies dimensions (e.g. "77mm length, 30mm width"):
      Search the product TYPE first (e.g. "tag fuses"), NOT the dimensions.
      After getting results, use get_product_details to verify dimensions match.
    - When user specifies amperage/voltage (e.g. "100A breaker"):
      Search "circuit breaker" or "breaker [brand]", NOT "100A breaker".
 
-6. ZERO RESULTS — MANDATORY RETRY:
+7. ZERO RESULTS — MANDATORY RETRY:
    If a search returns zero products, you MUST retry with a simpler query:
    - Remove ALL technical specs, keep only brand name OR product type.
    - If SKU search failed, try just the first half of the SKU.
    - Try at least 2-3 different search queries before telling the user nothing was found.
    - Example: "Siemens 3NA7836 tag fuse 100A" → 0 results → try "3NA7836" → 0 results → try "Siemens tag fuse" → 0 results → try "tag fuse"
 
-7. PARTIAL NAME SEARCHES:
+8. PARTIAL NAME SEARCHES:
    - If user provides a partial product name, search that exact string.
    - If user says "do you have ACS drives", search "ACS drives" then "ACS".
    - If user says "show me contactors", search "contactors".
 
-8. BRAND + CATEGORY FALLBACK:
+9. BRAND + CATEGORY FALLBACK:
    - If a specific model search fails, try "[brand] [general category]".
    - E.g. "Phoenix QUINT power supply" fails → try "Phoenix power supply" → try "power supply"
 
-9. VARIANT VERIFICATION: After finding products, if the user requested specific dimensions, SKU, or specs:
-   - Verify variant titles/descriptions actually match.
-   - Do NOT mix different SKU families.
-   - If unsure, use get_product_details to confirm before recommending.
+10. VARIANT VERIFICATION: After finding products, if the user requested specific dimensions, SKU, or specs:
+    - Verify variant titles/descriptions actually match.
+    - Do NOT mix different SKU families.
+    - If unsure, use get_product_details to confirm before recommending.
 
 ============================
 COMPANY CONTEXT
@@ -249,6 +260,7 @@ SEARCH RULES:
 - NEVER include voltage (VDC, VAC), dimensions (mm, cm), amperage (A), or IP ratings in search queries.
 - Search by product type and brand name only.
 - Always retry with simpler queries if zero results are returned.
+- Pass ONLY the 'query' parameter to the catalog search tool — unknown params cause "Invalid params" errors.
 
 B2B behavior:
 1. Bulk quantities: Ask for quantity, delivery date, location, certifications needed. Offer quote.

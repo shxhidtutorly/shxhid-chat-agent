@@ -1,16 +1,21 @@
 /**
- * Tool Service — v2.1
+ * Tool Service — v2.2
  * Processes MCP tool responses (product search, cart updates)
  *
- * CHANGES (v2.1 — April 2026 production fix):
+ * CHANGES (v2.2 — April 2026 hotfix):
+ *   - Relevance gate now uses ONLY the current `searchQuery` tokens, not a
+ *     merge of userQuery + searchQuery. v2.1's merge caused this regression:
+ *     when the user's original query contained a brand/model not in the
+ *     catalog (e.g. "ifm sensors") or a typo (e.g. "proxcimity"), Claude
+ *     would correctly broaden the search (to just "sensors"), but the gate
+ *     still blocked every product because the user's original token
+ *     (which isn't in ANY catalog product) was still in the token set.
+ *     Net effect: user saw no product cards at all, even when the store has
+ *     sensors. Fixed by trusting Claude's broadening choice.
+ *
+ * CHANGES (v2.1):
  *   - Accept multiple product-list shapes: { products }, { items }, { results }.
- *     The new Shopify `search_catalog` tool may use a different key than the
- *     legacy `search_shop_catalog` tool did.
- *   - Added brand/keyword relevance gate: if the user's distinctive query tokens
- *     match NO returned products, drop everything and return []. Shopify's search
- *     is fuzzy — for "ifm sensors" against a catalog with no IFM items it was
- *     returning Mindman pneumatic cylinders. Returning [] routes execution into
- *     the zero-results fallback + retry-hint path in chat.jsx.
+ *   - Added brand/keyword relevance gate to drop fuzzy-match junk.
  *
  * CHANGES (v2.0):
  *   - Fixed false-positive SKU detection (24VDC, CAT5, RJ45, 25MM no longer treated as SKUs)
@@ -251,16 +256,27 @@ export function createToolService() {
       console.log(`[ToolService] Search returned ${resultCount} products`);
 
       // ─────────────────────────────────────────────
-      // v2.1: BRAND / KEYWORD RELEVANCE GATE
-      // Drop fuzzy-match junk before it reaches Claude or the UI.
-      // If the user typed a distinctive token (likely a brand or model)
-      // and NO product contains any of those tokens, return [] so the
-      // zero-results fallback path fires in chat.jsx.
+      // v2.2: BRAND / KEYWORD RELEVANCE GATE (fixed)
+      //
+      // Drop fuzzy-match junk before it reaches Claude or the UI, while
+      // respecting Claude's decision to broaden the search.
+      //
+      // WHY searchQuery ONLY (not merged with userQuery):
+      // v2.1 merged tokens from userQuery + searchQuery. That caused this bug:
+      // when the user typed "ifm sensors" (and IFM isn't in the catalog),
+      // Claude would correctly fall back to searching "sensors" alone — but
+      // the gate still had "ifm" in its token set from userQuery, so every
+      // sensor product in the catalog got dropped. Same problem with typos:
+      // user types "proxcimity sensors", Claude corrects to "proximity",
+      // then broadens to "sensors", and "proxcimity" from userQuery blocked
+      // everything.
+      //
+      // By gating only against the CURRENT search term, we trust Claude's
+      // broadening decisions. The initial search still gets strict filtering
+      // (because searchQuery ≈ userQuery on the first turn), which keeps the
+      // original "Mindman cylinders for ifm sensors" regression fixed.
       // ─────────────────────────────────────────────
-      const distinctiveTokens = Array.from(new Set([
-        ...extractDistinctiveTokens(searchQuery || ''),
-        ...extractDistinctiveTokens(userQuery || ''),
-      ]));
+      const distinctiveTokens = extractDistinctiveTokens(searchQuery || userQuery || '');
 
       if (distinctiveTokens.length > 0) {
         const matched = responseData.products.filter(p => {

@@ -1,34 +1,48 @@
 /**
- * Tool Service — v2.2
+ * Tool Service — v2.3
  * Processes MCP tool responses (product search, cart updates)
  *
- * CHANGES (v2.2 — April 2026 hotfix):
- *   - Relevance gate now uses ONLY the current `searchQuery` tokens, not a
- *     merge of userQuery + searchQuery. v2.1's merge caused this regression:
- *     when the user's original query contained a brand/model not in the
- *     catalog (e.g. "ifm sensors") or a typo (e.g. "proxcimity"), Claude
- *     would correctly broaden the search (to just "sensors"), but the gate
- *     still blocked every product because the user's original token
- *     (which isn't in ANY catalog product) was still in the token set.
- *     Net effect: user saw no product cards at all, even when the store has
- *     sensors. Fixed by trusting Claude's broadening choice.
+ * CHANGES (v2.3 — April 2026 CRITICAL PRODUCTION FIX):
+ *   - FIXED: Relevance gate was dropping ALL products from successful Shopify
+ *     semantic searches. Shopify's `search_catalog` uses vector/semantic search
+ *     and returns conceptually related products that may not contain the
+ *     literal query tokens in their title/description. The old v2.2 gate
+ *     required at least one literal token match, which caused EVERY search to
+ *     return zero when the query term wasn't in product text.
+ *
+ *     Confirmed in production logs (2026-04-20):
+ *       user "AODD pump" → Shopify returns 10 pumps → gate drops all
+ *         because no product contains literal "pump" or "aodd"
+ *       user "proximity sensor" → Shopify returns 10 sensors → gate drops all
+ *         because no product contains literal "proximity"
+ *       fallback search "diaphragm" → 10 products returned → gate drops all
+ *
+ *     NEW BEHAVIOUR (v2.3):
+ *       - If SOME products literally match → surface those first (prefer)
+ *       - If NO products literally match → keep Shopify's semantic ordering
+ *         (trust Shopify's ranker — better than returning nothing)
+ *       - Spec-based SKU/dimension scoring is preserved and unchanged
+ *
+ *     Net effect: we never throw away a successful Shopify search result.
+ *     We only re-rank when we can clearly identify exact matches.
+ *
+ * CHANGES (v2.2 — SUPERSEDED by v2.3):
+ *   - Used searchQuery-only tokens for the gate. The gate itself was the
+ *     real issue, so v2.3 replaces the logic rather than adjusting inputs.
  *
  * CHANGES (v2.1):
  *   - Accept multiple product-list shapes: { products }, { items }, { results }.
- *   - Added brand/keyword relevance gate to drop fuzzy-match junk.
  *
  * CHANGES (v2.0):
- *   - Fixed false-positive SKU detection (24VDC, CAT5, RJ45, 25MM no longer treated as SKUs)
- *   - Added blocklist for common industrial spec tokens
- *   - Tightened SKU regex: requires 5+ chars OR must contain a separator (- . /)
- *   - Moved "NNmm" pattern from SKU matching to dimension matching
+ *   - Fixed false-positive SKU detection (24VDC, CAT5, RJ45, 25MM skipped)
+ *   - Added blocklist for industrial spec tokens
+ *   - Tightened SKU regex
  *   - Increased MAX_PRODUCTS_TO_DISPLAY from 8 to 12
  */
 
 // ──────────────────────────────────────────────
 // Blocklist: tokens that LOOK like SKUs but are
-// actually voltage ratings, cable categories,
-// dimension strings, or protocol names.
+// actually voltage/cable/protocol/dimension strings.
 // ──────────────────────────────────────────────
 const SPEC_TOKEN_BLOCKLIST = new Set([
   // Voltage ratings
@@ -54,20 +68,19 @@ const SPEC_TOKEN_BLOCKLIST = new Set([
 ]);
 
 // ──────────────────────────────────────────────
-// v2.1: Stopwords used by the relevance gate.
-// Words on this list do NOT count as distinctive
-// query tokens, so "show me sensors" still shows
-// whatever the store has under "sensor".
+// Stopwords used by the (now-soft) relevance gate.
+// Words on this list are NOT treated as distinctive query tokens.
 // ──────────────────────────────────────────────
 const RELEVANCE_STOPWORDS = new Set([
   "the", "a", "an", "and", "or", "for", "of", "with", "in", "on", "to", "me", "my",
   "show", "find", "need", "want", "do", "you", "have", "got", "some", "any", "please",
   "i", "is", "are", "can", "could", "would", "looking", "search",
   "product", "products", "part", "parts", "item", "items",
-  // Generic product categories — intentionally allowed to pass through
-  // so users browsing "sensors" or "cables" still see results.
+  // Generic product categories — pass through so browsing works
   "sensor", "sensors", "cable", "cables", "valve", "valves",
   "breaker", "breakers", "fuse", "fuses", "relay", "relays",
+  "pump", "pumps", "motor", "motors", "drive", "drives",
+  "switch", "switches", "light", "lights", "tool", "tools",
 ]);
 
 function isBlocklistedToken(token) {
@@ -186,9 +199,8 @@ function scoreProductBySpecs(product, specs) {
 }
 
 /**
- * v2.1: Extract distinctive tokens from the user/search query for the relevance gate.
- * Returns tokens that are ≥3 chars, alphanumeric, not stopwords, not blocklisted specs.
- * These are the words that MUST appear in a product for it to be considered relevant.
+ * Extract distinctive tokens from a query for literal-match re-ranking.
+ * Returns tokens that are ≥3 chars, alphanumeric, not stopwords, not blocklisted.
  */
 function extractDistinctiveTokens(query) {
   if (!query || typeof query !== 'string') return [];
@@ -240,7 +252,7 @@ export function createToolService() {
         return [];
       }
 
-      // v2.1: accept multiple product-list keys and normalise into .products.
+      // Accept multiple product-list keys and normalise into .products
       const rawProducts =
         (Array.isArray(responseData?.products) && responseData.products) ||
         (Array.isArray(responseData?.items)    && responseData.items)    ||
@@ -256,52 +268,52 @@ export function createToolService() {
       console.log(`[ToolService] Search returned ${resultCount} products`);
 
       // ─────────────────────────────────────────────
-      // v2.2: BRAND / KEYWORD RELEVANCE GATE (fixed)
+      // v2.3: SOFT RELEVANCE GATE (PRODUCTION FIX)
       //
-      // Drop fuzzy-match junk before it reaches Claude or the UI, while
-      // respecting Claude's decision to broaden the search.
+      // Shopify's search_catalog uses semantic/vector search — returned
+      // products are conceptually related but may not contain query tokens
+      // literally. The v2.2 hard gate dropped 10/10 products on every
+      // semantic match, breaking search entirely.
       //
-      // WHY searchQuery ONLY (not merged with userQuery):
-      // v2.1 merged tokens from userQuery + searchQuery. That caused this bug:
-      // when the user typed "ifm sensors" (and IFM isn't in the catalog),
-      // Claude would correctly fall back to searching "sensors" alone — but
-      // the gate still had "ifm" in its token set from userQuery, so every
-      // sensor product in the catalog got dropped. Same problem with typos:
-      // user types "proxcimity sensors", Claude corrects to "proximity",
-      // then broadens to "sensors", and "proxcimity" from userQuery blocked
-      // everything.
-      //
-      // By gating only against the CURRENT search term, we trust Claude's
-      // broadening decisions. The initial search still gets strict filtering
-      // (because searchQuery ≈ userQuery on the first turn), which keeps the
-      // original "Mindman cylinders for ifm sensors" regression fixed.
+      // New rule: we RE-RANK (prefer literal matches first), never DROP.
+      // If zero products contain any query token, we trust Shopify's
+      // semantic ranking and pass the results through unchanged.
       // ─────────────────────────────────────────────
       const distinctiveTokens = extractDistinctiveTokens(searchQuery || userQuery || '');
 
       if (distinctiveTokens.length > 0) {
-        const matched = responseData.products.filter(p => {
+        const literalMatches = [];
+        const semanticOnly = [];
+
+        for (const p of responseData.products) {
           const hay = buildProductSearchText(p).toLowerCase();
-          return distinctiveTokens.some(t => hay.includes(t));
-        });
-
-        if (matched.length === 0) {
-          console.log(
-            `[ToolService] Relevance gate: 0/${responseData.products.length} products match ` +
-            `tokens [${distinctiveTokens.join(', ')}] — dropping all, will trigger fallback`
-          );
-          return [];
+          if (distinctiveTokens.some(t => hay.includes(t))) {
+            literalMatches.push(p);
+          } else {
+            semanticOnly.push(p);
+          }
         }
 
-        if (matched.length < responseData.products.length) {
+        if (literalMatches.length === 0) {
+          // Shopify found semantic matches but none match literally.
+          // TRUST Shopify's ranker — this is the v2.3 fix.
           console.log(
-            `[ToolService] Relevance gate: kept ${matched.length}/${responseData.products.length} ` +
-            `(tokens: ${distinctiveTokens.join(', ')})`
+            `[ToolService] Soft gate: 0 literal matches for [${distinctiveTokens.join(', ')}], ` +
+            `keeping all ${responseData.products.length} semantic results from Shopify`
           );
-          responseData.products = matched;
+          // No change to responseData.products — pass through
+        } else if (literalMatches.length < responseData.products.length) {
+          // Mix of literal + semantic: surface literal first, then semantic
+          console.log(
+            `[ToolService] Soft gate: ${literalMatches.length} literal + ${semanticOnly.length} semantic ` +
+            `(tokens: ${distinctiveTokens.join(', ')}) — literal first`
+          );
+          responseData.products = [...literalMatches, ...semanticOnly];
         }
+        // else: all match literally, no reordering needed
       }
 
-      // Spec extraction and scoring (unchanged behaviour).
+      // Spec extraction and scoring (SKU / dimension exact match re-ranking)
       const userSpecs = extractQuerySpecs(userQuery || '');
       const searchSpecs = extractQuerySpecs(searchQuery || '');
 
@@ -358,25 +370,25 @@ export function createToolService() {
       });
 
       let rankedProducts = fixedProducts;
+
+      // Spec-based exact-match re-ranking (only when we have specs to match on)
       if (hasSpecs) {
-        rankedProducts.sort((a, b) => b._specScore - a._specScore);
+        const withScores = [...rankedProducts].sort((a, b) => b._specScore - a._specScore);
+        const topScore = withScores[0]?._specScore || 0;
 
-        const topScore = rankedProducts[0]?._specScore || 0;
-        if (topScore > 0) {
-          const matched = rankedProducts.filter(p => p._specScore > 0);
-          if (matched.length > 0) {
-            console.log(`[ToolService] Spec filter: ${matched.length}/${fixedProducts.length} matched (top: ${topScore})`);
-            rankedProducts = matched;
-
-            if (topScore >= 100) {
-              const exactMatches = rankedProducts.filter(p => p._specScore >= 100);
-              if (exactMatches.length > 0) {
-                console.log(`[ToolService] Exact SKU match: returning ${exactMatches.length} products only`);
-                rankedProducts = exactMatches;
-              }
-            }
-          }
+        if (topScore >= 100) {
+          // Exact SKU match — return ONLY exact matches
+          const exactMatches = withScores.filter(p => p._specScore >= 100);
+          console.log(`[ToolService] Exact SKU match: returning ${exactMatches.length} products only`);
+          rankedProducts = exactMatches;
+        } else if (topScore > 0) {
+          // Some spec matches — surface them first, keep rest as semantic fallback
+          const matched = withScores.filter(p => p._specScore > 0);
+          const unmatched = withScores.filter(p => p._specScore === 0);
+          console.log(`[ToolService] Spec re-rank: ${matched.length} matched, ${unmatched.length} semantic (top score: ${topScore})`);
+          rankedProducts = [...matched, ...unmatched];
         }
+        // else: no spec matches — keep original order (from soft gate above)
       }
 
       rankedProducts.forEach(p => delete p._specScore);

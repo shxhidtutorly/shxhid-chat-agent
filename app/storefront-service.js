@@ -75,20 +75,97 @@ export async function searchProducts(searchQuery) {
 // large catalogs (100k+ products). The native Storefront API
 // `products(query:)` field is a separate, reliable index used by the
 // storefront search bar itself; falling back to it recovers correct results.
+//
+// SKU-FIRST SEARCH (April 2026):
+// For shops with 100k+ B2B SKUs, partial-SKU lookups must be reliable.
+// Shopify Storefront API supports field-targeted search syntax —
+// `sku:*ABC123*` matches the variant SKU field directly, which is far more
+// precise than freetext when the user types a model number.
+// We detect SKU-like tokens in the query and prefix the search with a
+// targeted `sku:* OR title:* OR vendor:*` clause. Falls back to plain
+// freetext if the targeted query returns nothing.
+// Search syntax reference: https://shopify.dev/docs/api/usage/search-syntax
 // ============================================
+
+// SKU-like tokens: alphanumeric with at least one digit and a dash/dot/slash
+// or of length >= 5. Examples:
+//   "3NA7836"      → SKU-like
+//   "6SL3220-1YE34-0UF0" → SKU-like
+//   "ACS580"       → SKU-like (5+ alphanumeric with digit)
+//   "AODD"         → NOT SKU-like (no digits)
+//   "Schneider"    → NOT SKU-like (no digits)
+function extractSkuLikeTokens(query) {
+  if (!query || typeof query !== 'string') return [];
+  const tokens = query.split(/\s+/).filter(Boolean);
+  const out = [];
+  for (const raw of tokens) {
+    const t = raw.replace(/[,;:!?()]+$/g, '').replace(/^[,;:!?()]+/g, '');
+    if (t.length < 4) continue;
+    if (!/\d/.test(t)) continue; // SKUs almost always contain digits
+    if (!/^[A-Za-z0-9][A-Za-z0-9\-\.\/]*$/.test(t)) continue;
+    if (t.length < 5 && !/[\-\.\/]/.test(t)) continue;
+    out.push(t);
+  }
+  return out;
+}
+
+// Escape Shopify search-syntax special characters in a value passed inside
+// `field:*VALUE*`. Shopify treats `* ( ) "` etc. as syntax — we keep `*` for
+// wildcards we add ourselves and escape the rest.
+function escapeSearchValue(v) {
+  return String(v || '').replace(/["()\\:]/g, ' ').trim();
+}
+
+/**
+ * Build a Shopify Storefront search query string. When the user query contains
+ * SKU-like tokens, target them at the SKU/title/vendor fields with wildcards.
+ * Otherwise use plain freetext (Shopify's default cross-field search).
+ */
+function buildStorefrontQueryString(rawQuery) {
+  const trimmed = String(rawQuery || '').trim();
+  const skuTokens = extractSkuLikeTokens(trimmed);
+  if (skuTokens.length === 0) {
+    return trimmed; // freetext
+  }
+  const clauses = skuTokens.map((tok) => {
+    const safe = escapeSearchValue(tok);
+    if (!safe) return null;
+    return `(sku:*${safe}* OR title:*${safe}* OR vendor:*${safe}*)`;
+  }).filter(Boolean);
+  return clauses.join(' AND ');
+}
+
 export async function searchProductsForChat(searchQuery, { first = 50, shopDomain } = {}) {
   if (!searchQuery || typeof searchQuery !== 'string') {
     throw new Error('Search query is required');
   }
 
   const trimmed = searchQuery.trim();
-  console.log(`[StorefrontService:chat] Direct search: "${trimmed.substring(0, 60)}"`);
+  const targetedQuery = buildStorefrontQueryString(trimmed);
+  const isSkuTargeted = targetedQuery !== trimmed;
 
-  const data = await shopifyStorefrontQuery({
+  if (isSkuTargeted) {
+    console.log(`[StorefrontService:chat] SKU-targeted search: "${trimmed}" → "${targetedQuery}"`);
+  } else {
+    console.log(`[StorefrontService:chat] Direct search: "${trimmed.substring(0, 60)}"`);
+  }
+
+  let data = await shopifyStorefrontQuery({
     query: SEARCH_PRODUCTS_QUERY,
-    variables: { query: trimmed, first },
+    variables: { query: targetedQuery, first },
     shopDomain,
   });
+
+  // If SKU-targeted query returned nothing, fall back to plain freetext —
+  // SKU may live in tags/description/handle rather than variant.sku.
+  if (isSkuTargeted && (data?.products?.edges?.length || 0) === 0) {
+    console.log(`[StorefrontService:chat] SKU-targeted query returned 0 — retrying as freetext`);
+    data = await shopifyStorefrontQuery({
+      query: SEARCH_PRODUCTS_QUERY,
+      variables: { query: trimmed, first },
+      shopDomain,
+    });
+  }
 
   const edges = data?.products?.edges || [];
   const products = edges.map(({ node }) => {

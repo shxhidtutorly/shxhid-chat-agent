@@ -1,6 +1,39 @@
 /**
- * Tool Service — v2.4
+ * Tool Service — v2.5
  * Processes MCP tool responses (product search, cart updates)
+ *
+ * =============================================================================
+ * CHANGES (v2.5 — April 2026 — RELEVANCE GATE LEAK FIX)
+ * =============================================================================
+ *
+ * BUG (production): User asks "show me AODD pumps". Catalog has no AODD pumps,
+ * so the assistant retries with progressively simpler queries. Eventually it
+ * searches just "pumps" — which is in RELEVANCE_STOPWORDS, so
+ * extractDistinctiveTokens("pumps") returns []. The strict gate then sees
+ * zero distinctive tokens and is SKIPPED entirely, letting Shopify's semantic
+ * search return whatever it considers loosely related (motor drives /
+ * inverters in this store). Those leak through as product cards while the
+ * assistant simultaneously tells the user "no AODD pumps found" — a
+ * contradictory, broken experience.
+ *
+ * Same pattern for "circuit breaker" → fallback "breaker" (stopword), for
+ * "inductive proximity sensor" → fallback "sensor" (stopword), etc.
+ *
+ * ROOT CAUSE: Gate considered ONLY the AI-narrowed search query, not the
+ * user's original intent. So any time the AI dropped down to a stopword,
+ * the user's distinctive tokens (e.g. "aodd", "proximity", "schneider")
+ * were silently discarded.
+ *
+ * FIX: Compute distinctive tokens from BOTH searchQuery AND userQuery and
+ * gate on the union. If the user's message had specific intent, that intent
+ * stays enforced even when the AI retries with a generic single-word query.
+ *
+ * Behaviour matrix:
+ *   - user "AODD pumps" + AI "pumps"          → tokens [aodd]      → gate enforced
+ *   - user "AODD pumps" + AI "AODD"           → tokens [aodd]      → gate enforced
+ *   - user "show me pumps" + AI "pumps"       → tokens []          → gate skipped (correct)
+ *   - user "Schneider MCB" + AI "breaker"     → tokens [schneider, mcb] → gate enforced
+ *   - user "circuit breaker" + AI "breaker"   → tokens [circuit]   → gate enforced
  *
  * =============================================================================
  * CHANGES (v2.4 — April 2026 — TWO PRODUCTION FIXES)
@@ -421,21 +454,29 @@ export function createToolService() {
       console.log(`[ToolService] Search returned ${resultCount} products`);
 
       // ─────────────────────────────────────────────
-      // v2.4 FIX #2: STRICT RELEVANCE GATE
+      // STRICT RELEVANCE GATE (v2.5)
       //
       // Drop products when distinctive query tokens have ZERO literal matches.
-      // This prevents Shopify's semantic search from showing unrelated products
-      // (e.g., cylinders when user asked for "AODD pumps").
+      // This prevents Shopify's semantic search from showing unrelated
+      // products (e.g. inverter drives when the user asked for "AODD pumps").
       //
       // Stopwords ensure generic category queries ("sensors", "pumps") have
       // NO distinctive tokens, so the gate is skipped and all results pass.
       // Only specific terms (brands, SKUs, acronyms like "AODD", "proximity")
       // trigger the strict filter.
       //
-      // If gate drops all products, chat.jsx will send a retry hint to Claude,
-      // who will retry with simpler queries that pass through stopwords.
+      // v2.5: gate uses the UNION of distinctive tokens from BOTH the
+      // AI-narrowed searchQuery AND the original userQuery. Without this,
+      // when the AI fell back to a single stopword query like "pumps" or
+      // "breaker", the user's specific intent ("aodd", "schneider") was
+      // dropped and unrelated semantic results leaked through to the UI.
+      //
+      // If gate drops all products, chat.jsx will send a retry hint to
+      // Claude, who will retry with different queries.
       // ─────────────────────────────────────────────
-      const distinctiveTokens = extractDistinctiveTokens(searchQuery || userQuery || '');
+      const searchTokens = extractDistinctiveTokens(searchQuery || '');
+      const userTokens = extractDistinctiveTokens(userQuery || '');
+      const distinctiveTokens = [...new Set([...searchTokens, ...userTokens])];
 
       if (distinctiveTokens.length > 0) {
         const literalMatches = [];

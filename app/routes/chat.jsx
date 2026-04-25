@@ -451,7 +451,10 @@ async function handleChatSession({
   helpers,
 }) {
   const startTime = Date.now();
-  const MAX_TOOL_LOOPS = 6;
+  // 4 loops is enough: a normal session is 2-3 (search → response, optional refine).
+  // Lowered from 6 to cap worst-case latency at ~10s when the AI thrashes on
+  // queries with no matches (each redundant Claude call adds 1.5-3s).
+  const MAX_TOOL_LOOPS = 4;
 
   const {
     saveMessage,
@@ -684,39 +687,21 @@ async function handleChatSession({
               const searchQuery = toolArgs?.query || toolArgs?.searchQuery || toolArgs?.q || JSON.stringify(toolArgs);
               let products = toolService.processProductSearchResult(toolUseResponse, shopDomain, userMessage, searchQuery);
 
-              if ((!products || products.length === 0) && searchQuery) {
-                console.log(`[Search] Zero relevant results for: "${searchQuery}" — trying automatic fallbacks`);
-
-                // Pass the actual tool name so fallback uses the right tool.
-                const fallbackResult = await tryFallbackSearches(mcpClient, searchQuery, toolName);
-
-                if (fallbackResult) {
-                  products = toolService.processProductSearchResult(
-                    fallbackResult.result,
-                    shopDomain,
-                    userMessage,
-                    fallbackResult.query
-                  );
-
-                  if (products && products.length > 0) {
-                    toolUseResponse = fallbackResult.result;
-                    console.log(`[Search-Fallback] Recovered ${products.length} products via fallback query: "${fallbackResult.query}"`);
-                  }
-                }
-              }
-
-              // FINAL FALLBACK — direct Storefront GraphQL search.
+              // PRIMARY FALLBACK — direct Storefront GraphQL search.
               //
-              // Why this exists: Shopify's storefront MCP `search_catalog`
-              // started returning a near-fixed set of unrelated products
-              // (the same Delta inverter drives) for shops with large
-              // catalogs (100k+) regardless of the query. The native
-              // Storefront API `products(query:)` is a separate, reliable
-              // index — the same one powering the storefront's own search
-              // bar — so if MCP + its query fallbacks turn up nothing
-              // relevant, we try the Storefront API directly with both the
-              // AI's query and the user's original message before giving up.
+              // When the MCP `search_catalog` returns zero relevant results
+              // (or its results get dropped by the relevance gate), go
+              // straight to the native Storefront API rather than retrying
+              // MCP with simpler queries. Production logs (April 2026)
+              // showed MCP semantic search returning the same set of
+              // ~10 unrelated products for any query against this shop's
+              // 100k+ catalog, so further MCP attempts wasted 500ms-1s
+              // each without recovering useful results. The Storefront
+              // API hits the same product index the storefront's native
+              // search bar uses and supports field-targeted SKU search,
+              // which is critical for B2B catalogs.
               if ((!products || products.length === 0) && searchQuery) {
+                console.log(`[Search] Zero relevant results for: "${searchQuery}" — going direct to Storefront API`);
                 products = await tryDirectStorefrontFallback({
                   searchQuery,
                   userMessage,
@@ -724,6 +709,28 @@ async function handleChatSession({
                   toolService,
                   onResultUsed: (wrappedResp) => { toolUseResponse = wrappedResp; },
                 });
+              }
+
+              // SECONDARY FALLBACK — MCP query simplification.
+              //
+              // Only used if the direct Storefront API was unreachable or
+              // also returned nothing. Cheap insurance: keeps the legacy
+              // recovery path alive without paying its cost in the common
+              // case where direct API succeeds first.
+              if ((!products || products.length === 0) && searchQuery) {
+                const mcpFallback = await tryFallbackSearches(mcpClient, searchQuery, toolName);
+                if (mcpFallback) {
+                  products = toolService.processProductSearchResult(
+                    mcpFallback.result,
+                    shopDomain,
+                    userMessage,
+                    mcpFallback.query
+                  );
+                  if (products && products.length > 0) {
+                    toolUseResponse = mcpFallback.result;
+                    console.log(`[Search-Fallback] Recovered ${products.length} products via MCP fallback query: "${mcpFallback.query}"`);
+                  }
+                }
               }
 
               if (products && products.length > 0) {

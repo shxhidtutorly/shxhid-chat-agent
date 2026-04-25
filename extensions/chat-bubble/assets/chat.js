@@ -522,11 +522,22 @@
         card.className = 'shop-ai-product-card';
         card.dataset.productId = productId;
 
+        // Escape user-controlled strings to prevent XSS via product title/sku.
+        const escapeHtml = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+        }[c]));
+
+        const safeTitle = escapeHtml(prod.title || 'Untitled');
+        const safeSku = escapeHtml(prod.sku || '');
+        const safePrice = escapeHtml(prod.price || '');
+        const safeAlt = escapeHtml(prod.title || 'Product');
+
         card.innerHTML = `
-          <img class="shop-ai-product-image" src="${prod.image_url || ''}" alt="${(prod.title || 'Product').replace(/"/g, '&quot;')}" loading="lazy" />
+          <img class="shop-ai-product-image" src="${escapeHtml(prod.image_url || '')}" alt="${safeAlt}" loading="lazy" />
           <div class="shop-ai-product-info">
-            <h4 class="shop-ai-product-title">${prod.title || 'Untitled'}</h4>
-            <div class="shop-ai-product-price">${prod.price || ''}</div>
+            <h4 class="shop-ai-product-title">${safeTitle}</h4>
+            ${safeSku ? `<div class="shop-ai-product-sku">SKU: ${safeSku}</div>` : ''}
+            <div class="shop-ai-product-price">${safePrice}</div>
           </div>
         `;
 

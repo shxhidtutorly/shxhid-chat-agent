@@ -63,6 +63,74 @@ export async function searchProducts(searchQuery) {
 }
 
 // ============================================
+// CHAT-COMPATIBLE SEARCH (used as fallback when MCP search is unreliable)
+//
+// Returns results wrapped in the same shape as a Storefront MCP tool response,
+// so chat.jsx can hand them straight to processProductSearchResult() in
+// app/services/tool.server.js without any per-source branching.
+//
+// WHY: Production observation (April 2026) — Shopify's storefront MCP
+// `search_catalog` started returning a near-fixed set of unrelated products
+// (the same Delta inverter drives) regardless of the query for shops with
+// large catalogs (100k+ products). The native Storefront API
+// `products(query:)` field is a separate, reliable index used by the
+// storefront search bar itself; falling back to it recovers correct results.
+// ============================================
+export async function searchProductsForChat(searchQuery, { first = 50, shopDomain } = {}) {
+  if (!searchQuery || typeof searchQuery !== 'string') {
+    throw new Error('Search query is required');
+  }
+
+  const trimmed = searchQuery.trim();
+  console.log(`[StorefrontService:chat] Direct search: "${trimmed.substring(0, 60)}"`);
+
+  const data = await shopifyStorefrontQuery({
+    query: SEARCH_PRODUCTS_QUERY,
+    variables: { query: trimmed, first },
+    shopDomain,
+  });
+
+  const edges = data?.products?.edges || [];
+  const products = edges.map(({ node }) => {
+    // Shape mirrors what the MCP catalog tool returns so processProductSearchResult
+    // (and its formatPrice / buildProductSearchText helpers) work unchanged.
+    const variants = (node.variants?.edges || []).map(({ node: v }) => ({
+      id: v.id,
+      title: v.title,
+      sku: v.sku,
+      available: v.availableForSale,
+      price: v.price, // { amount, currencyCode } — formatPrice handles this
+    }));
+
+    return {
+      id: node.id,
+      product_id: node.id,
+      title: node.title,
+      handle: node.handle,
+      description: node.description,
+      vendor: node.vendor,
+      product_type: node.productType,
+      tags: node.tags,
+      image_url: node.featuredImage?.url || '',
+      featuredImage: node.featuredImage,
+      priceRange: node.priceRange, // { minVariantPrice, maxVariantPrice }
+      variants,
+      sku: variants[0]?.sku || null,
+    };
+  });
+
+  console.log(`[StorefrontService:chat] Direct API returned ${products.length} products for "${trimmed.substring(0, 40)}"`);
+
+  // Wrap in the MCP tool response shape that processProductSearchResult expects.
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({ products }),
+    }],
+  };
+}
+
+// ============================================
 // ADD TO CART
 // ============================================
 export async function addToCart({ variantId, quantity = 1, cartId = null }) {

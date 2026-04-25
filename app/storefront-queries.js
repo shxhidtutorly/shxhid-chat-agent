@@ -12,12 +12,19 @@ export const SEARCH_PRODUCTS_QUERY = `
           title
           handle
           description
+          vendor
+          productType
+          tags
           featuredImage {
             url
             altText
           }
           priceRange {
             minVariantPrice {
+              amount
+              currencyCode
+            }
+            maxVariantPrice {
               amount
               currencyCode
             }

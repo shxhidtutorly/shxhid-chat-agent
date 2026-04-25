@@ -295,6 +295,87 @@ async function tryFallbackSearches(mcpClient, originalQuery, toolName) {
 }
 
 /**
+ * FINAL FALLBACK: direct Storefront GraphQL `products(query:)` search.
+ *
+ * Used only when the MCP `search_catalog` tool plus its query fallbacks
+ * have all turned up zero relevant results. Tries a small number of
+ * progressively broader query variants, runs each through
+ * processProductSearchResult so the same relevance gate applies, and
+ * returns the first non-empty result set.
+ *
+ * Returns the products array (or [] if nothing relevant is found).
+ * On success, calls onResultUsed(wrappedResp) so the caller can update
+ * the toolUseResponse it forwards back to the model.
+ */
+async function tryDirectStorefrontFallback({
+  searchQuery,
+  userMessage,
+  shopDomain,
+  toolService,
+  onResultUsed,
+}) {
+  let searchProductsForChat;
+  try {
+    const mod = await import("../storefront-service.js");
+    searchProductsForChat = mod.searchProductsForChat;
+  } catch (importErr) {
+    console.error("[Search-DirectAPI] Failed to import storefront-service:", importErr.message);
+    return [];
+  }
+
+  if (typeof searchProductsForChat !== "function") {
+    console.error("[Search-DirectAPI] searchProductsForChat not exported");
+    return [];
+  }
+
+  // Build query variants — the AI's narrowed query first (most specific),
+  // then the original user message (in case the AI dropped useful tokens
+  // like a brand or part number), then the simplified fallback variants.
+  const variantSet = new Set();
+  const tryQueries = [];
+  const push = (q) => {
+    if (!q || typeof q !== "string") return;
+    const trimmed = q.trim();
+    if (trimmed.length < 2) return;
+    const key = trimmed.toLowerCase();
+    if (variantSet.has(key)) return;
+    variantSet.add(key);
+    tryQueries.push(trimmed);
+  };
+
+  push(searchQuery);
+  push(userMessage);
+  for (const fb of generateFallbackQueries(searchQuery || userMessage || "")) {
+    push(fb);
+  }
+
+  for (const q of tryQueries) {
+    try {
+      console.log(`[Search-DirectAPI] Trying: "${q}"`);
+      const wrapped = await searchProductsForChat(q, { first: 50, shopDomain });
+      const products = toolService.processProductSearchResult(
+        wrapped,
+        shopDomain,
+        userMessage,
+        q,
+      );
+      if (products && products.length > 0) {
+        console.log(`[Search-DirectAPI] Recovered ${products.length} products via direct Storefront API query: "${q}"`);
+        if (typeof onResultUsed === "function") {
+          onResultUsed(wrapped);
+        }
+        return products;
+      }
+    } catch (err) {
+      console.warn(`[Search-DirectAPI] Error on "${q}":`, err.message);
+    }
+  }
+
+  console.log(`[Search-DirectAPI] All direct Storefront API attempts returned 0 relevant products`);
+  return [];
+}
+
+/**
  * Generate progressively simpler fallback queries from the original.
  */
 function generateFallbackQueries(originalQuery) {
@@ -622,6 +703,27 @@ async function handleChatSession({
                     console.log(`[Search-Fallback] Recovered ${products.length} products via fallback query: "${fallbackResult.query}"`);
                   }
                 }
+              }
+
+              // FINAL FALLBACK — direct Storefront GraphQL search.
+              //
+              // Why this exists: Shopify's storefront MCP `search_catalog`
+              // started returning a near-fixed set of unrelated products
+              // (the same Delta inverter drives) for shops with large
+              // catalogs (100k+) regardless of the query. The native
+              // Storefront API `products(query:)` is a separate, reliable
+              // index — the same one powering the storefront's own search
+              // bar — so if MCP + its query fallbacks turn up nothing
+              // relevant, we try the Storefront API directly with both the
+              // AI's query and the user's original message before giving up.
+              if ((!products || products.length === 0) && searchQuery) {
+                products = await tryDirectStorefrontFallback({
+                  searchQuery,
+                  userMessage,
+                  shopDomain,
+                  toolService,
+                  onResultUsed: (wrappedResp) => { toolUseResponse = wrappedResp; },
+                });
               }
 
               if (products && products.length > 0) {

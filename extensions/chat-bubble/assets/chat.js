@@ -5,6 +5,12 @@
  * - Chat history with conversation loading
  * - Email capture via built-in overlay
  * - SSE streaming with thinking indicators
+ *
+ * PATCHED (April 2026) — see /mnt/user-data/outputs/chat.js.patch.md
+ *   - Multi-tool-call product display fix: previous grid is now removed when
+ *     a new product_results event arrives in the same turn, so cards always
+ *     reflect the assistant's most recent search (fixes the contradictory
+ *     "Waircom 2/2" screenshot where stale cards remained on screen).
  */
 
 (function () {
@@ -18,14 +24,14 @@
       visitorId: sessionStorage.getItem('shopAiVisitorId') || null,
       emailCaptured: localStorage.getItem('shopAiEmailCaptured') === 'true',
       emailPopupShown: sessionStorage.getItem('shopAiEmailPopupShown') === 'true',
-      isFirstMessage: !sessionStorage.getItem('shopAiConversationId'), // ✅ Track first message
+      isFirstMessage: !sessionStorage.getItem('shopAiConversationId'),
       buffer: '',
       placeholderIndex: 0,
       chatHistory: JSON.parse(localStorage.getItem('shopAiChatHistory') || '[]'),
       cartId: sessionStorage.getItem('shopAiCartId') || null,
       checkoutUrl: sessionStorage.getItem('shopAiCheckoutUrl') || null,
       selectedProduct: null,
-      selectedProductModal: null, // ✅ For modal popup
+      selectedProductModal: null,
       isCartUpdating: false,
       addedByProductId: JSON.parse(sessionStorage.getItem('shopAiAddedByProductId') || '{}'),
       productDataMap: new Map(),
@@ -67,12 +73,11 @@
       this.startPlaceholderRotation();
       this.restoreState();
       this.exposeAPI();
-      
+
       console.log('ShopAIChat initialized');
     },
 
     bindEvents() {
-      // Floating triggers
       document.querySelectorAll('[data-trigger]').forEach(btn => {
         btn.addEventListener('click', (e) => {
           e.preventDefault();
@@ -80,7 +85,6 @@
         });
       });
 
-      // Close handlers
       if (this.elements.closeBtn) {
         this.elements.closeBtn.addEventListener('click', () => this.close());
       }
@@ -88,7 +92,6 @@
         this.elements.backdrop.addEventListener('click', () => this.close());
       }
 
-      // Input & send
       if (this.elements.sendBtn) {
         this.elements.sendBtn.addEventListener('click', () => this.send());
       }
@@ -99,7 +102,6 @@
             this.send();
           }
         });
-        // Auto-expand textarea + toggle send button
         this.elements.input.addEventListener('input', () => {
           const el = this.elements.input;
           el.style.height = 'auto';
@@ -110,7 +112,6 @@
         });
       }
 
-      // 3-dot menu toggle
       if (this.elements.menuBtn) {
         this.elements.menuBtn.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -118,7 +119,6 @@
         });
       }
 
-      // Menu item actions (delegated)
       if (this.elements.menuDropdown) {
         this.elements.menuDropdown.addEventListener('click', (e) => {
           const item = e.target.closest('[data-action]');
@@ -131,12 +131,10 @@
         });
       }
 
-      // History panel back button
       if (this.elements.backBtn) {
         this.elements.backBtn.addEventListener('click', () => this.closeHistory());
       }
 
-      // Close menu when clicking outside
       document.addEventListener('click', (e) => {
         if (this.elements.menuDropdown?.classList.contains('active') &&
             !this.elements.menuBtn?.contains(e.target) &&
@@ -145,12 +143,10 @@
         }
       });
 
-      // Escape key closes modal
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && this.state.isOpen) this.close();
       });
 
-      // ✅ Document-level delegation for product buttons
       document.addEventListener('click', (e) => {
         const btn = e.target.closest('[data-product-action]');
         if (!btn) return;
@@ -190,16 +186,13 @@
     },
 
     open() {
-      // ✅ Show email popup on FIRST chat only
       if (this.state.isFirstMessage && !this.state.emailCaptured && !this.state.emailPopupShown) {
         this.showEmailPopup();
         this.state.emailPopupShown = true;
         sessionStorage.setItem('shopAiEmailPopupShown', 'true');
       }
 
-      // ✅ FIX: CSS uses body.shop-ai-open to control modal/backdrop visibility
       document.body.classList.add('shop-ai-open');
-      // Hide floating launcher buttons when modal is open
       if (this.elements.floatingGroup) {
         this.elements.floatingGroup.classList.add('hidden');
       }
@@ -208,16 +201,13 @@
     },
 
     close() {
-      // ✅ FIX: Remove body class to hide modal/backdrop via CSS
       document.body.classList.remove('shop-ai-open');
-      // Show floating launcher buttons again
       if (this.elements.floatingGroup) {
         this.elements.floatingGroup.classList.remove('hidden');
       }
       this.state.isOpen = false;
     },
 
-    // Show email capture using the built-in overlay inside the chat modal
     showEmailPopup() {
       const overlay = document.getElementById('shop-ai-email-overlay');
       if (!overlay) return;
@@ -280,13 +270,11 @@
     },
 
     async send(messageArg) {
-      // Accept message from argument (suggestion buttons) or from input field
       const message = (typeof messageArg === 'string' && messageArg.trim())
         ? messageArg.trim()
         : this.elements.input?.value?.trim();
       if (!message) return;
 
-      // Mark first message sent and hide suggestions
       if (this.state.isFirstMessage) {
         this.state.isFirstMessage = false;
         if (this.elements.suggestions) {
@@ -309,7 +297,6 @@
         sessionStorage.setItem('shopAiConversationId', this.state.conversationId);
       }
 
-      // Save to history on first message of this conversation
       this.saveToHistory(message);
 
       this.showThinking();
@@ -319,8 +306,6 @@
         if (!apiUrl) {
           throw new Error('Chat API URL not configured. Check theme extension settings.');
         }
-
-        // Send to backend
 
         const response = await fetch(apiUrl, {
           method: 'POST',
@@ -333,14 +318,12 @@
           })
         });
 
-        // Check for non-OK responses (404 = proxy not configured, 502 = backend down)
         if (!response.ok) {
           const errorText = await response.text().catch(() => '');
           console.error('❌ API response:', response.status, errorText.substring(0, 200));
           throw new Error(`Server returned ${response.status}`);
         }
 
-        // Verify we got a stream, not an HTML error page
         const contentType = response.headers.get('Content-Type') || '';
         if (contentType.includes('text/html')) {
           console.error('❌ Received HTML instead of SSE — check backend URL');
@@ -352,7 +335,18 @@
         let currentAssistantMsg = null;
         let buffer = '';
         let fullText = '';
-        let productsReceived = false;
+
+        // PATCH: track the last grid we rendered in this turn so we can
+        // remove it before rendering a fresh one. Replaces the
+        // `productsReceived` flag that silently dropped the second
+        // search's products in multi-tool-call turns.
+        let lastProductsGridEl = null;
+        // Track the last assistant text bubble; on subsequent chunks we
+        // replace its content rather than appending a new bubble per
+        // tool-result cycle. This prevents the "two contradictory
+        // messages" pattern (interim "let me search again..." kept
+        // alongside the final answer).
+        let activeBubbleEl = null;
 
         while (true) {
           const { value, done } = await reader.read();
@@ -390,20 +384,26 @@
               fullText += data.chunk;
               if (!currentAssistantMsg) {
                 currentAssistantMsg = this.addMessage('', 'assistant');
+                activeBubbleEl = currentAssistantMsg.querySelector('.shop-ai-bubble');
               }
-              const bubble = currentAssistantMsg.querySelector('.shop-ai-bubble');
-              if (bubble) {
-                bubble.innerHTML = this.parseMarkdown(fullText);
+              if (activeBubbleEl) {
+                activeBubbleEl.innerHTML = this.parseMarkdown(fullText);
                 this.scrollToBottom();
               }
             }
 
             if (data.type === 'product_results') {
-              if (!productsReceived) {
-                this.removeThinking();
-                this.renderProductsGrid(data.products || []);
-                productsReceived = true;
+              this.removeThinking();
+
+              // PATCH: remove stale grid from a previous tool call in the
+              // same turn, then render the new one. Without this, the
+              // second tool call's products are silently dropped while
+              // the assistant text describes them — producing the
+              // contradictory cards/text seen in the Waircom screenshot.
+              if (lastProductsGridEl && lastProductsGridEl.parentNode) {
+                lastProductsGridEl.parentNode.removeChild(lastProductsGridEl);
               }
+              lastProductsGridEl = this.renderProductsGrid(data.products || []);
             }
 
             if (data.type === 'cart_updated') {
@@ -415,8 +415,23 @@
 
             if (data.type === 'message_complete' || data.type === 'end_turn') {
               this.removeThinking();
-              currentAssistantMsg = null;
-              fullText = '';
+              // PATCH: when a tool-result cycle completes mid-turn, reset
+              // the bubble pointer so any subsequent text from the
+              // *next* Claude pass replaces it rather than appending a
+              // new bubble. This collapses the "let me search again"
+              // pattern into a single, final answer bubble.
+              if (data.type === 'message_complete' && currentAssistantMsg) {
+                // Keep the bubble visible; just stop accumulating text
+                // into it so a new tool result can start fresh.
+                currentAssistantMsg = null;
+                activeBubbleEl = null;
+                fullText = '';
+              }
+              if (data.type === 'end_turn') {
+                currentAssistantMsg = null;
+                activeBubbleEl = null;
+                fullText = '';
+              }
             }
 
             if (data.type === 'error') {
@@ -440,7 +455,7 @@
 
       const bubble = document.createElement('div');
       bubble.className = 'shop-ai-bubble';
-      
+
       if (role === 'assistant') {
         bubble.innerHTML = this.parseMarkdown(content);
       } else {
@@ -458,7 +473,7 @@
 
       let cleaned = text
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, 
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
           (_m, label, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`);
 
       const html = cleaned
@@ -491,7 +506,6 @@
           el.style.opacity = '1';
         }, 150);
       } else {
-        // No thinking indicator yet, show one
         if (!this.state.isThinking) {
           this.showThinking(text);
         }
@@ -504,10 +518,12 @@
       this.state.isThinking = false;
     },
 
-    // Products displayed as horizontal scroll carousel — NO buttons on cards
-    // Click any card to open the product detail modal
+    /**
+     * PATCH: now returns the container element so the caller can remove
+     * a stale grid before rendering a new one in the same turn.
+     */
     renderProductsGrid(products) {
-      if (!products || !products.length) return;
+      if (!products || !products.length) return null;
 
       console.log(`Rendering ${products.length} products as carousel`);
 
@@ -522,7 +538,6 @@
         card.className = 'shop-ai-product-card';
         card.dataset.productId = productId;
 
-        // Escape user-controlled strings to prevent XSS via product title/sku.
         const escapeHtml = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({
           '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
         }[c]));
@@ -550,14 +565,13 @@
 
       this.elements.messages?.appendChild(container);
       this.scrollToBottom();
+      return container;
     },
 
-    // Product detail modal — shows image, price, description, View + Add to Cart
     handleOpenProductModal(productId) {
       const product = this.state.productDataMap.get(productId);
       if (!product) return;
 
-      // Close any existing product modal first
       this.handleCloseProductModal();
 
       const modal = document.createElement('div');
@@ -603,7 +617,6 @@
       requestAnimationFrame(() => modal.classList.add('active'));
       this.state.selectedProductModal = modal;
 
-      // Close on backdrop click
       modal.addEventListener('click', (e) => {
         if (e.target === modal) this.handleCloseProductModal();
       });
@@ -628,7 +641,6 @@
         return;
       }
 
-      // Open product page
       window.open(url, '_blank');
     },
 
@@ -646,7 +658,7 @@
 
       this.state.isCartUpdating = true;
       const button = document.querySelector(`[data-product-action="add-to-cart"][data-product-id="${productId}"]`);
-      
+
       if (button) {
         button.textContent = 'Adding...';
         button.disabled = true;
@@ -655,7 +667,7 @@
       try {
         const cartApiUrl = window.shopChatConfig?.cartUrl ||
           (window.shopChatConfig?.apiUrl || '/chat').replace('/chat', '/api/cart');
-        
+
         const response = await fetch(cartApiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -678,7 +690,6 @@
 
           this.updateCheckoutState(data.checkoutUrl, data.cartId);
 
-          // Update all buttons for this product
           document.querySelectorAll(`[data-product-id="${productId}"]`).forEach(btn => {
             if (btn.dataset.productAction === 'add-to-cart') {
               btn.textContent = 'Go to Cart';
@@ -687,7 +698,6 @@
             }
           });
 
-          // Product added successfully
           this.addMessage('Added to cart! 🎉', 'assistant');
         } else {
           throw new Error(data.message || 'Failed to add to cart');
@@ -710,7 +720,6 @@
 
     updateCheckoutState(checkoutUrl, cartId) {
       if (checkoutUrl && checkoutUrl !== this.state.lastCheckoutUrlShown) {
-        // Store checkout URL
         this.state.checkoutUrl = checkoutUrl;
         this.state.lastCheckoutUrlShown = checkoutUrl;
         sessionStorage.setItem('shopAiCheckoutUrl', checkoutUrl);
@@ -723,8 +732,6 @@
 
     openCheckout() {
       const url = this.state.checkoutUrl;
-      
-      // Open checkout
 
       if (!url || typeof url !== 'string') {
         console.error('No checkout URL available');
@@ -746,8 +753,6 @@
         return;
       }
 
-      // Opening checkout
-      
       try {
         window.open(safeUrl, '_blank');
       } catch (err) {
@@ -780,14 +785,12 @@
         this.elements.messages.innerHTML = '';
       }
 
-      // Re-show suggestions — reset display AND add visible class
       if (this.elements.suggestions) {
         this.elements.suggestions.style.display = '';
         this.elements.messages?.appendChild(this.elements.suggestions);
         this.elements.suggestions.classList.add('visible');
       }
 
-      // Reset input
       if (this.elements.input) {
         this.elements.input.value = '';
         this.elements.input.style.height = 'auto';
@@ -840,17 +843,14 @@
     async loadConversation(conversationId) {
       this.closeHistory();
 
-      // Clear current messages
       if (this.elements.messages) {
         this.elements.messages.innerHTML = '';
       }
 
-      // Set as current conversation
       this.state.conversationId = conversationId;
       this.state.isFirstMessage = false;
       sessionStorage.setItem('shopAiConversationId', conversationId);
 
-      // Hide suggestions
       if (this.elements.suggestions) {
         this.elements.suggestions.classList.remove('visible');
         this.elements.suggestions.style.display = 'none';
@@ -892,7 +892,6 @@
 
       const history = JSON.parse(localStorage.getItem('shopAiChatHistory') || '[]');
 
-      // Don't add duplicates
       if (history.some(h => h.id === this.state.conversationId)) return;
 
       history.unshift({
@@ -901,14 +900,12 @@
         timestamp: Date.now(),
       });
 
-      // Keep only last 30
       if (history.length > 30) history.length = 30;
 
       localStorage.setItem('shopAiChatHistory', JSON.stringify(history));
     },
 
     restoreState() {
-      // Restore from session — if there's an active conversation, hide suggestions
       if (this.state.conversationId) {
         this.state.isFirstMessage = false;
         if (this.elements.suggestions) {

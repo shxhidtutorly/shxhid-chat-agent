@@ -1,62 +1,31 @@
 /**
- * Tool Service — v3.0
+ * Tool Service — v3.1
  * Processes MCP tool responses (product search, cart updates)
  *
  * =============================================================================
- * PATCH v3.0 — April 30, 2026 — MULTILINGUAL GATE FIX + SKU FIELD SCORING
+ * PATCH v3.1 — May 1, 2026 — STOPWORDS + IMAGE URL FIX
  * =============================================================================
  *
- * ROOT CAUSE FOUND IN PRODUCTION LOGS (logs_1777545391484.log):
+ * BUG 1 — "catalog" and "query" in distinctive token gate:
+ *   When searchQuery extraction fails (wrong schema), JSON.stringify(toolArgs)
+ *   produces '{"catalog":{"query":"solenoid valve"}}'. The gate tokenizes this
+ *   to ["catalog", "query"] which don't appear in product text → ALL results dropped.
+ *   FIX: Add "catalog" and "query" to RELEVANCE_STOPWORDS as defense-in-depth.
+ *   Primary fix is in chat.jsx extractSearchQuery().
  *
- *   Bug 1 — The "solenoide" failure (confirmed in logs at 07:04:xx):
- *     User types "solenoide" (Spanish) → userQuery distinctive tokens = ["solenoide"]
- *     searchQuery = "5/2 solenoid valve" → tokens = [] (all stopwords)
- *     Combined gate tokens = ["solenoide"] (from userQuery only)
- *     Shopify returns 50 products containing "solenoid" (English)
- *     Gate requires "solenoide" → 0 matches → ALL 50 dropped
- *     Result: 8–12 wasted API calls, 10–13 second latency, 0 products shown
- *
- *   Bug 2 — The "only, first" failure (confirmed in logs at 07:05:xx):
- *     User message: "only the first 2 products are right ?"
- *     userQuery distinctive tokens = ["only", "first"] (conversational words)
- *     Same failure pattern as Bug 1 — drops 50 solenoid results
- *
- *   Bug 3 — The "pneumatic, other, available" case (also at 07:06:xx):
- *     "available" from user message was a gate token — but this one happened
- *     to work because the SEARCH query "5/2 solenoid valve pneumatic"
- *     had "pneumatic" which appears in product text.
- *     Lucky, not designed — same architecture flaw as Bug 1/2.
- *
- * FIX:
- *   The strict distinctive-token gate now uses ONLY the AI's searchQuery
- *   tokens — NOT the user's original message tokens. The AI always generates
- *   an English search query. The user's message may be in any language or
- *   contain conversational words that don't appear in product text.
- *   The inch-dimension gate still uses both (user intent for dimensions
- *   is clear regardless of language).
- *
- * ADDITIONAL FIX — SKU FIELD SCORING:
- *   scoreProductBySpecs() now distinguishes between:
- *     - Actual variant.sku field match  → score 200 (highest)
- *     - Product title match             → score 100
- *     - Description/tags match          → score 40  (was incorrectly 100)
- *   This prevents a product whose DESCRIPTION mentions "EC2016" from
- *   ranking equally with a product whose variant.sku IS "EC2016".
+ * BUG 2 — Images not showing:
+ *   The search_catalog MCP tool may return image URLs in different fields than
+ *   search_shop_catalog did. Added more image URL field paths as fallbacks.
  *
  * =============================================================================
  * PREVIOUS VERSION HISTORY
  * =============================================================================
- *
- * v2.6 (April 30, 2026): Inch-dimension gate for "1 inch FRL" type queries.
- * v2.5 (April 2026): Distinctive-token gate uses union of search+user tokens.
- *      → This is what caused the solenoide bug. v3.0 reverts to search-only.
- * v2.4 (April 2026): Robust formatPrice().
+ * v3.0 (April 30, 2026): MULTILINGUAL GATE FIX + SKU FIELD SCORING
+ * v2.6 (April 30, 2026): Inch-dimension gate
+ * v2.5 (April 2026): Distinctive-token gate
+ * v2.4 (April 2026): Robust formatPrice()
  */
 
-// ──────────────────────────────────────────────
-// Blocklist: tokens that LOOK like SKUs but are
-// actually voltage / cable / protocol strings.
-// ──────────────────────────────────────────────
 const SPEC_TOKEN_BLOCKLIST = new Set([
   '24VDC', '12VDC', '48VDC', '5VDC', '24VAC', '110VAC', '120VAC',
   '220VAC', '230VAC', '240VAC', '380VAC', '400VAC', '415VAC', '480VAC',
@@ -73,12 +42,8 @@ const SPEC_TOKEN_BLOCKLIST = new Set([
   'NPT', 'BSP', 'BSPT', 'BSPP',
 ]);
 
-// ──────────────────────────────────────────────
-// Stopwords for the relevance gate.
-// These words are too generic for this industrial catalog to be
-// "distinctive" — having them as gate tokens would either always
-// pass (product contains "valve") or always fail ("solenoide").
-// ──────────────────────────────────────────────
+// v3.1 FIX: Added "catalog" and "query" — these appear in JSON.stringify(toolArgs)
+// when the search_catalog schema is mishandled, and must not become gate tokens.
 const RELEVANCE_STOPWORDS = new Set([
   "the", "a", "an", "and", "or", "for", "of", "with", "in", "on", "to", "me", "my",
   "is", "are", "can", "could", "would", "should",
@@ -88,6 +53,9 @@ const RELEVANCE_STOPWORDS = new Set([
   "right", "best", "good", "great", "new", "old", "also", "very", "really",
   "here", "there", "about", "what", "which", "how", "when", "where",
   "product", "products", "part", "parts", "item", "items",
+  // v3.1 ADDED: JSON schema words that leak from serialized toolArgs
+  "catalog",
+  "query",
   // Generic industrial/electrical categories
   "sensor", "sensors",
   "cable", "cables",
@@ -124,9 +92,6 @@ function isBlocklistedToken(token) {
   return false;
 }
 
-// ──────────────────────────────────────────────
-// Inch-dimension extraction (v2.6 — unchanged)
-// ──────────────────────────────────────────────
 function extractInchDimensions(query) {
   if (!query || typeof query !== 'string') return [];
   const out = new Set();
@@ -155,13 +120,10 @@ function productMatchesInchDim(productHay, inchValue) {
     const re = buildInchMatchRegex(inchValue);
     return re.test(productHay);
   } catch (_e) {
-    return true; // fail-safe: keep product
+    return true;
   }
 }
 
-// ──────────────────────────────────────────────
-// Robust price formatter (v2.4 — unchanged)
-// ──────────────────────────────────────────────
 function extractAmount(val) {
   if (val === null || val === undefined) return null;
   if (typeof val === 'string') return val.trim() || null;
@@ -296,18 +258,6 @@ function buildProductSearchText(product) {
   return parts.join(' ');
 }
 
-/**
- * Score a product by how well it matches the extracted specs.
- *
- * v3.0 CHANGE: SKU scores are now tiered:
- *   - Actual variant.sku field match  → 200 (highest confidence)
- *   - Product title match             → 100 (good confidence)
- *   - Description/tags text match     → 40  (low confidence)
- *
- * Previously all text matches scored 100, meaning a product whose
- * DESCRIPTION mentions a SKU ranked the same as one whose actual
- * variant.sku IS that SKU. The new scoring fixes this.
- */
 function scoreProductBySpecs(product, specs) {
   if (!specs.dimensions.length && !specs.skuPatterns.length && !specs.rawNumbers.length) return 0;
 
@@ -316,7 +266,6 @@ function scoreProductBySpecs(product, specs) {
   const searchUpper = searchText.toUpperCase();
   const searchLower = searchText.toLowerCase();
 
-  // Get actual SKU fields for high-confidence matching
   const productSku = String(product.sku || '').toUpperCase();
   const variantSkus = (product.variants || []).map(v => String(v.sku || '').toUpperCase());
   const titleUpper = String(product.title || '').toUpperCase();
@@ -326,23 +275,18 @@ function scoreProductBySpecs(product, specs) {
     const skuN = skuU.replace(/[-\.\/]/g, '');
     const titleN = titleUpper.replace(/[-\.\/]/g, '');
 
-    // Tier 1: Actual variant.sku field match (200 pts)
     if (variantSkus.some(s => s === skuU) || productSku === skuU) {
-      score += 200; // Exact match on SKU field
+      score += 200;
     } else if (variantSkus.some(s => s.includes(skuU)) || productSku.includes(skuU)) {
-      score += 180; // Contains match on SKU field
+      score += 180;
     } else if (
       variantSkus.some(s => s.replace(/[-\.\/]/g, '').includes(skuN)) ||
       productSku.replace(/[-\.\/]/g, '').includes(skuN)
     ) {
-      score += 150; // Normalized match on SKU field (ignore separators)
-    }
-    // Tier 2: Product title match (100 pts)
-    else if (titleUpper.includes(skuU) || titleN.includes(skuN)) {
+      score += 150;
+    } else if (titleUpper.includes(skuU) || titleN.includes(skuN)) {
       score += 100;
-    }
-    // Tier 3: Description/tags match (40 pts — low confidence)
-    else if (searchUpper.includes(skuU)) {
+    } else if (searchUpper.includes(skuU)) {
       score += 40;
     } else {
       const searchN = searchUpper.replace(/[-\.\/]/g, '');
@@ -373,12 +317,6 @@ function scoreProductBySpecs(product, specs) {
   return score;
 }
 
-/**
- * Extract distinctive tokens from a query for the relevance gate.
- *
- * v3.0 NOTE: This is now ONLY called with searchQuery (the AI's English
- * search string), NOT with userQuery. See processProductSearchResult() below.
- */
 function extractDistinctiveTokens(query) {
   if (!query || typeof query !== 'string') return [];
   return query
@@ -389,6 +327,24 @@ function extractDistinctiveTokens(query) {
       !RELEVANCE_STOPWORDS.has(t) &&
       !isBlocklistedToken(t)
     );
+}
+
+/**
+ * Extract image URL from a product object.
+ * v3.1: Added more fallback fields to handle search_catalog MCP response format.
+ */
+function extractImageUrl(product) {
+  return product.image_url
+    || product.featuredImage?.url
+    || product.featured_image?.url
+    || product.featured_image
+    || product.image?.url
+    || product.image?.src
+    || product.image
+    || (Array.isArray(product.images) && product.images.length > 0
+        ? (product.images[0]?.url || product.images[0]?.src || product.images[0])
+        : null)
+    || '';
 }
 
 export function createToolService() {
@@ -438,22 +394,13 @@ export function createToolService() {
       console.log(`[ToolService] Search returned ${resultCount} products`);
 
       // ─────────────────────────────────────────────
-      // STRICT DISTINCTIVE-TOKEN GATE (v3.0 FIX)
+      // STRICT DISTINCTIVE-TOKEN GATE (v3.0 + v3.1)
       //
-      // CRITICAL: Use ONLY searchQuery tokens — NOT userQuery tokens.
-      //
-      // Why: userQuery may be in Spanish ("solenoide"), French, etc.,
-      // or contain conversational text ("only the first 2 are right?").
-      // The AI always generates an English searchQuery. Gate on that.
-      //
-      // Example failure (now fixed):
-      //   userQuery = "solenoide 5/2" → tokens = ["solenoide"]
-      //   searchQuery = "5/2 solenoid valve" → tokens = [] (all stopwords)
-      //   Old combined = ["solenoide"] → gate fails for all English products
-      //   New: only searchQuery tokens = [] → gate skipped → correct results shown
+      // Use ONLY searchQuery tokens — NOT userQuery tokens.
+      // "catalog" and "query" are now in RELEVANCE_STOPWORDS so they
+      // won't become blocking gate tokens even if they leak through.
       // ─────────────────────────────────────────────
       const distinctiveTokens = extractDistinctiveTokens(searchQuery || '');
-      // NOTE: userQuery tokens deliberately excluded — see comment above
 
       if (distinctiveTokens.length > 0) {
         const literalMatches = [];
@@ -483,11 +430,7 @@ export function createToolService() {
       }
 
       // ─────────────────────────────────────────────
-      // INCH-DIMENSION GATE (v2.6 — unchanged)
-      //
-      // Keep using BOTH searchQuery and userQuery for inch dimensions.
-      // Dimension intent is clear from user message regardless of language.
-      // "1 inch FRL" in any language means the user wants 1-inch products.
+      // INCH-DIMENSION GATE
       // ─────────────────────────────────────────────
       const inchDimsRaw = [
         ...extractInchDimensions(searchQuery || ''),
@@ -522,7 +465,7 @@ export function createToolService() {
       }
 
       // ─────────────────────────────────────────────
-      // SPEC EXTRACTION & RE-RANKING (v3.0: tiered SKU scoring)
+      // SPEC EXTRACTION & RE-RANKING
       // ─────────────────────────────────────────────
       const userSpecs = extractQuerySpecs(userQuery || '');
       const searchSpecs = extractQuerySpecs(searchQuery || '');
@@ -540,7 +483,8 @@ export function createToolService() {
       }
 
       const fixedProducts = responseData.products.map((p) => {
-        const rawImageUrl = p.image_url || p.featuredImage?.url || '';
+        // v3.1 FIX: Use extractImageUrl() with multiple fallback fields
+        const rawImageUrl = extractImageUrl(p);
         const productUrl = resolveProductUrl(p, shopDomain);
 
         let firstVariant = null;
@@ -573,17 +517,14 @@ export function createToolService() {
         const topScore = withScores[0]?._specScore || 0;
 
         if (topScore >= 150) {
-          // Actual SKU field match (score 150+ = variant.sku contains the token)
           const exactSkuMatches = withScores.filter(p => p._specScore >= 150);
           console.log(`[ToolService] Exact SKU field match: returning ${exactSkuMatches.length} products (score ≥150)`);
           rankedProducts = exactSkuMatches;
         } else if (topScore >= 100) {
-          // Title match is still reliable
           const titleMatches = withScores.filter(p => p._specScore >= 100);
           console.log(`[ToolService] Title SKU match: ${titleMatches.length} products (score ≥100)`);
           rankedProducts = titleMatches;
         } else if (topScore > 0) {
-          // Description/tags match only — re-rank but don't filter
           const matched = withScores.filter(p => p._specScore > 0);
           const unmatched = withScores.filter(p => p._specScore === 0);
           console.log(`[ToolService] Spec re-rank (low confidence): ${matched.length} matched, ${unmatched.length} passthrough`);

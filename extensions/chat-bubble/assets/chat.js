@@ -6,7 +6,14 @@
  * - Email capture via built-in overlay
  * - SSE streaming with thinking indicators
  *
- * PATCHED (April 2026) — see /mnt/user-data/outputs/chat.js.patch.md
+ * PATCHED (May 2026) — image fix + all April 2026 patches retained
+ *   - IMAGE FIX: product cards and modal now show a clean placeholder
+ *     when image_url is null/empty/broken instead of rendering alt text.
+ *     The placeholder is a grey box with a camera SVG icon, matching
+ *     the card dimensions exactly.
+ *   - onerror handler on every <img> catches 404/403 CDN failures too.
+ *
+ * PATCHED (April 2026)
  *   - Multi-tool-call product display fix: previous grid is now removed when
  *     a new product_results event arrives in the same turn, so cards always
  *     reflect the assistant's most recent search (fixes the contradictory
@@ -15,6 +22,46 @@
 
 (function () {
   'use strict';
+
+  // ─── Image placeholder SVG ────────────────────────────────────────────────
+  // Shown when image_url is null/empty or the CDN returns an error.
+  const PLACEHOLDER_SVG = `<div class="shop-ai-img-placeholder" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#f5f5f5;border-radius:8px 8px 0 0;"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#c8c8c8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="14" rx="2"/><circle cx="12" cy="13" r="3"/><path d="M9 6l1.5-2h3L15 6"/></svg></div>`;
+
+  /**
+   * Build an <img> element (or placeholder div) for a product image.
+   * Returns a DOM element — either <img> with onerror fallback, or a
+   * placeholder div if the URL is empty/null from the start.
+   */
+  function buildProductImage(imageUrl, altText, cssClass) {
+    const src = (imageUrl && typeof imageUrl === 'string' && imageUrl.startsWith('http'))
+      ? imageUrl : null;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = cssClass || 'shop-ai-product-image-wrap';
+    wrapper.style.cssText = 'width:100%;overflow:hidden;';
+
+    if (!src) {
+      wrapper.innerHTML = PLACEHOLDER_SVG;
+      return wrapper;
+    }
+
+    const img = document.createElement('img');
+    img.className = 'shop-ai-product-image';
+    img.src = src;
+    img.alt = altText || '';
+    img.loading = 'lazy';
+    img.onerror = function () {
+      this.onerror = null;
+      const ph = document.createElement('div');
+      ph.innerHTML = PLACEHOLDER_SVG;
+      if (this.parentElement) {
+        this.parentElement.replaceChild(ph.firstElementChild, this);
+      }
+    };
+
+    wrapper.appendChild(img);
+    return wrapper;
+  }
 
   const ShopAIChat = {
     state: {
@@ -298,7 +345,6 @@
       }
 
       this.saveToHistory(message);
-
       this.showThinking();
 
       try {
@@ -336,16 +382,11 @@
         let buffer = '';
         let fullText = '';
 
-        // PATCH: track the last grid we rendered in this turn so we can
-        // remove it before rendering a fresh one. Replaces the
-        // `productsReceived` flag that silently dropped the second
-        // search's products in multi-tool-call turns.
+        // PATCH (April 2026): track the last grid rendered in this turn so we
+        // can remove it before rendering a fresh one when a second
+        // product_results event arrives in the same turn.
         let lastProductsGridEl = null;
-        // Track the last assistant text bubble; on subsequent chunks we
-        // replace its content rather than appending a new bubble per
-        // tool-result cycle. This prevents the "two contradictory
-        // messages" pattern (interim "let me search again..." kept
-        // alongside the final answer).
+        // Track the active assistant text bubble across tool-result cycles.
         let activeBubbleEl = null;
 
         while (true) {
@@ -396,10 +437,7 @@
               this.removeThinking();
 
               // PATCH: remove stale grid from a previous tool call in the
-              // same turn, then render the new one. Without this, the
-              // second tool call's products are silently dropped while
-              // the assistant text describes them — producing the
-              // contradictory cards/text seen in the Waircom screenshot.
+              // same turn before rendering the new one.
               if (lastProductsGridEl && lastProductsGridEl.parentNode) {
                 lastProductsGridEl.parentNode.removeChild(lastProductsGridEl);
               }
@@ -415,14 +453,7 @@
 
             if (data.type === 'message_complete' || data.type === 'end_turn') {
               this.removeThinking();
-              // PATCH: when a tool-result cycle completes mid-turn, reset
-              // the bubble pointer so any subsequent text from the
-              // *next* Claude pass replaces it rather than appending a
-              // new bubble. This collapses the "let me search again"
-              // pattern into a single, final answer bubble.
               if (data.type === 'message_complete' && currentAssistantMsg) {
-                // Keep the bubble visible; just stop accumulating text
-                // into it so a new tool result can start fresh.
                 currentAssistantMsg = null;
                 activeBubbleEl = null;
                 fullText = '';
@@ -519,8 +550,13 @@
     },
 
     /**
-     * PATCH: now returns the container element so the caller can remove
-     * a stale grid before rendering a new one in the same turn.
+     * Render a horizontal scrollable product grid.
+     * IMAGE FIX (May 2026): uses buildProductImage() which shows a clean
+     * placeholder when image_url is null/empty/broken, instead of rendering
+     * an empty <img src=""> that shows alt text in all browsers.
+     *
+     * Returns the container element so the caller can remove a stale
+     * grid before rendering a new one in the same turn.
      */
     renderProductsGrid(products) {
       if (!products || !products.length) return null;
@@ -547,14 +583,23 @@
         const safePrice = escapeHtml(prod.price || '');
         const safeAlt = escapeHtml(prod.title || 'Product');
 
-        card.innerHTML = `
-          <img class="shop-ai-product-image" src="${escapeHtml(prod.image_url || '')}" alt="${safeAlt}" loading="lazy" />
-          <div class="shop-ai-product-info">
-            <h4 class="shop-ai-product-title">${safeTitle}</h4>
-            ${safeSku ? `<div class="shop-ai-product-sku">SKU: ${safeSku}</div>` : ''}
-            <div class="shop-ai-product-price">${safePrice}</div>
-          </div>
+        // ── IMAGE FIX: build image element with onerror → placeholder ──
+        const imageEl = buildProductImage(prod.image_url, safeAlt, 'shop-ai-product-image-wrap');
+        // Apply the same CSS class the stylesheet targets for sizing
+        if (imageEl.tagName !== 'IMG') {
+          // It's a wrapper div — give it the sizing class too
+          imageEl.className = 'shop-ai-product-image shop-ai-product-image-wrap';
+        }
+        card.appendChild(imageEl);
+
+        const infoDiv = document.createElement('div');
+        infoDiv.className = 'shop-ai-product-info';
+        infoDiv.innerHTML = `
+          <h4 class="shop-ai-product-title">${safeTitle}</h4>
+          ${safeSku ? `<div class="shop-ai-product-sku">SKU: ${safeSku}</div>` : ''}
+          <div class="shop-ai-product-price">${safePrice}</div>
         `;
+        card.appendChild(infoDiv);
 
         card.addEventListener('click', () => {
           this.handleOpenProductModal(productId);
@@ -574,14 +619,15 @@
 
       this.handleCloseProductModal();
 
-      const modal = document.createElement('div');
-      modal.id = 'shop-ai-product-modal';
-      modal.className = 'shop-ai-product-modal-overlay';
+      const overlay = document.createElement('div');
+      overlay.id = 'shop-ai-product-modal';
+      overlay.className = 'shop-ai-product-modal-overlay';
 
       const isAdded = this.state.addedByProductId[productId] === true;
       const safeTitle = (product.title || 'Product').replace(/"/g, '&quot;');
 
-      modal.innerHTML = `
+      // Build modal shell
+      overlay.innerHTML = `
         <div class="shop-ai-product-modal">
           <button class="shop-ai-product-modal-close" data-product-action="modal-close">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
@@ -589,9 +635,7 @@
             </svg>
           </button>
 
-          <div class="shop-ai-product-modal-left">
-            <img src="${product.image_url || ''}" alt="${safeTitle}" />
-          </div>
+          <div class="shop-ai-product-modal-left" id="shop-ai-modal-img-slot"></div>
 
           <div class="shop-ai-product-modal-right">
             <div class="shop-ai-product-modal-title">${product.title || 'Product'}</div>
@@ -600,9 +644,7 @@
             ${product.description ? `<div class="shop-ai-product-modal-description">${product.description}</div>` : ''}
 
             <div class="shop-ai-product-modal-actions">
-              ${product.url ? `<a href="${product.url}" target="_blank" rel="noopener noreferrer" class="shop-ai-product-modal-secondary">
-                View on Store
-              </a>` : ''}
+              ${product.url ? `<a href="${product.url}" target="_blank" rel="noopener noreferrer" class="shop-ai-product-modal-secondary">View on Store</a>` : ''}
               ${(product.variant_id || product.merchandise_id) ? `<button class="shop-ai-product-modal-primary"
                 data-product-action="${isAdded ? 'go-to-cart' : 'add-to-cart'}"
                 data-product-id="${productId}">
@@ -613,12 +655,21 @@
         </div>
       `;
 
-      document.body.appendChild(modal);
-      requestAnimationFrame(() => modal.classList.add('active'));
-      this.state.selectedProductModal = modal;
+      // ── IMAGE FIX: inject image element into the modal image slot ──
+      const imgSlot = overlay.querySelector('#shop-ai-modal-img-slot');
+      if (imgSlot) {
+        const modalImg = buildProductImage(product.image_url, safeTitle, 'shop-ai-modal-image-wrap');
+        // If it's a real <img> wrapper, style it to fill the slot
+        modalImg.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center;';
+        imgSlot.appendChild(modalImg);
+      }
 
-      modal.addEventListener('click', (e) => {
-        if (e.target === modal) this.handleCloseProductModal();
+      document.body.appendChild(overlay);
+      requestAnimationFrame(() => overlay.classList.add('active'));
+      this.state.selectedProductModal = overlay;
+
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) this.handleCloseProductModal();
       });
     },
 

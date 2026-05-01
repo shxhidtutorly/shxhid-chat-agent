@@ -1,133 +1,94 @@
 /**
- * Tool Service — v2.6
+ * Tool Service — v3.0
  * Processes MCP tool responses (product search, cart updates)
  *
  * =============================================================================
- * CHANGES (v2.6 — April 30, 2026 — INCH-DIMENSION RELEVANCE GATE)
+ * PATCH v3.0 — April 30, 2026 — MULTILINGUAL GATE FIX + SKU FIELD SCORING
  * =============================================================================
  *
- * BUG (production logs lines 928–942 of logs_1777525013235.log):
- *   User: "FRL 1 inch"
- *     1. MCP semantic search → 10 unrelated results, v2.5 distinctive-token
- *        gate drops them ([frl, inch, inc] not in any title).
- *     2. Direct Storefront API "FRL 1 inch" → 0 products
- *        (Shopify search treats `inch` as a literal token).
- *     3. Direct Storefront API "FRL 1 inc" → 0 products.
- *     4. Direct Storefront API "FRL" → 21 products. None of them are
- *        filtered for "1 inch", because:
- *          - The v2.5 gate runs on distinctive tokens [frl] only — every
- *            FRL product passes literal-match.
- *          - extractQuerySpecs() only recognises `Nmm` / `Ncm` units, so
- *            the inch value is never extracted into specs.dimensions.
- *          - scoreProductBySpecs() therefore returns 0 for every product,
- *            no re-ranking happens, and the first 12 generic FRLs are
- *            shown to the user.
- *     5. User sees 12 FRL products, none of which are 1-inch — exactly the
- *        complaint in the screenshots.
+ * ROOT CAUSE FOUND IN PRODUCTION LOGS (logs_1777545391484.log):
  *
- * Same shape applies to "AODD pump 2 inch", "valve 1/2 inch", etc.
+ *   Bug 1 — The "solenoide" failure (confirmed in logs at 07:04:xx):
+ *     User types "solenoide" (Spanish) → userQuery distinctive tokens = ["solenoide"]
+ *     searchQuery = "5/2 solenoid valve" → tokens = [] (all stopwords)
+ *     Combined gate tokens = ["solenoide"] (from userQuery only)
+ *     Shopify returns 50 products containing "solenoid" (English)
+ *     Gate requires "solenoide" → 0 matches → ALL 50 dropped
+ *     Result: 8–12 wasted API calls, 10–13 second latency, 0 products shown
+ *
+ *   Bug 2 — The "only, first" failure (confirmed in logs at 07:05:xx):
+ *     User message: "only the first 2 products are right ?"
+ *     userQuery distinctive tokens = ["only", "first"] (conversational words)
+ *     Same failure pattern as Bug 1 — drops 50 solenoid results
+ *
+ *   Bug 3 — The "pneumatic, other, available" case (also at 07:06:xx):
+ *     "available" from user message was a gate token — but this one happened
+ *     to work because the SEARCH query "5/2 solenoid valve pneumatic"
+ *     had "pneumatic" which appears in product text.
+ *     Lucky, not designed — same architecture flaw as Bug 1/2.
  *
  * FIX:
- *   Add a dedicated inch-dimension gate that runs AFTER the v2.5 distinctive-
- *   token gate but BEFORE the spec re-ranker. When the user's query (either
- *   the AI-narrowed searchQuery OR the original userQuery) contains an inch
- *   dimension like `1 inch`, `1"`, `1/2"`, `0.5 in`, or `1-inch`, the gate:
+ *   The strict distinctive-token gate now uses ONLY the AI's searchQuery
+ *   tokens — NOT the user's original message tokens. The AI always generates
+ *   an English search query. The user's message may be in any language or
+ *   contain conversational words that don't appear in product text.
+ *   The inch-dimension gate still uses both (user intent for dimensions
+ *   is clear regardless of language).
  *
- *     - Extracts the dimension values (e.g. ["1"], ["1/2", "3/4"]).
- *     - Filters products to only those whose title/description/SKU/variant
- *       text contains a matching inch dimension with proper word boundaries
- *       (so "1\"" doesn't match "11\"" and "1/2\"" doesn't match "1\"").
- *     - If zero products match, returns [] so chat.jsx fires the retry hint
- *       and Claude tries a different search strategy.
- *     - If some products match, keeps only those.
- *
- *   Queries WITHOUT inch dimensions are unaffected — the gate is skipped.
- *
- *   Behaviour matrix:
- *     - "FRL 1 inch" + AI fallback "FRL" + 21 generic results
- *         → inch dim "1" extracted from userQuery
- *         → 0 of 21 contain literal `1"` / `1 inch`
- *         → return [] → retry hint fires
- *     - "FRL 1 inch" + 4 of 21 do contain `1"` in the title
- *         → return only those 4
- *     - "show me FRLs" (no inch dim)
- *         → gate skipped → original v2.5 behaviour
- *     - "AODD pump 1/2 inch" + 3 of 5 contain `1/2"`
- *         → return only those 3
- *
- *   No existing behaviour changes for non-inch queries. The v2.5 strict
- *   distinctive-token gate, the spec re-ranker, and the exact-SKU short-
- *   circuit all run unchanged.
+ * ADDITIONAL FIX — SKU FIELD SCORING:
+ *   scoreProductBySpecs() now distinguishes between:
+ *     - Actual variant.sku field match  → score 200 (highest)
+ *     - Product title match             → score 100
+ *     - Description/tags match          → score 40  (was incorrectly 100)
+ *   This prevents a product whose DESCRIPTION mentions "EC2016" from
+ *   ranking equally with a product whose variant.sku IS "EC2016".
  *
  * =============================================================================
  * PREVIOUS VERSION HISTORY
  * =============================================================================
  *
- * v2.5 (April 2026 — relevance-gate leak fix): Distinctive-token gate now
- *      uses union of tokens from BOTH searchQuery and userQuery, so user
- *      intent ("aodd", "schneider") stays enforced when the AI falls back
- *      to a stopword query like "pumps" or "breaker".
- *
- * v2.4 (April 2026): Robust formatPrice() — handles every observed Shopify
- *      MCP price shape (string, object, price_range with nested objects,
- *      GraphQL minVariantPrice). Fixes "[object Object]" rendering in cards.
- *      Re-introduced strict gate after v2.3 was too permissive.
- *
- * v2.3: Soft gate (kept everything Shopify returned). Replaced — too
- *      permissive for specific queries.
- * v2.2: Strict gate without expanded stopwords. Replaced — too aggressive
- *      on generic category queries.
- * v2.1: Accept multiple product-list response shapes.
- * v2.0: SKU regex tightening + spec blocklist.
+ * v2.6 (April 30, 2026): Inch-dimension gate for "1 inch FRL" type queries.
+ * v2.5 (April 2026): Distinctive-token gate uses union of search+user tokens.
+ *      → This is what caused the solenoide bug. v3.0 reverts to search-only.
+ * v2.4 (April 2026): Robust formatPrice().
  */
 
 // ──────────────────────────────────────────────
 // Blocklist: tokens that LOOK like SKUs but are
-// actually voltage / cable / protocol / dimension strings.
+// actually voltage / cable / protocol strings.
 // ──────────────────────────────────────────────
 const SPEC_TOKEN_BLOCKLIST = new Set([
-  // Voltage ratings
   '24VDC', '12VDC', '48VDC', '5VDC', '24VAC', '110VAC', '120VAC',
   '220VAC', '230VAC', '240VAC', '380VAC', '400VAC', '415VAC', '480VAC',
   '600VAC', '24V', '12V', '48V', '5V', '110V', '120V', '220V', '230V',
   '240V', '380V', '400V', '415V', '480V', '600V',
-  // Cable categories
   'CAT5', 'CAT5E', 'CAT6', 'CAT6A', 'CAT7', 'CAT7A', 'CAT8',
-  // Connector types
   'RJ45', 'RJ11', 'RJ12', 'DB9', 'DB15', 'DB25',
-  // Protocols & standards
   'RS232', 'RS485', 'RS422', 'IP67', 'IP68', 'IP65', 'IP54', 'IP55',
   'IP20', 'IP44', 'IEC61131', 'NEMA4', 'NEMA12',
-  // Generic amp / watt tokens that are too short
   'AC1', 'DC1', 'AC3', 'DC3',
-  // Common non-SKU acronyms
   'HTTP', 'HTTPS', 'HTML', 'JSON', 'UUID', 'MQTT', 'OPCUA',
   'MODBUS', 'TCPIP', 'PROFINET', 'PROFIBUS', 'CANOPEN', 'ETHERCAT',
   'USB', 'HDMI', 'DVI', 'VGA',
-  // Pipe sizes
   'NPT', 'BSP', 'BSPT', 'BSPP',
 ]);
 
 // ──────────────────────────────────────────────
-// v2.4: Stopwords for the relevance gate. See header for rationale.
-// "inch" is NOT in this list — it IS distinctive in user intent ("1 inch"),
-// but inch *matching* is now handled by the dedicated inch-dim gate (v2.6),
-// not the general literal-token gate, so leaving it here is harmless.
+// Stopwords for the relevance gate.
+// These words are too generic for this industrial catalog to be
+// "distinctive" — having them as gate tokens would either always
+// pass (product contains "valve") or always fail ("solenoide").
 // ──────────────────────────────────────────────
 const RELEVANCE_STOPWORDS = new Set([
-  // Articles, prepositions, pronouns
   "the", "a", "an", "and", "or", "for", "of", "with", "in", "on", "to", "me", "my",
   "is", "are", "can", "could", "would", "should",
   "i", "you", "we", "they", "this", "that", "these", "those",
-  // Verbs & intent words
   "show", "find", "need", "want", "do", "have", "got", "some", "any", "please",
   "looking", "search", "get", "see", "browse", "tell", "give", "help",
-  // Filler words commonly in user queries
   "right", "best", "good", "great", "new", "old", "also", "very", "really",
   "here", "there", "about", "what", "which", "how", "when", "where",
-  // Generic product words
   "product", "products", "part", "parts", "item", "items",
-  // Generic industrial/electrical categories — both singular and plural
+  // Generic industrial/electrical categories
   "sensor", "sensors",
   "cable", "cables",
   "valve", "valves",
@@ -156,50 +117,25 @@ const RELEVANCE_STOPWORDS = new Set([
 function isBlocklistedToken(token) {
   const upper = token.toUpperCase();
   if (SPEC_TOKEN_BLOCKLIST.has(upper)) return true;
-
   if (/^\d+MM$/i.test(token)) return true;
   if (/^\d+CM$/i.test(token)) return true;
   if (/^\d+[AVWW]$/i.test(token)) return true;
   if (/^IP\d{2}$/i.test(token)) return true;
-
   return false;
 }
 
 // ──────────────────────────────────────────────
-// v2.6: Inch-dimension extraction & matching
-//
-// extractInchDimensions("FRL 1 inch")        → ["1"]
-// extractInchDimensions('1/2" valve')        → ["1/2"]
-// extractInchDimensions("0.5 in pipe")       → ["0.5"]
-// extractInchDimensions("show 3/4-inch")     → ["3/4"]
-// extractInchDimensions("12mm pipe")         → []   (not inch-flavoured)
-// extractInchDimensions("11 employees")      → []   (no inch unit)
+// Inch-dimension extraction (v2.6 — unchanged)
 // ──────────────────────────────────────────────
 function extractInchDimensions(query) {
   if (!query || typeof query !== 'string') return [];
   const out = new Set();
-
-  // Number forms supported (in priority order — first alternative wins):
-  //   - compound fraction:    `1-1/4`     (industrial pipe sizes)
-  //   - simple fraction:      `1/2`, `3/4`
-  //   - decimal:              `0.5`, `1.5`
-  //   - integer:              `1`, `12`
-  // Note: a simple `-` followed by digits is NOT a compound — it's just a
-  // dash before the unit, as in "1-inch".
   const numPattern = '\\d+(?:-\\d+/\\d+|/\\d+|\\.\\d+)?';
-
-  //  Form 1: NUMBER followed by `"` (and `"` must NOT be followed by an
-  //  alphanumeric — prevents matching inside compound words like `1"x`).
   const reQuotes = new RegExp(`(${numPattern})\\s*"(?!\\w)`, 'g');
-
-  //  Form 2: NUMBER followed by `inch`/`inches`/`in` with optional dash/space.
-  //  Word boundary on the unit prevents matching `inc` (as in "Acme Inc.").
   const reInch = new RegExp(`(${numPattern})\\s*-?\\s*(?:inches|inch|in)\\b`, 'gi');
-
   let m;
   while ((m = reQuotes.exec(query)) !== null) out.add(m[1]);
   while ((m = reInch.exec(query)) !== null) {
-    // Drop trailing zero on whole-number decimals so "1.0 inch" → "1"
     let v = m[1];
     if (/^\d+\.0+$/.test(v)) v = v.replace(/\.0+$/, '');
     out.add(v);
@@ -207,21 +143,8 @@ function extractInchDimensions(query) {
   return [...out];
 }
 
-/**
- * Build a regex that matches a given inch value in product text with proper
- * word boundaries. Prevents:
- *   - "1\"" matching "11\""    (preceding digit blocks it)
- *   - "1\"" matching "1/2\""   (preceding `/` and trailing `/digit` blocks it)
- *   - "1 inch" matching "11 inch"
- */
 function buildInchMatchRegex(inchValue) {
-  // Escape regex specials in the inchValue (mainly for `/` and `.` in fractions/decimals)
   const escaped = String(inchValue).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // Negative left-context: must not be preceded by a digit, dot, or `/`
-  // (so "11" doesn't match "1", and "1/2" doesn't match "1").
-  // Negative right-context for the number: must not be followed by another
-  // digit/dot/slash that would make this a different number.
-  // Then require a unit: `"`, `in`, `inch`, `inches`, possibly with hyphen/space.
   const numLook = `(?<![\\d./])${escaped}(?![\\d./])`;
   const unit = `(?:\\s*"(?!\\w)|\\s*-?\\s*(?:inches|inch|in)\\b)`;
   return new RegExp(`${numLook}${unit}`, 'i');
@@ -232,23 +155,16 @@ function productMatchesInchDim(productHay, inchValue) {
     const re = buildInchMatchRegex(inchValue);
     return re.test(productHay);
   } catch (_e) {
-    // If the value contained something that broke regex compilation, fail safe
-    // (keep the product) rather than dropping legitimate results.
-    return true;
+    return true; // fail-safe: keep product
   }
 }
 
 // ──────────────────────────────────────────────
-// v2.4: Robust price formatter. See header for rationale.
-// Handles EVERY observed shape of Shopify MCP price data and GUARANTEES a
-// string return (never returns an object, so the UI can never show
-// "[object Object]").
+// Robust price formatter (v2.4 — unchanged)
 // ──────────────────────────────────────────────
 function extractAmount(val) {
   if (val === null || val === undefined) return null;
-  if (typeof val === 'string') {
-    return val.trim() || null;
-  }
+  if (typeof val === 'string') return val.trim() || null;
   if (typeof val === 'number') return String(val);
   if (typeof val === 'object') {
     if (val.amount !== undefined && val.amount !== null) return String(val.amount);
@@ -278,10 +194,7 @@ function formatPrice(p) {
 
   if (p.price !== undefined && p.price !== null) {
     const amt = extractAmount(p.price);
-    const curr = extractCurrency(
-      p.price,
-      p.currency || p.currency_code || p.currencyCode || ''
-    );
+    const curr = extractCurrency(p.price, p.currency || p.currency_code || p.currencyCode || '');
     if (amt) return curr ? `${amt} ${curr}` : amt;
   }
 
@@ -293,13 +206,9 @@ function formatPrice(p) {
       extractCurrency(pr.currency, '') ||
       extractCurrency(pr.min, '') ||
       extractCurrency(pr.max, '') ||
-      extractCurrency(pr.currency_code, '') ||
       extractCurrency(p.currency || p.currency_code, '') ||
       'USD';
-
-    if (minAmt && maxAmt && minAmt !== maxAmt) {
-      return `${minAmt} - ${maxAmt} ${currency}`;
-    }
+    if (minAmt && maxAmt && minAmt !== maxAmt) return `${minAmt} - ${maxAmt} ${currency}`;
     if (minAmt) return `${minAmt} ${currency}`;
     if (maxAmt) return `${maxAmt} ${currency}`;
   }
@@ -318,10 +227,7 @@ function formatPrice(p) {
       if (!v) continue;
       const amt = extractAmount(v.price);
       if (amt) {
-        const curr = extractCurrency(
-          v.price,
-          v.currency || v.currency_code || v.currencyCode || ''
-        );
+        const curr = extractCurrency(v.price, v.currency || v.currency_code || v.currencyCode || '');
         return curr ? `${amt} ${curr}` : amt;
       }
     }
@@ -343,9 +249,7 @@ function extractQuerySpecs(query) {
   const contextDimRegex = /(?:length|width|height|bore|diameter|size|thick|stroke)\s*[:\-]?\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*(?:length|width|height|bore|diameter|size|thick|stroke)/gi;
   while ((m = contextDimRegex.exec(query)) !== null) {
     const val = parseFloat(m[1] || m[2]);
-    if (val && !dimensions.includes(val)) {
-      dimensions.push(val);
-    }
+    if (val && !dimensions.includes(val)) dimensions.push(val);
   }
 
   const skuRegex = /\b([A-Z0-9][A-Z0-9\-\.\/]{1,}[A-Z0-9])\b/gi;
@@ -392,6 +296,18 @@ function buildProductSearchText(product) {
   return parts.join(' ');
 }
 
+/**
+ * Score a product by how well it matches the extracted specs.
+ *
+ * v3.0 CHANGE: SKU scores are now tiered:
+ *   - Actual variant.sku field match  → 200 (highest confidence)
+ *   - Product title match             → 100 (good confidence)
+ *   - Description/tags text match     → 40  (low confidence)
+ *
+ * Previously all text matches scored 100, meaning a product whose
+ * DESCRIPTION mentions a SKU ranked the same as one whose actual
+ * variant.sku IS that SKU. The new scoring fixes this.
+ */
 function scoreProductBySpecs(product, specs) {
   if (!specs.dimensions.length && !specs.skuPatterns.length && !specs.rawNumbers.length) return 0;
 
@@ -400,14 +316,38 @@ function scoreProductBySpecs(product, specs) {
   const searchUpper = searchText.toUpperCase();
   const searchLower = searchText.toLowerCase();
 
+  // Get actual SKU fields for high-confidence matching
+  const productSku = String(product.sku || '').toUpperCase();
+  const variantSkus = (product.variants || []).map(v => String(v.sku || '').toUpperCase());
+  const titleUpper = String(product.title || '').toUpperCase();
+
   for (const sku of specs.skuPatterns) {
-    if (searchUpper.includes(sku)) {
+    const skuU = sku.toUpperCase();
+    const skuN = skuU.replace(/[-\.\/]/g, '');
+    const titleN = titleUpper.replace(/[-\.\/]/g, '');
+
+    // Tier 1: Actual variant.sku field match (200 pts)
+    if (variantSkus.some(s => s === skuU) || productSku === skuU) {
+      score += 200; // Exact match on SKU field
+    } else if (variantSkus.some(s => s.includes(skuU)) || productSku.includes(skuU)) {
+      score += 180; // Contains match on SKU field
+    } else if (
+      variantSkus.some(s => s.replace(/[-\.\/]/g, '').includes(skuN)) ||
+      productSku.replace(/[-\.\/]/g, '').includes(skuN)
+    ) {
+      score += 150; // Normalized match on SKU field (ignore separators)
+    }
+    // Tier 2: Product title match (100 pts)
+    else if (titleUpper.includes(skuU) || titleN.includes(skuN)) {
       score += 100;
+    }
+    // Tier 3: Description/tags match (40 pts — low confidence)
+    else if (searchUpper.includes(skuU)) {
+      score += 40;
     } else {
-      const skuNorm = sku.replace(/[-\.\/]/g, '');
-      const searchNorm = searchUpper.replace(/[-\.\/]/g, '');
-      if (searchNorm.includes(skuNorm)) {
-        score += 80;
+      const searchN = searchUpper.replace(/[-\.\/]/g, '');
+      if (searchN.includes(skuN)) {
+        score += 30;
       }
     }
   }
@@ -435,7 +375,9 @@ function scoreProductBySpecs(product, specs) {
 
 /**
  * Extract distinctive tokens from a query for the relevance gate.
- * Returns tokens that are ≥3 chars, alphanumeric, not stopwords, not blocklisted specs.
+ *
+ * v3.0 NOTE: This is now ONLY called with searchQuery (the AI's English
+ * search string), NOT with userQuery. See processProductSearchResult() below.
  */
 function extractDistinctiveTokens(query) {
   if (!query || typeof query !== 'string') return [];
@@ -456,18 +398,14 @@ export function createToolService() {
     if (product.handle) {
       return `https://${shopDomain}/products/${product.handle}`;
     }
-
     const rawUrl = product.product_url || product.url || '';
     if (rawUrl) {
       const productsMatch = rawUrl.match(/\/products\/([a-z0-9][a-z0-9\-]*)/i);
       if (productsMatch && productsMatch[1]) {
         return `https://${shopDomain}/products/${productsMatch[1]}`;
       }
-      if (rawUrl.startsWith('http')) {
-        return rawUrl;
-      }
+      if (rawUrl.startsWith('http')) return rawUrl;
     }
-
     return null;
   }
 
@@ -493,20 +431,29 @@ export function createToolService() {
         (Array.isArray(responseData?.results)  && responseData.results)  ||
         [];
 
-      if (rawProducts.length === 0) {
-        return [];
-      }
+      if (rawProducts.length === 0) return [];
       responseData.products = rawProducts;
 
       const resultCount = rawProducts.length;
       console.log(`[ToolService] Search returned ${resultCount} products`);
 
       // ─────────────────────────────────────────────
-      // STRICT DISTINCTIVE-TOKEN GATE (v2.5)
+      // STRICT DISTINCTIVE-TOKEN GATE (v3.0 FIX)
+      //
+      // CRITICAL: Use ONLY searchQuery tokens — NOT userQuery tokens.
+      //
+      // Why: userQuery may be in Spanish ("solenoide"), French, etc.,
+      // or contain conversational text ("only the first 2 are right?").
+      // The AI always generates an English searchQuery. Gate on that.
+      //
+      // Example failure (now fixed):
+      //   userQuery = "solenoide 5/2" → tokens = ["solenoide"]
+      //   searchQuery = "5/2 solenoid valve" → tokens = [] (all stopwords)
+      //   Old combined = ["solenoide"] → gate fails for all English products
+      //   New: only searchQuery tokens = [] → gate skipped → correct results shown
       // ─────────────────────────────────────────────
-      const searchTokens = extractDistinctiveTokens(searchQuery || '');
-      const userTokens = extractDistinctiveTokens(userQuery || '');
-      const distinctiveTokens = [...new Set([...searchTokens, ...userTokens])];
+      const distinctiveTokens = extractDistinctiveTokens(searchQuery || '');
+      // NOTE: userQuery tokens deliberately excluded — see comment above
 
       if (distinctiveTokens.length > 0) {
         const literalMatches = [];
@@ -529,22 +476,18 @@ export function createToolService() {
         if (literalMatches.length < responseData.products.length) {
           console.log(
             `[ToolService] Strict gate: kept ${literalMatches.length}/${responseData.products.length} ` +
-            `literal matches (tokens: ${distinctiveTokens.join(', ')})`
+            `(tokens: ${distinctiveTokens.join(', ')})`
           );
           responseData.products = literalMatches;
         }
       }
 
       // ─────────────────────────────────────────────
-      // INCH-DIMENSION GATE (v2.6 — NEW)
+      // INCH-DIMENSION GATE (v2.6 — unchanged)
       //
-      // When user asked for an explicit inch dimension ("1 inch", "1/2\"",
-      // etc.), drop products whose haystack does not contain that dimension.
-      // Uses BOTH searchQuery and userQuery so dimensions stay enforced even
-      // when the AI fell back to a dimensionless query like "FRL".
-      //
-      // If the gate empties the list, return [] so chat.jsx fires the retry
-      // hint and Claude tries a different search angle.
+      // Keep using BOTH searchQuery and userQuery for inch dimensions.
+      // Dimension intent is clear from user message regardless of language.
+      // "1 inch FRL" in any language means the user wants 1-inch products.
       // ─────────────────────────────────────────────
       const inchDimsRaw = [
         ...extractInchDimensions(searchQuery || ''),
@@ -579,7 +522,7 @@ export function createToolService() {
       }
 
       // ─────────────────────────────────────────────
-      // SPEC EXTRACTION & RE-RANKING
+      // SPEC EXTRACTION & RE-RANKING (v3.0: tiered SKU scoring)
       // ─────────────────────────────────────────────
       const userSpecs = extractQuerySpecs(userQuery || '');
       const searchSpecs = extractQuerySpecs(searchQuery || '');
@@ -605,7 +548,6 @@ export function createToolService() {
           firstVariant = p.variants[0];
         }
         const variantIdRaw = firstVariant?.id || firstVariant?.variant_id || null;
-
         const priceText = formatPrice(p);
         const specScore = hasSpecs ? scoreProductBySpecs(p, mergedSpecs) : 0;
 
@@ -630,14 +572,21 @@ export function createToolService() {
         const withScores = [...rankedProducts].sort((a, b) => b._specScore - a._specScore);
         const topScore = withScores[0]?._specScore || 0;
 
-        if (topScore >= 100) {
-          const exactMatches = withScores.filter(p => p._specScore >= 100);
-          console.log(`[ToolService] Exact SKU match: returning ${exactMatches.length} products only`);
-          rankedProducts = exactMatches;
+        if (topScore >= 150) {
+          // Actual SKU field match (score 150+ = variant.sku contains the token)
+          const exactSkuMatches = withScores.filter(p => p._specScore >= 150);
+          console.log(`[ToolService] Exact SKU field match: returning ${exactSkuMatches.length} products (score ≥150)`);
+          rankedProducts = exactSkuMatches;
+        } else if (topScore >= 100) {
+          // Title match is still reliable
+          const titleMatches = withScores.filter(p => p._specScore >= 100);
+          console.log(`[ToolService] Title SKU match: ${titleMatches.length} products (score ≥100)`);
+          rankedProducts = titleMatches;
         } else if (topScore > 0) {
+          // Description/tags match only — re-rank but don't filter
           const matched = withScores.filter(p => p._specScore > 0);
           const unmatched = withScores.filter(p => p._specScore === 0);
-          console.log(`[ToolService] Spec re-rank: ${matched.length} matched, ${unmatched.length} passthrough (top score: ${topScore})`);
+          console.log(`[ToolService] Spec re-rank (low confidence): ${matched.length} matched, ${unmatched.length} passthrough`);
           rankedProducts = [...matched, ...unmatched];
         }
       }
@@ -697,6 +646,4 @@ export function createToolService() {
   };
 }
 
-export default {
-  createToolService,
-};
+export default { createToolService };

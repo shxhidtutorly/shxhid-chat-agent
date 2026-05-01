@@ -1,27 +1,28 @@
-import { generateAuthUrl } from "./auth.server";
-import { getCustomerToken } from "./db.server";
-
 /**
- * MCPClient — v2.1
+ * MCPClient — v2.2
  * Client for interacting with Model Context Protocol (MCP) API endpoints
- * Handles customer and storefront MCP connections with comprehensive error handling
+ *
+ * CHANGES (v2.2 — May 2026):
+ *   - `searchShopCatalog()` now inspects the tool's input_schema to determine
+ *     what argument shape the active MCP version expects:
+ *       Old search_shop_catalog: { query: "..." }
+ *       New search_catalog:      { catalog: { query: "..." } }
+ *     Passing the wrong shape caused "Invalid params" errors silently — the MCP
+ *     returned 0 results or unexpected products.
+ *   - Added `getCatalogSearchToolArgs()` helper that returns the correct args
+ *     object based on the advertised schema.
+ *   - Added logging of detected schema so it's visible in production logs.
  *
  * CHANGES (v2.1 — April 2026):
- *   - `searchShopCatalog()` now looks up the active catalog-search tool name
+ *   - `searchShopCatalog()` looks up the active catalog-search tool name
  *     from advertised tools instead of hardcoding "search_shop_catalog".
- *     Shopify's Storefront MCP renamed the tool to `search_catalog`, which
- *     made the hardcoded call fail with "Tool not found" for any path that
- *     used this helper.
- *   - `searchShopCatalog()` no longer sends the `context` argument — not all
- *     versions of the tool accept it, and sending unknown params triggers
- *     "Invalid params" responses.
+ *   - `searchShopCatalog()` no longer sends the `context` argument.
  */
 
-// Names Shopify's Storefront MCP has used for catalog search across versions.
 const CATALOG_SEARCH_TOOL_NAMES = new Set([
   "search_shop_catalog",  // legacy
-  "search_catalog",       // current (confirmed April 2026)
-  "search_products",      // defensive — observed in some rollouts
+  "search_catalog",       // current (confirmed April-May 2026)
+  "search_products",      // defensive
 ]);
 
 function isCatalogSearchTool(toolName) {
@@ -29,23 +30,12 @@ function isCatalogSearchTool(toolName) {
 }
 
 class MCPClient {
-  /**
-   * Creates a new MCPClient instance
-   *
-   * @param {string} hostUrl - The base URL for the shop
-   * @param {string} conversationId - ID for the current conversation
-   * @param {string} shopId - ID of the Shopify shop
-   * @param {string} customerMcpEndpoint - Optional custom MCP endpoint
-   */
   constructor(hostUrl, conversationId, shopId, customerMcpEndpoint) {
     this.tools = [];
     this.customerTools = [];
     this.storefrontTools = [];
 
-    // Normalize hostUrl to ensure it has protocol
     this.hostUrl = this._normalizeUrl(hostUrl);
-
-    // Configure MCP endpoints
     this.storefrontMcpEndpoint = `${this.hostUrl}/api/mcp`;
 
     const accountHostUrl = this.hostUrl.replace(/(\.myshopify\.com)$/, '.account$1');
@@ -55,9 +45,11 @@ class MCPClient {
     this.conversationId = conversationId;
     this.shopId = shopId;
 
-    // Configuration
     this.retryAttempts = 3;
-    this.retryDelay = 1000; // ms
+    this.retryDelay = 1000;
+
+    // Cache the detected catalog search schema style
+    this._catalogSearchSchema = null; // 'flat' or 'nested'
   }
 
   _normalizeUrl(url) {
@@ -73,14 +65,69 @@ class MCPClient {
     return `https://${resolved}`;
   }
 
-  /**
-   * v2.1: Find the catalog-search tool name the MCP is currently advertising.
-   * Falls back to "search_catalog" (the current Shopify default) if nothing
-   * matches — which is better than the legacy "search_shop_catalog".
-   */
   getCatalogSearchToolName() {
     const found = (this.storefrontTools || []).find(t => isCatalogSearchTool(t.name));
     return found?.name || "search_catalog";
+  }
+
+  /**
+   * v2.2: Detect and return the correct args object for the catalog search tool.
+   *
+   * The Shopify Storefront MCP changed its search tool's input schema:
+   *   Old (search_shop_catalog): { query: "solenoid valve" }
+   *   New (search_catalog):      { catalog: { query: "solenoid valve" } }
+   *
+   * We inspect the tool's advertised input_schema to determine which shape to use.
+   * This ensures we always pass valid args regardless of MCP version.
+   */
+  getCatalogSearchToolArgs(query) {
+    if (!query || typeof query !== 'string') {
+      throw new Error('Search query must be a non-empty string');
+    }
+
+    const cleanQuery = query.trim();
+    const toolName = this.getCatalogSearchToolName();
+    const tool = (this.storefrontTools || []).find(t => t.name === toolName);
+
+    // Check the input_schema to determine expected argument structure
+    if (tool?.input_schema?.properties) {
+      const props = tool.input_schema.properties;
+
+      // New schema: has 'catalog' property with nested 'query'
+      if (props.catalog) {
+        if (this._catalogSearchSchema !== 'nested') {
+          this._catalogSearchSchema = 'nested';
+          console.log(`[MCPClient] Detected catalog search schema: NESTED { catalog: { query } } for tool "${toolName}"`);
+        }
+        return { catalog: { query: cleanQuery } };
+      }
+
+      // Old/flat schema: has 'query' property directly
+      if (props.query) {
+        if (this._catalogSearchSchema !== 'flat') {
+          this._catalogSearchSchema = 'flat';
+          console.log(`[MCPClient] Detected catalog search schema: FLAT { query } for tool "${toolName}"`);
+        }
+        return { query: cleanQuery };
+      }
+    }
+
+    // Fallback: try to infer from tool name
+    // search_catalog (new) → nested, search_shop_catalog (old) → flat
+    if (toolName === 'search_catalog' || toolName === 'search_products') {
+      if (this._catalogSearchSchema !== 'nested') {
+        this._catalogSearchSchema = 'nested';
+        console.log(`[MCPClient] Inferring catalog search schema: NESTED (tool name is "${toolName}")`);
+      }
+      return { catalog: { query: cleanQuery } };
+    }
+
+    // Default to flat for legacy compatibility
+    if (this._catalogSearchSchema !== 'flat') {
+      this._catalogSearchSchema = 'flat';
+      console.log(`[MCPClient] Using default catalog search schema: FLAT { query } for tool "${toolName}"`);
+    }
+    return { query: cleanQuery };
   }
 
   async connectToCustomerServer() {
@@ -89,7 +136,7 @@ class MCPClient {
 
       if (this.conversationId) {
         try {
-          const dbToken = await getCustomerToken(this.conversationId);
+          const dbToken = await (await import('./db.server.js')).getCustomerToken(this.conversationId);
           if (dbToken?.accessToken) {
             this.customerAccessToken = dbToken.accessToken;
             console.log("✅ Using existing customer token");
@@ -190,7 +237,7 @@ class MCPClient {
 
     if (!accessToken) {
       try {
-        const dbToken = await getCustomerToken(this.conversationId);
+        const dbToken = await (await import('./db.server.js')).getCustomerToken(this.conversationId);
         if (dbToken?.accessToken) {
           accessToken = dbToken.accessToken;
           this.customerAccessToken = accessToken;
@@ -215,6 +262,7 @@ class MCPClient {
       if (error.status === 401) {
         console.log("🔐 Authentication required, generating auth URL");
         try {
+          const { generateAuthUrl } = await import('./auth.server.js');
           const authResponse = await generateAuthUrl(this.conversationId, this.shopId);
           return {
             error: {
@@ -245,23 +293,23 @@ class MCPClient {
   /**
    * Search shop catalog by natural language query.
    *
-   * v2.1: No longer hardcodes "search_shop_catalog". Uses whichever
-   * catalog-search tool the MCP advertises (search_catalog on current
-   * Shopify Storefront MCP). Does not send `context` — some versions
-   * of the new tool reject unknown parameters with "Invalid params".
+   * v2.2: Uses getCatalogSearchToolArgs() to build the correct args object
+   * based on the advertised tool schema. This handles both:
+   *   - Old search_shop_catalog: { query: "..." }
+   *   - New search_catalog:      { catalog: { query: "..." } }
    */
-  async searchShopCatalog(query, /* context no longer used */ _context) {
+  async searchShopCatalog(query) {
     if (!query || typeof query !== "string") {
       throw new Error("Search query is required");
     }
 
     const toolName = this.getCatalogSearchToolName();
-    console.log(`🔍 Searching catalog for: "${query}" via tool "${toolName}"`);
+    const toolArgs = this.getCatalogSearchToolArgs(query.trim());
+
+    console.log(`🔍 Searching catalog for: "${query}" via tool "${toolName}" with args: ${JSON.stringify(toolArgs)}`);
 
     try {
-      const result = await this.callStorefrontTool(toolName, {
-        query: query.trim(),
-      });
+      const result = await this.callStorefrontTool(toolName, toolArgs);
 
       if (!result || typeof result !== "object") {
         throw new Error("Invalid search result structure");

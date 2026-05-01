@@ -1,8 +1,80 @@
 /**
  * Shopify Storefront API GraphQL Queries & Mutations
- * Validated against official Storefront API schema
+ *
+ * PATCH v3.0 — April 2026
+ *
+ * KEY CHANGE: Added STOREFRONT_SEARCH_QUERY using the `search` field.
+ *
+ * WHY: The existing SEARCH_PRODUCTS_QUERY uses `products(query:)` which
+ * does NOT index variant.sku. This means SKU searches silently fail.
+ * The Shopify `search` query indexes:
+ *   - title, body_html, vendor, product_type, tags
+ *   - variants.title, variants.sku  ← this is what we need
+ * Source: https://shopify.dev/docs/api/storefront/latest/queries/search
+ *
+ * `prefix: LAST` enables partial word matching on the last token, so
+ * "MGPM12" matches "MGPM12-10Z" — critical for partial-SKU lookups.
+ *
+ * The SEARCH_PRODUCTS_QUERY (products field) is kept for addToCart
+ * operations in api.cart.jsx which don't need SKU indexing.
  */
 
+// ─────────────────────────────────────────────────────────────
+// PRIMARY: Use this for all chat product searches
+// Indexes variant.sku — the key difference from SEARCH_PRODUCTS_QUERY
+// ─────────────────────────────────────────────────────────────
+export const STOREFRONT_SEARCH_QUERY = `
+  query storefrontSearch($query: String!, $first: Int) {
+    search(query: $query, first: $first, types: PRODUCT, prefix: LAST) {
+      edges {
+        node {
+          ... on Product {
+            id
+            title
+            handle
+            description
+            vendor
+            productType
+            tags
+            featuredImage {
+              url
+              altText
+            }
+            priceRange {
+              minVariantPrice {
+                amount
+                currencyCode
+              }
+              maxVariantPrice {
+                amount
+                currencyCode
+              }
+            }
+            variants(first: 10) {
+              edges {
+                node {
+                  id
+                  title
+                  sku
+                  availableForSale
+                  price {
+                    amount
+                    currencyCode
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+// ─────────────────────────────────────────────────────────────
+// SECONDARY: Keep for api.cart.jsx add-to-cart operations
+// Uses products(query:) — fine for handle/title lookups
+// ─────────────────────────────────────────────────────────────
 export const SEARCH_PRODUCTS_QUERY = `
   query searchProducts($query: String!, $first: Int) {
     products(first: $first, query: $query) {
@@ -49,7 +121,6 @@ export const SEARCH_PRODUCTS_QUERY = `
   }
 `;
 
-
 export const CREATE_CART_MUTATION = `
   mutation createCart($lines: [CartLineInput!]!) {
     cartCreate(input: { lines: $lines }) {
@@ -83,7 +154,6 @@ export const CREATE_CART_MUTATION = `
     }
   }
 `;
-
 
 export const ADD_LINES_TO_CART_MUTATION = `
   mutation addLinesToCart($cartId: ID!, $lines: [CartLineInput!]!) {

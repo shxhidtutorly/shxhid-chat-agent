@@ -512,6 +512,16 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
                 console.log(`[Search] Sending ${products.length} products to frontend for: "${searchQuery}"`);
                 stream.sendMessage({ type: "product_results", products });
                 productsSentToFrontend = true;
+
+                // Inject a clear "stop searching" signal so Claude doesn't retry.
+                // Without this, Claude may see the MCP returned 0 and keep looping.
+                const stopHint = JSON.stringify({
+                  products: products.slice(0, 3).map((p) => ({ id: p.id, title: p.title, sku: p.sku || null, price: p.price || null })),
+                  total_count: products.length,
+                  _display_note: `${products.length} product card(s) are now displayed to the user. Do NOT search again. Write one short response acknowledging the results.`,
+                });
+                if (!Array.isArray(toolUseResponse.content)) toolUseResponse.content = [];
+                toolUseResponse.content = [{ type: "text", text: stopHint }];
               } else {
                 console.log(`[Search] Zero results for: "${searchQuery}" (all fallbacks exhausted)`);
                 const retryHint = JSON.stringify({

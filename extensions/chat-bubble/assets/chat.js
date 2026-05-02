@@ -67,6 +67,7 @@
     state: {
       isOpen: false,
       isThinking: false,
+      thinkingInterval: null,
       conversationId: sessionStorage.getItem('shopAiConversationId') || null,
       visitorId: sessionStorage.getItem('shopAiVisitorId') || null,
       emailCaptured: localStorage.getItem('shopAiEmailCaptured') === 'true',
@@ -515,35 +516,93 @@
       return `<p>${html}</p>`;
     },
 
-    showThinking(text) {
+    showThinking(initialText) {
       if (this.state.isThinking) return;
       this.state.isThinking = true;
+
+      const idlePhrases = [
+        'Thinking...',
+        'Analyzing your request...',
+        'Processing...',
+        'Working on it...',
+      ];
 
       const container = document.createElement('div');
       container.id = 'shop-ai-thinking';
       container.className = 'shop-ai-thinking-container';
-      container.innerHTML = '<div class="shop-ai-thinking-dots"><span></span><span></span><span></span></div><span class="shop-ai-thinking-text">' + (text || 'Thinking...') + '</span>';
+      container.innerHTML =
+        '<div class="shop-ai-thinking-dots"><span></span><span></span><span></span></div>' +
+        '<span class="shop-ai-thinking-text">' + (initialText || idlePhrases[0]) + '</span>';
 
       this.elements.messages?.appendChild(container);
       this.scrollToBottom();
+
+      // Cycle through idle phrases while waiting for first tool call
+      let cycleIdx = 0;
+      this.state.thinkingInterval = setInterval(() => {
+        cycleIdx = (cycleIdx + 1) % idlePhrases.length;
+        const el = document.querySelector('#shop-ai-thinking .shop-ai-thinking-text');
+        if (el) {
+          el.style.opacity = '0';
+          setTimeout(() => {
+            if (el.parentNode) {
+              el.textContent = idlePhrases[cycleIdx];
+              el.style.opacity = '1';
+            }
+          }, 200);
+        }
+      }, 2500);
     },
 
-    updateThinkingState(text) {
+    updateThinkingState(toolText) {
+      // Clear idle cycling and start tool-specific cycling
+      clearInterval(this.state.thinkingInterval);
+      this.state.thinkingInterval = null;
+
+      const toolPhrases = {
+        'Searching products...':   ['Searching catalog...', 'Finding best matches...', 'Filtering results...', 'Almost done...'],
+        'Adding to cart...':       ['Adding to cart...', 'Preparing your order...', 'Updating basket...', 'Almost done...'],
+        'Looking up product...':   ['Looking up product...', 'Fetching details...', 'Checking availability...', 'Almost done...'],
+        'Looking up product details...': ['Fetching product details...', 'Loading specs...', 'Checking inventory...', 'Almost done...'],
+        'Checking availability...': ['Checking availability...', 'Looking up stock...', 'Verifying details...', 'Almost done...'],
+      };
+
+      const phrases = toolPhrases[toolText] || [toolText, 'Processing...', 'Working on it...', 'Almost done...'];
+
       const el = document.querySelector('#shop-ai-thinking .shop-ai-thinking-text');
       if (el) {
         el.style.opacity = '0';
         setTimeout(() => {
-          el.textContent = text;
-          el.style.opacity = '1';
+          if (el.parentNode) {
+            el.textContent = phrases[0];
+            el.style.opacity = '1';
+          }
         }, 150);
+
+        let cycleIdx = 0;
+        this.state.thinkingInterval = setInterval(() => {
+          cycleIdx = (cycleIdx + 1) % phrases.length;
+          const el2 = document.querySelector('#shop-ai-thinking .shop-ai-thinking-text');
+          if (el2) {
+            el2.style.opacity = '0';
+            setTimeout(() => {
+              if (el2.parentNode) {
+                el2.textContent = phrases[cycleIdx];
+                el2.style.opacity = '1';
+              }
+            }, 200);
+          }
+        }, 2500);
       } else {
         if (!this.state.isThinking) {
-          this.showThinking(text);
+          this.showThinking(toolText);
         }
       }
     },
 
     removeThinking() {
+      clearInterval(this.state.thinkingInterval);
+      this.state.thinkingInterval = null;
       const ui = document.getElementById('shop-ai-thinking');
       if (ui) ui.remove();
       this.state.isThinking = false;
@@ -626,6 +685,19 @@
       const isAdded = this.state.addedByProductId[productId] === true;
       const safeTitle = (product.title || 'Product').replace(/"/g, '&quot;');
 
+      // Defensive description extraction — guard against [object Object]
+      let rawDesc = product.description;
+      if (typeof rawDesc !== 'string') {
+        rawDesc = (rawDesc && typeof rawDesc === 'object')
+          ? (rawDesc.value || rawDesc.text || rawDesc.html || rawDesc.content || '')
+          : '';
+      }
+      const safeDescription = rawDesc.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+      const escapeHtmlAttr = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[c]));
+
       // Build modal shell
       overlay.innerHTML = `
         <div class="shop-ai-product-modal">
@@ -638,13 +710,13 @@
           <div class="shop-ai-product-modal-left" id="shop-ai-modal-img-slot"></div>
 
           <div class="shop-ai-product-modal-right">
-            <div class="shop-ai-product-modal-title">${product.title || 'Product'}</div>
-            <div class="shop-ai-product-modal-price">${product.price || 'Price on request'}</div>
-            ${product.sku ? `<div class="shop-ai-product-modal-sku">SKU: ${product.sku}</div>` : ''}
-            ${product.description ? `<div class="shop-ai-product-modal-description">${product.description}</div>` : ''}
+            <div class="shop-ai-product-modal-title">${escapeHtmlAttr(product.title || 'Product')}</div>
+            <div class="shop-ai-product-modal-price">${escapeHtmlAttr(product.price || 'Price on request')}</div>
+            ${product.sku ? `<div class="shop-ai-product-modal-sku"><span class="shop-ai-sku-label">SKU</span> ${escapeHtmlAttr(product.sku)}</div>` : ''}
+            ${safeDescription ? `<div class="shop-ai-product-modal-description">${escapeHtmlAttr(safeDescription)}</div>` : ''}
 
             <div class="shop-ai-product-modal-actions">
-              ${product.url ? `<a href="${product.url}" target="_blank" rel="noopener noreferrer" class="shop-ai-product-modal-secondary">View on Store</a>` : ''}
+              ${product.url ? `<a href="${escapeHtmlAttr(product.url)}" target="_blank" rel="noopener noreferrer" class="shop-ai-product-modal-secondary">View on Store</a>` : ''}
               ${(product.variant_id || product.merchandise_id) ? `<button class="shop-ai-product-modal-primary"
                 data-product-action="${isAdded ? 'go-to-cart' : 'add-to-cart'}"
                 data-product-id="${productId}">

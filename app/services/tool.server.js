@@ -295,6 +295,34 @@ function extractDistinctiveTokens(query) {
 }
 
 /**
+ * Extract a clean plain-text description from a product object.
+ * The Shopify search_catalog UCP tool returns `description` as an object
+ * in some response shapes (e.g. { value: "...", type: "html" }), which
+ * would render as "[object Object]" if passed directly to the frontend.
+ */
+function extractDescription(product) {
+  const raw = product.description;
+
+  if (typeof raw === "string") {
+    return raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().substring(0, 500);
+  }
+
+  if (raw && typeof raw === "object") {
+    const val = raw.value || raw.text || raw.html || raw.content || raw.body || "";
+    if (typeof val === "string") {
+      return val.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().substring(0, 500);
+    }
+  }
+
+  const html = product.descriptionHtml || product.body_html || product.bodyHtml || "";
+  if (typeof html === "string" && html) {
+    return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().substring(0, 500);
+  }
+
+  return "";
+}
+
+/**
  * Extract a valid image URL from a product object.
  *
  * v3.2: EXHAUSTIVE fallback chain covering ALL known field shapes from:
@@ -496,7 +524,7 @@ export function createToolService() {
           image_url: rawImageUrl, // null = no image found; frontend will show placeholder
           url: productUrl,
           price: priceText,
-          description: p.description || "",
+          description: extractDescription(p),
           variant_id: variantIdRaw,
           merchandise_id: variantIdRaw,
           sku: p.sku || firstVariant?.sku || null,

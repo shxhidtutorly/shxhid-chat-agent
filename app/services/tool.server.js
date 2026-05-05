@@ -93,10 +93,14 @@ const RELEVANCE_STOPWORDS = new Set([
 function isBlocklistedToken(token) {
   const upper = token.toUpperCase();
   if (SPEC_TOKEN_BLOCKLIST.has(upper)) return true;
+  // Electrical/spec units
   if (/^\d+MM$/i.test(token)) return true;
   if (/^\d+CM$/i.test(token)) return true;
   if (/^\d+[AVWW]$/i.test(token)) return true;
   if (/^IP\d{2}$/i.test(token)) return true;
+  // Inch/foot dimension tokens: "2INCH", "2IN", "3FT", "4FEET"
+  // These are measurements, not distinctive product attributes.
+  if (/^\d+(?:\.\d+)?(?:INCH|INCHES|IN|FT|FEET|FOOT)$/i.test(token)) return true;
   return false;
 }
 
@@ -449,20 +453,42 @@ export function createToolService() {
       // ─────────────────────────────────────────────────────────────────
       const distinctiveTokens = extractDistinctiveTokens(searchQuery || "");
 
-      if (distinctiveTokens.length > 0) {
+      // SKU-aware normalization: when query is a pure alphanumeric SKU (no spaces),
+      // also try separator-stripped matching so "TAA755A5501" matches "TAA755A5501-001"
+      // even if the standard token check misses it due to formatting differences.
+      const queryTrimmed = (searchQuery || "").trim();
+      const isPureSkuQuery = queryTrimmed.length >= 4 &&
+        !/\s/.test(queryTrimmed) &&
+        /[A-Z]/i.test(queryTrimmed) &&
+        /\d/.test(queryTrimmed);
+      const skuNormalized = isPureSkuQuery
+        ? queryTrimmed.toLowerCase().replace(/[-\.\/]/g, "")
+        : null;
+
+      if (distinctiveTokens.length > 0 || isPureSkuQuery) {
         const literalMatches = [];
         for (const p of responseData.products) {
           const hay = buildProductSearchText(p).toLowerCase();
-          if (distinctiveTokens.some((t) => hay.includes(t))) literalMatches.push(p);
+          // Standard check: any distinctive token appears in product text
+          if (distinctiveTokens.length > 0 && distinctiveTokens.some((t) => hay.includes(t))) {
+            literalMatches.push(p);
+            continue;
+          }
+          // SKU fallback: strip separators from both sides so "TAA755A5501" matches
+          // variant SKUs like "TAA755A5501-001" even when token check misses it.
+          if (skuNormalized) {
+            const hayNorm = hay.replace(/[-\.\/]/g, "");
+            if (hayNorm.includes(skuNormalized)) literalMatches.push(p);
+          }
         }
 
         if (literalMatches.length === 0) {
-          console.log(`[ToolService] Strict gate: 0 literal matches for [${distinctiveTokens.join(", ")}] — dropping ${responseData.products.length} unrelated results`);
+          console.log(`[ToolService] Strict gate: 0 matches [${distinctiveTokens.join(", ")}${skuNormalized ? ` / SKU:${skuNormalized}` : ""}] — dropping ${responseData.products.length} unrelated results`);
           return [];
         }
 
         if (literalMatches.length < responseData.products.length) {
-          console.log(`[ToolService] Strict gate: kept ${literalMatches.length}/${responseData.products.length} (tokens: ${distinctiveTokens.join(", ")})`);
+          console.log(`[ToolService] Strict gate: kept ${literalMatches.length}/${responseData.products.length} (tokens: [${distinctiveTokens.join(", ")}])`);
           responseData.products = literalMatches;
         }
       }

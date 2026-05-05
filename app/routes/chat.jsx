@@ -268,6 +268,31 @@ async function tryDirectStorefrontFallback({ searchQuery, userMessage, shopDomai
   return [];
 }
 
+/**
+ * Detect SKU-like tokens in a user message.
+ * Returns an array of probable SKU strings found (uppercase, digits+letters, with separators).
+ * Used to annotate the Claude message so it searches the exact code first.
+ */
+function detectSkuTokens(message) {
+  if (!message || typeof message !== "string") return [];
+  // Match tokens that: have both letters and digits, are ≥4 chars, may have hyphens/dots
+  const skuRegex = /\b([A-Z0-9]{2,}[-\.\/][A-Z0-9][\w\-\.\/]*|[A-Z]{1,4}\d[\w\-\.\/]{2,}|\d{1,4}[A-Z]{1,5}[\w\-\.\/]{2,})\b/gi;
+  const matches = [];
+  const seen = new Set();
+  let m;
+  while ((m = skuRegex.exec(message)) !== null) {
+    const token = m[1].toUpperCase().replace(/\.$/, "");
+    if (token.length < 4) continue;
+    if (!/\d/.test(token) || !/[A-Z]/i.test(token)) continue;
+    // Skip pure dimension tokens like "18MM", "24VDC"
+    if (/^\d+(?:MM|CM|VDC|VAC|V|A|W)$/i.test(token)) continue;
+    if (seen.has(token)) continue;
+    seen.add(token);
+    matches.push(token);
+  }
+  return matches;
+}
+
 function generateFallbackQueries(originalQuery) {
   if (!originalQuery || typeof originalQuery !== "string") return [];
   const queries = [];
@@ -372,6 +397,20 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
     const lastMsg = conversationHistory[conversationHistory.length - 1];
     if (!lastMsg || lastMsg.role !== "user" || lastMsg.content !== userMessage) {
       conversationHistory.push({ role: "user", content: userMessage });
+    }
+
+    // SKU annotation: if the user message contains a product code / SKU, prepend
+    // an explicit instruction so Claude searches the exact code first — not a
+    // generic category. This annotation only goes to Claude; DB stores the original.
+    const detectedSkus = detectSkuTokens(userMessage);
+    if (detectedSkus.length > 0) {
+      const skuList = detectedSkus.slice(0, 3).join('", "');
+      const annotation = `[SYSTEM: The user's message contains product code(s): "${skuList}". MANDATORY: Your FIRST search query MUST be the exact code "${detectedSkus[0]}" — no category words, no brand name, no dimensions added. Only broaden the search if the exact code returns zero results.]`;
+      const lastIdx = conversationHistory.length - 1;
+      if (conversationHistory[lastIdx]?.role === "user" && typeof conversationHistory[lastIdx].content === "string") {
+        conversationHistory[lastIdx] = { role: "user", content: `${annotation}\n\n${conversationHistory[lastIdx].content}` };
+      }
+      console.log(`[Chat] SKU annotation injected: ${detectedSkus.join(", ")}`);
     }
 
     let finalMessage = { role: "user", content: userMessage };

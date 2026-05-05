@@ -275,7 +275,6 @@ async function tryDirectStorefrontFallback({ searchQuery, userMessage, shopDomai
  */
 function detectSkuTokens(message) {
   if (!message || typeof message !== "string") return [];
-  // Match tokens that: have both letters and digits, are ≥4 chars, may have hyphens/dots
   const skuRegex = /\b([A-Z0-9]{2,}[-\.\/][A-Z0-9][\w\-\.\/]*|[A-Z]{1,4}\d[\w\-\.\/]{2,}|\d{1,4}[A-Z]{1,5}[\w\-\.\/]{2,})\b/gi;
   const matches = [];
   const seen = new Set();
@@ -284,8 +283,13 @@ function detectSkuTokens(message) {
     const token = m[1].toUpperCase().replace(/\.$/, "");
     if (token.length < 4) continue;
     if (!/\d/.test(token) || !/[A-Z]/i.test(token)) continue;
-    // Skip pure dimension tokens like "18MM", "24VDC"
-    if (/^\d+(?:MM|CM|VDC|VAC|V|A|W)$/i.test(token)) continue;
+    // Skip pure electrical/spec tokens: "24VDC", "18MM", "24V", "100A", "5W"
+    if (/^\d+(?:MM|CM|VDC|VAC|V|A|W|KW|HP)$/i.test(token)) continue;
+    // Skip dimension+unit tokens: "2INCH", "2IN", "3FT", "4FEET" — these are
+    // measurements, not product codes. They are handled by the inch-dimension gate.
+    if (/^\d+(?:\.\d+)?(?:INCH|INCHES|IN|FT|FEET|FOOT|KM)$/i.test(token)) continue;
+    // Skip thread/pipe-standard tokens used as dimensions: "38NPT", "12BSP"
+    if (/^\d+(?:NPT|BSP|BSPP|BSPT)$/i.test(token)) continue;
     if (seen.has(token)) continue;
     seen.add(token);
     matches.push(token);
@@ -327,7 +331,7 @@ function generateFallbackQueries(originalQuery) {
 
 async function handleChatSession({ request, userMessage, conversationId, promptType, stream, visitorId, fingerprintId, shopDomain, helpers }) {
   const startTime = Date.now();
-  const MAX_TOOL_LOOPS = 4;
+  const MAX_TOOL_LOOPS = 6;
 
   const { saveMessage, getConversationHistory, getCustomerAccountUrlsFromDb, storeCustomerAccountUrls, ChatEvents, createClaudeService, createToolService, MCPClient } = helpers;
 

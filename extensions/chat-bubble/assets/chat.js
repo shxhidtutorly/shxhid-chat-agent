@@ -383,9 +383,10 @@
         let buffer = '';
         let fullText = '';
 
-        // PATCH (April 2026): track the last grid rendered in this turn so we
-        // can remove it before rendering a fresh one when a second
-        // product_results event arrives in the same turn.
+        // Buffer the latest product set for the turn.
+        // Multiple product_results events can arrive (one per Claude tool call).
+        // We render only the LAST one, at end_turn, to prevent card flashing.
+        let pendingProducts = null;
         let lastProductsGridEl = null;
         // Track the active assistant text bubble across tool-result cycles.
         let activeBubbleEl = null;
@@ -435,14 +436,11 @@
             }
 
             if (data.type === 'product_results') {
+              // Buffer the products — do NOT render yet.
+              // Rendering is deferred to end_turn so the user sees cards only
+              // once (from the final/best search call), not once per tool call.
               this.removeThinking();
-
-              // PATCH: remove stale grid from a previous tool call in the
-              // same turn before rendering the new one.
-              if (lastProductsGridEl && lastProductsGridEl.parentNode) {
-                lastProductsGridEl.parentNode.removeChild(lastProductsGridEl);
-              }
-              lastProductsGridEl = this.renderProductsGrid(data.products || []);
+              pendingProducts = data.products || [];
             }
 
             if (data.type === 'cart_updated') {
@@ -460,6 +458,14 @@
                 fullText = '';
               }
               if (data.type === 'end_turn') {
+                // Render buffered products once, at turn end, to prevent flashing.
+                if (pendingProducts && pendingProducts.length > 0) {
+                  if (lastProductsGridEl && lastProductsGridEl.parentNode) {
+                    lastProductsGridEl.parentNode.removeChild(lastProductsGridEl);
+                  }
+                  lastProductsGridEl = this.renderProductsGrid(pendingProducts);
+                  pendingProducts = null;
+                }
                 currentAssistantMsg = null;
                 activeBubbleEl = null;
                 fullText = '';

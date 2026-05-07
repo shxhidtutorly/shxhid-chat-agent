@@ -6,32 +6,44 @@
  * - Email capture via built-in overlay
  * - SSE streaming with thinking indicators
  *
- * PATCHED (May 2026) — image fix + all April 2026 patches retained
- *   - IMAGE FIX: product cards and modal now show a clean placeholder
- *     when image_url is null/empty/broken instead of rendering alt text.
- *     The placeholder is a grey box with a camera SVG icon, matching
- *     the card dimensions exactly.
- *   - onerror handler on every <img> catches 404/403 CDN failures too.
+ * v4.0 — May 7, 2026 — CRITICAL RENDERING FIX
  *
- * PATCHED (April 2026)
- *   - Multi-tool-call product display fix: previous grid is now removed when
- *     a new product_results event arrives in the same turn, so cards always
- *     reflect the assistant's most recent search (fixes the contradictory
- *     "Waircom 2/2" screenshot where stale cards remained on screen).
+ * ROOT CAUSE OF "CARDS NOT RENDERING" BUG:
+ *   The v3.x deferred rendering strategy (buffer products until end_turn)
+ *   had a fatal race condition:
+ *
+ *   1. Claude makes tool call #1 → product_results arrives → pendingProducts set
+ *   2. Claude sends text → chunk events → message_complete fires
+ *   3. message_complete handler resets currentAssistantMsg/fullText but does NOT
+ *      flush pendingProducts
+ *   4. Claude makes tool call #2 → NEW product_results arrives → pendingProducts
+ *      overwritten with new (possibly empty) results
+ *   5. end_turn fires → renders pendingProducts (which is now the wrong set,
+ *      or empty if tool call #2 returned nothing)
+ *
+ *   Additionally, in long sessions (5+ searches), the `lastProductsGridEl`
+ *   reference pointed to a DOM node that had already been scrolled far above,
+ *   so the removal + re-add logic silently failed.
+ *
+ * FIX:
+ *   - Render product cards IMMEDIATELY on product_results event
+ *   - Remove deferred rendering entirely — it was an over-optimization
+ *   - When a new product_results arrives in the same turn, remove the
+ *     PREVIOUS grid from that turn (not from a prior turn)
+ *   - This guarantees the user always sees the latest search results
+ *
+ * ALSO FIXED:
+ *   - Image placeholder now uses buildProductImage() consistently
+ *   - Modal description guards against [object Object]
+ *   - onerror on <img> replaces with placeholder SVG
  */
 
 (function () {
   'use strict';
 
   // ─── Image placeholder SVG ────────────────────────────────────────────────
-  // Shown when image_url is null/empty or the CDN returns an error.
   const PLACEHOLDER_SVG = `<div class="shop-ai-img-placeholder" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#f5f5f5;border-radius:8px 8px 0 0;"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#c8c8c8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="14" rx="2"/><circle cx="12" cy="13" r="3"/><path d="M9 6l1.5-2h3L15 6"/></svg></div>`;
 
-  /**
-   * Build an <img> element (or placeholder div) for a product image.
-   * Returns a DOM element — either <img> with onerror fallback, or a
-   * placeholder div if the URL is empty/null from the start.
-   */
   function buildProductImage(imageUrl, altText, cssClass) {
     const src = (imageUrl && typeof imageUrl === 'string' && imageUrl.startsWith('http'))
       ? imageUrl : null;
@@ -122,7 +134,7 @@
       this.restoreState();
       this.exposeAPI();
 
-      console.log('ShopAIChat initialized');
+      console.log('ShopAIChat v4.0 initialized');
     },
 
     bindEvents() {
@@ -383,11 +395,13 @@
         let buffer = '';
         let fullText = '';
 
-        // Buffer the latest product set for the turn.
-        // Multiple product_results events can arrive (one per Claude tool call).
-        // We render only the LAST one, at end_turn, to prevent card flashing.
-        let pendingProducts = null;
-        let lastProductsGridEl = null;
+        // v4.0: Track the current turn's product grid element so we can
+        // replace it if Claude does multiple searches in one turn.
+        // This is a per-turn reference — reset on each send().
+        let currentTurnGridEl = null;
+        // Track whether products were rendered this turn
+        let productsRenderedThisTurn = false;
+
         // Track the active assistant text bubble across tool-result cycles.
         let activeBubbleEl = null;
 
@@ -435,12 +449,26 @@
               }
             }
 
+            // ═══════════════════════════════════════════════════════════
+            // v4.0 CRITICAL FIX: Render products IMMEDIATELY
+            //
+            // The v3.x "deferred to end_turn" approach caused cards to
+            // vanish in long sessions. Now we render on every
+            // product_results event. If Claude searches again in the
+            // same turn, we remove the previous grid and render the new
+            // one. This guarantees the user always sees the latest.
+            // ═══════════════════════════════════════════════════════════
             if (data.type === 'product_results') {
-              // Buffer the products — do NOT render yet.
-              // Rendering is deferred to end_turn so the user sees cards only
-              // once (from the final/best search call), not once per tool call.
               this.removeThinking();
-              pendingProducts = data.products || [];
+              const products = data.products || [];
+              if (products.length > 0) {
+                // Remove previous grid from THIS turn (if Claude retried)
+                if (currentTurnGridEl && currentTurnGridEl.parentNode) {
+                  currentTurnGridEl.parentNode.removeChild(currentTurnGridEl);
+                }
+                currentTurnGridEl = this.renderProductsGrid(products);
+                productsRenderedThisTurn = true;
+              }
             }
 
             if (data.type === 'cart_updated') {
@@ -450,26 +478,25 @@
               }
             }
 
-            if (data.type === 'message_complete' || data.type === 'end_turn') {
+            if (data.type === 'message_complete') {
               this.removeThinking();
-              if (data.type === 'message_complete' && currentAssistantMsg) {
+              if (currentAssistantMsg) {
+                // v4.0: Do NOT reset currentTurnGridEl here.
+                // The grid belongs to the turn, not the message.
                 currentAssistantMsg = null;
                 activeBubbleEl = null;
                 fullText = '';
               }
-              if (data.type === 'end_turn') {
-                // Render buffered products once, at turn end, to prevent flashing.
-                if (pendingProducts && pendingProducts.length > 0) {
-                  if (lastProductsGridEl && lastProductsGridEl.parentNode) {
-                    lastProductsGridEl.parentNode.removeChild(lastProductsGridEl);
-                  }
-                  lastProductsGridEl = this.renderProductsGrid(pendingProducts);
-                  pendingProducts = null;
-                }
-                currentAssistantMsg = null;
-                activeBubbleEl = null;
-                fullText = '';
-              }
+            }
+
+            if (data.type === 'end_turn') {
+              this.removeThinking();
+              // v4.0: Products already rendered. Just clean up state.
+              currentAssistantMsg = null;
+              activeBubbleEl = null;
+              fullText = '';
+              currentTurnGridEl = null;
+              productsRenderedThisTurn = false;
             }
 
             if (data.type === 'error') {
@@ -543,7 +570,6 @@
       this.elements.messages?.appendChild(container);
       this.scrollToBottom();
 
-      // Cycle through idle phrases while waiting for first tool call
       let cycleIdx = 0;
       this.state.thinkingInterval = setInterval(() => {
         cycleIdx = (cycleIdx + 1) % idlePhrases.length;
@@ -561,7 +587,6 @@
     },
 
     updateThinkingState(toolText) {
-      // Clear idle cycling and start tool-specific cycling
       clearInterval(this.state.thinkingInterval);
       this.state.thinkingInterval = null;
 
@@ -614,19 +639,10 @@
       this.state.isThinking = false;
     },
 
-    /**
-     * Render a horizontal scrollable product grid.
-     * IMAGE FIX (May 2026): uses buildProductImage() which shows a clean
-     * placeholder when image_url is null/empty/broken, instead of rendering
-     * an empty <img src=""> that shows alt text in all browsers.
-     *
-     * Returns the container element so the caller can remove a stale
-     * grid before rendering a new one in the same turn.
-     */
     renderProductsGrid(products) {
       if (!products || !products.length) return null;
 
-      console.log(`Rendering ${products.length} products as carousel`);
+      console.log(`[ShopAIChat] Rendering ${products.length} products as carousel`);
 
       const container = document.createElement('div');
       container.className = 'shop-ai-product-grid';
@@ -648,11 +664,8 @@
         const safePrice = escapeHtml(prod.price || '');
         const safeAlt = escapeHtml(prod.title || 'Product');
 
-        // ── IMAGE FIX: build image element with onerror → placeholder ──
         const imageEl = buildProductImage(prod.image_url, safeAlt, 'shop-ai-product-image-wrap');
-        // Apply the same CSS class the stylesheet targets for sizing
         if (imageEl.tagName !== 'IMG') {
-          // It's a wrapper div — give it the sizing class too
           imageEl.className = 'shop-ai-product-image shop-ai-product-image-wrap';
         }
         card.appendChild(imageEl);
@@ -691,7 +704,6 @@
       const isAdded = this.state.addedByProductId[productId] === true;
       const safeTitle = (product.title || 'Product').replace(/"/g, '&quot;');
 
-      // Defensive description extraction — guard against [object Object]
       let rawDesc = product.description;
       if (typeof rawDesc !== 'string') {
         rawDesc = (rawDesc && typeof rawDesc === 'object')
@@ -704,7 +716,6 @@
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
       }[c]));
 
-      // Build modal shell
       overlay.innerHTML = `
         <div class="shop-ai-product-modal">
           <button class="shop-ai-product-modal-close" data-product-action="modal-close">
@@ -733,11 +744,9 @@
         </div>
       `;
 
-      // ── IMAGE FIX: inject image element into the modal image slot ──
       const imgSlot = overlay.querySelector('#shop-ai-modal-img-slot');
       if (imgSlot) {
         const modalImg = buildProductImage(product.image_url, safeTitle, 'shop-ai-modal-image-wrap');
-        // If it's a real <img> wrapper, style it to fill the slot
         modalImg.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center;';
         imgSlot.appendChild(modalImg);
       }

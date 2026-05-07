@@ -1,5 +1,12 @@
 :root {
     --viewport-height: 100vh;
+
+    /* Brand palette — orange/white (must match chat-interface.liquid) */
+    --shop-ai-primary: #FF9D5C;
+    --shop-ai-primary-dark: #FF8534;
+    --shop-ai-primary-light: #FFB380;
+    --shop-ai-gradient: linear-gradient(135deg, #FF9D5C 0%, #FF8534 100%);
+    --shop-ai-shadow-orange: 0 4px 12px -2px rgba(255, 157, 92, 0.3);
   }
 
   .shop-ai-chat-container {
@@ -13,13 +20,13 @@
   .shop-ai-chat-bubble {
     width: 60px;
     height: 60px;
-    background-color: #5046e4;
+    background: var(--shop-ai-gradient);
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 4px 12px rgba(255, 133, 52, 0.25);
     transition: transform 0.3s ease;
   }
 
@@ -132,7 +139,7 @@
 
   .shop-ai-chat-header {
     padding: 16px;
-    background-color: #5046e4;
+    background-color: #FF8534;
     color: white;
     font-weight: 600;
     display: flex;
@@ -191,7 +198,7 @@
   }
 
   .shop-ai-message.assistant a {
-    color: #5046e4;
+    color: #FF8534;
     text-decoration: underline;
     font-weight: 500;
     word-break: break-word;
@@ -345,11 +352,11 @@
   }
 
   .shop-ai-chat-input input:focus {
-    border-color: #5046e4;
+    border-color: #FF8534;
   }
 
   .shop-ai-chat-send {
-    background-color: #5046e4;
+    background-color: #FF8534;
     color: white;
     border: none;
     border-radius: 50%;
@@ -392,7 +399,7 @@
 
   /* Authentication link styles */
 .shop-auth-trigger {
-    color: #5046e4;
+    color: #FF8534;
     text-decoration: underline;
     font-weight: 500;
     cursor: pointer;
@@ -466,7 +473,7 @@
   .shop-ai-prod-price{
     font-size: 14px;
     font-weight: 700;
-    color: #5046e4;
+    color: #FF8534;
   }
 
   .shop-ai-prod-actions{
@@ -480,7 +487,7 @@
     padding: 10px 14px;
     border-radius: 999px;
     border: none;
-    background: #5046e4;
+    background: #FF8534;
     color: #ffffff;
     font-size: 13px;
     font-weight: 600;
@@ -606,14 +613,14 @@
     margin: 0 0 10px 0;
     font-size: 14px;
     font-weight: 600;
-    color: #5046e4;
+    color: #FF8534;
   }
 
   /* Add to Cart Button Styling */
   .shop-ai-add-to-cart {
     width: 100%;
     padding: 8px 0;
-    background-color: #5046e4;
+    background-color: #FF8534;
     color: white;
     border: none;
     border-radius: 4px;
@@ -624,7 +631,7 @@
   }
 
   .shop-ai-add-to-cart:hover {
-    background-color: #3f36c0;
+    background-color: #FF8534;
   }
 
   /*

@@ -61,7 +61,7 @@
 .shop-ai-product-price {
   font-size: 12px;
   font-weight: 700;
-  color: #5046e4;
+  color: #FF8534;
 }
 
 .shop-ai-product-actions {
@@ -82,7 +82,7 @@
 }
 
 .shop-ai-product-btn-primary {
-  background: #5046e4;
+  background: #FF8534;
   color: white;
 }
 
@@ -92,8 +92,8 @@
 
 .shop-ai-product-btn-secondary {
   background: white;
-  color: #5046e4;
-  border: 1px solid #5046e4;
+  color: #FF8534;
+  border: 1px solid #FF8534;
 }
 
 .shop-ai-product-btn-secondary:hover {
@@ -184,7 +184,7 @@
 .shop-ai-modal-price {
   font-size: 18px;
   font-weight: 700;
-  color: #5046e4;
+  color: #FF8534;
   margin: 0;
 }
 
@@ -213,7 +213,7 @@
 }
 
 .shop-ai-modal-btn-primary {
-  background: #5046e4;
+  background: #FF8534;
   color: white;
 }
 
@@ -223,8 +223,8 @@
 
 .shop-ai-modal-btn-secondary {
   background: white;
-  color: #5046e4;
-  border: 1px solid #5046e4;
+  color: #FF8534;
+  border: 1px solid #FF8534;
 }
 
 .shop-ai-modal-btn-secondary:hover {
@@ -289,7 +289,7 @@
 }
 
 .shop-ai-email-popup-content #shop-ai-email-submit {
-  background: #5046e4;
+  background: #FF8534;
   color: white;
 }
 

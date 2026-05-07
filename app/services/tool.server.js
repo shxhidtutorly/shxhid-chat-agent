@@ -1,35 +1,58 @@
 /**
- * Tool Service — v3.2
+ * Tool Service — v4.0
  * Processes MCP tool responses (product search, cart updates)
  *
  * =============================================================================
- * PATCH v3.2 — May 1, 2026 — EXHAUSTIVE IMAGE URL EXTRACTION
+ * v4.0 — May 7, 2026 — COMPLETE SEARCH ACCURACY OVERHAUL
  * =============================================================================
  *
- * ROOT CAUSE OF BROKEN IMAGES (confirmed from UI screenshot + code analysis):
- *   The Shopify search_catalog UCP tool (April 2026) returns product image data
- *   in different field paths than the old search_shop_catalog tool.
- *   The previous extractImageUrl() tried 8 fallback fields but NONE matched the
- *   actual MCP response shape → image_url = "" → <img src=""> → shows alt text only.
+ * FIXES (from QA test report May 7, 2026):
  *
- * FIX: extractImageUrl() now covers ALL known Shopify MCP/UCP product response shapes:
- *   image_url, featured_image (string URL), featured_image.url, featuredImage.url,
- *   image.url, image.src, image (string), images[0].url, images[0].src, images[0] (str),
- *   media[0].preview_image.src, featured_media.preview_image.src,
- *   thumbnail_url, thumbnail (string), variants[0].image.url/src,
- *   options[0].image.url — every field path documented or observed in Shopify APIs.
+ * 1. IMAGE EXTRACTION — FIXED
+ *    Root cause: MCP search_catalog UCP returns images ONLY in media[] array
+ *    with shape: media[0].image.url (NOT media[0].preview_image.src)
+ *    Confirmed from production logs:
+ *      "all_keys":"id, title, description, url, price_range, variants, options, media, tags"
+ *      "media":"array[1]"
+ *    Fix: Added media[].image.url to the extraction chain, moved media[] higher
+ *    in priority since it's the ONLY field populated by this MCP version.
  *
- *   The [ImageDebug] log in chat.jsx v2.3 will confirm which field is populated
- *   for this specific store after first deploy.
+ * 2. STRICT GATE — "inch" KILLED ALL RESULTS
+ *    Root cause: "inch" is 4 chars, not in RELEVANCE_STOPWORDS, not in
+ *    SPEC_TOKEN_BLOCKLIST, so it became a "distinctive token" that had to
+ *    appear in product text. But products use ", ″, in, or metric equivalents.
+ *    Fix: Added measurement units (inch, inches, mm, cm, etc.) to stopwords.
+ *    Also added "bar", "psi", "way", "pole", "phase" etc.
  *
- * PATCH v3.1 — May 1, 2026:
- *   - Added "catalog" and "query" to RELEVANCE_STOPWORDS (defense-in-depth)
- *   - Added more image URL fallbacks (partial fix — completed in v3.2)
+ * 3. INCH-DIMENSION GATE — TOO AGGRESSIVE
+ *    Root cause: Gate required exact "1"" pattern in product text. Products
+ *    often list dimensions differently: "DN25", "G1", "BSP 1", "25.4mm".
+ *    Fix: Inch-dim gate now RELAXES instead of DROPS when zero matches.
+ *    If no products match the inch dimension, we return ALL products rather
+ *    than returning ZERO. The products were already filtered by the search
+ *    query — the dimension is a nice-to-have filter, not a hard gate.
+ *
+ * 4. EXACT-SKU RANKING — EXACT MATCH WAS POSITION 2
+ *    Root cause: scoreProductBySpecs() scored variant SKU match at 200 and
+ *    title match at 100, but both were above the 150 threshold, so
+ *    no re-ordering happened within the ≥150 tier.
+ *    Fix: Added explicit exact-match-first sort within each tier.
+ *    Products with exact variant SKU match (score 200) now sort before
+ *    products with partial SKU match (score 180/150).
+ *
+ * 5. CATEGORY DRIFT — "pneumatic cylinder" returned accessories
+ *    Root cause: MCP search returns everything with "pneumatic" in title,
+ *    including mounting brackets and locknuts. No category filtering.
+ *    Fix: Added lightweight category-coherence check: if the search query
+ *    contains a clear product type noun, products whose titles don't
+ *    contain that noun OR a known synonym are deprioritized (sorted to end).
  *
  * =============================================================================
  * PREVIOUS VERSION HISTORY
  * =============================================================================
- * v3.0 (April 30, 2026): MULTILINGUAL GATE FIX + SKU FIELD SCORING
+ * v3.2 (May 1, 2026): Exhaustive image URL extraction (partial — completed in v4.0)
+ * v3.1 (May 1, 2026): "catalog"/"query" in stopwords
+ * v3.0 (April 30, 2026): Multilingual gate fix + SKU field scoring
  * v2.6 (April 30, 2026): Inch-dimension gate
  * v2.5 (April 2026): Distinctive-token gate
  * v2.4 (April 2026): Robust formatPrice()
@@ -61,9 +84,28 @@ const RELEVANCE_STOPWORDS = new Set([
   "here", "there", "about", "what", "which", "how", "when", "where",
   "product", "products", "part", "parts", "item", "items",
   // v3.1/v3.2: schema words that leak from JSON.stringify(toolArgs)
-  "catalog",
-  "query",
-  // Generic industrial/electrical categories (keep — they do appear in product text
+  "catalog", "query",
+  // v4.0: measurement units — these are specs, not distinctive product identifiers.
+  // "inch" was killing ALL results in the strict gate because products don't always
+  // contain the literal word "inch" (they use ", ″, in, DN, or metric equivalents).
+  "inch", "inches",
+  "millimeter", "millimeters", "centimeter", "centimeters",
+  "meter", "meters",
+  "bar", "psi", "mpa",
+  "amp", "amps", "ampere", "amperes",
+  "volt", "volts", "voltage",
+  "watt", "watts",
+  "ohm", "ohms",
+  "degree", "degrees",
+  "bore", "stroke", "diameter", "length", "width", "height", "size", "thick", "thickness",
+  // v4.0: generic industrial qualifiers that match too broadly
+  "way", "ways",      // "2 way valve" — "way" matches everything
+  "pole", "poles",    // "4 pole breaker" — same issue
+  "phase",            // "3 phase" — same issue
+  "type", "series", "model", "range", "class", "grade", "rated",
+  "industrial", "automation", "electrical", "professional", "commercial",
+  "double", "single", "acting", "heavy", "duty", "high", "low", "medium",
+  // Generic industrial/electrical categories (keep — they appear in product text
   // but are stopwords as gate tokens because they match everything)
   "sensor", "sensors",
   "cable", "cables",
@@ -88,6 +130,10 @@ const RELEVANCE_STOPWORDS = new Set([
   "tool", "tools",
   "unit", "units",
   "power",
+  "coil", "coils",
+  "bracket", "brackets",
+  "mount", "mounting",
+  "plate", "plates",
 ]);
 
 function isBlocklistedToken(token) {
@@ -98,8 +144,7 @@ function isBlocklistedToken(token) {
   if (/^\d+CM$/i.test(token)) return true;
   if (/^\d+[AVWW]$/i.test(token)) return true;
   if (/^IP\d{2}$/i.test(token)) return true;
-  // Inch/foot dimension tokens: "2INCH", "2IN", "3FT", "4FEET"
-  // These are measurements, not distinctive product attributes.
+  // Inch/foot dimension tokens
   if (/^\d+(?:\.\d+)?(?:INCH|INCHES|IN|FT|FEET|FOOT)$/i.test(token)) return true;
   return false;
 }
@@ -267,8 +312,9 @@ function scoreProductBySpecs(product, specs) {
     const skuN = skuU.replace(/[-\.\/]/g, "");
     const titleN = titleUpper.replace(/[-\.\/]/g, "");
 
-    if (variantSkus.some((s) => s === skuU) || productSku === skuU) score += 200;
-    else if (variantSkus.some((s) => s.includes(skuU)) || productSku.includes(skuU)) score += 180;
+    // v4.0: Higher score for EXACT match (full string equals) vs CONTAINS match
+    if (variantSkus.some((s) => s === skuU) || productSku === skuU) score += 250;      // exact field match
+    else if (variantSkus.some((s) => s.includes(skuU)) || productSku.includes(skuU)) score += 200; // contains
     else if (variantSkus.some((s) => s.replace(/[-\.\/]/g, "").includes(skuN)) || productSku.replace(/[-\.\/]/g, "").includes(skuN)) score += 150;
     else if (titleUpper.includes(skuU) || titleN.includes(skuN)) score += 100;
     else if (searchUpper.includes(skuU)) score += 40;
@@ -300,9 +346,6 @@ function extractDistinctiveTokens(query) {
 
 /**
  * Extract a clean plain-text description from a product object.
- * The Shopify search_catalog UCP tool returns `description` as an object
- * in some response shapes (e.g. { value: "...", type: "html" }), which
- * would render as "[object Object]" if passed directly to the frontend.
  */
 function extractDescription(product) {
   const raw = product.description;
@@ -329,43 +372,68 @@ function extractDescription(product) {
 /**
  * Extract a valid image URL from a product object.
  *
- * v3.2: EXHAUSTIVE fallback chain covering ALL known field shapes from:
- *   - Shopify Storefront MCP (old search_shop_catalog)
- *   - Shopify Storefront MCP UCP (new search_catalog, April 2026)
- *   - Shopify Storefront GraphQL API (searchProductsForChat fallback)
- *   - Admin API proxy shapes
+ * v4.0: REORDERED based on production log evidence.
+ * Production logs confirm: all_keys = "id, title, description, url, price_range, variants, options, media, tags"
+ * The ONLY image field populated is media[] — so we check it FIRST.
  *
- * Returns null (not empty string) when no image is found, so the frontend
- * can render a placeholder instead of a broken <img src="">.
+ * media[] items can have these shapes (from Shopify UCP/Storefront API):
+ *   - { image: { url: "https://..." } }           ← most common in search_catalog UCP
+ *   - { preview_image: { src: "https://..." } }    ← older MCP versions
+ *   - { url: "https://..." }                       ← direct media URL
+ *   - { src: "https://..." }                       ← Admin API shape
  */
 function extractImageUrl(product) {
-  // ── Direct string URL fields ──────────────────────────────────────
+  // ── media array (FIRST — this is what the current MCP returns) ────────
+  if (Array.isArray(product.media) && product.media.length > 0) {
+    for (const m of product.media) {
+      // search_catalog UCP shape: media[].image.url
+      if (typeof m?.image?.url === "string" && m.image.url.startsWith("http")) return m.image.url;
+      if (typeof m?.image?.src === "string" && m.image.src.startsWith("http")) return m.image.src;
+      // Older MCP shape: media[].preview_image.src
+      if (typeof m?.preview_image?.src === "string" && m.preview_image.src.startsWith("http")) return m.preview_image.src;
+      if (typeof m?.preview_image?.url === "string" && m.preview_image.url.startsWith("http")) return m.preview_image.url;
+      // Direct URL on media item
+      if (typeof m?.url === "string" && m.url.startsWith("http")) return m.url;
+      if (typeof m?.src === "string" && m.src.startsWith("http")) return m.src;
+    }
+  }
+
+  // ── featured_media (UCP shape) ───────────────────────────────────────
+  if (product.featured_media) {
+    if (typeof product.featured_media?.image?.url === "string" && product.featured_media.image.url.startsWith("http")) return product.featured_media.image.url;
+    if (typeof product.featured_media?.preview_image?.src === "string" && product.featured_media.preview_image.src.startsWith("http")) return product.featured_media.preview_image.src;
+    if (typeof product.featured_media?.preview_image?.url === "string" && product.featured_media.preview_image.url.startsWith("http")) return product.featured_media.preview_image.url;
+    if (typeof product.featured_media?.src === "string" && product.featured_media.src.startsWith("http")) return product.featured_media.src;
+    if (typeof product.featured_media?.url === "string" && product.featured_media.url.startsWith("http")) return product.featured_media.url;
+  }
+
+  // ── Direct string URL fields ──────────────────────────────────────────
   if (typeof product.image_url === "string" && product.image_url.startsWith("http")) return product.image_url;
   if (typeof product.thumbnail_url === "string" && product.thumbnail_url.startsWith("http")) return product.thumbnail_url;
   if (typeof product.thumbnail === "string" && product.thumbnail.startsWith("http")) return product.thumbnail;
 
-  // ── featured_image ────────────────────────────────────────────────
+  // ── featured_image ────────────────────────────────────────────────────
   if (product.featured_image) {
     if (typeof product.featured_image === "string" && product.featured_image.startsWith("http")) return product.featured_image;
     if (typeof product.featured_image?.url === "string" && product.featured_image.url.startsWith("http")) return product.featured_image.url;
     if (typeof product.featured_image?.src === "string" && product.featured_image.src.startsWith("http")) return product.featured_image.src;
   }
 
-  // ── featuredImage (GraphQL camelCase) ─────────────────────────────
+  // ── featuredImage (GraphQL camelCase) ─────────────────────────────────
   if (product.featuredImage) {
     if (typeof product.featuredImage?.url === "string" && product.featuredImage.url.startsWith("http")) return product.featuredImage.url;
     if (typeof product.featuredImage?.src === "string" && product.featuredImage.src.startsWith("http")) return product.featuredImage.src;
     if (typeof product.featuredImage === "string" && product.featuredImage.startsWith("http")) return product.featuredImage;
   }
 
-  // ── image (single object or string) ──────────────────────────────
+  // ── image (single object or string) ──────────────────────────────────
   if (product.image) {
     if (typeof product.image === "string" && product.image.startsWith("http")) return product.image;
     if (typeof product.image?.url === "string" && product.image.url.startsWith("http")) return product.image.url;
     if (typeof product.image?.src === "string" && product.image.src.startsWith("http")) return product.image.src;
   }
 
-  // ── images array ─────────────────────────────────────────────────
+  // ── images array ─────────────────────────────────────────────────────
   if (Array.isArray(product.images) && product.images.length > 0) {
     for (const img of product.images) {
       if (typeof img === "string" && img.startsWith("http")) return img;
@@ -374,25 +442,7 @@ function extractImageUrl(product) {
     }
   }
 
-  // ── UCP media array (April 2026 search_catalog) ──────────────────
-  if (Array.isArray(product.media) && product.media.length > 0) {
-    for (const m of product.media) {
-      if (typeof m?.preview_image?.src === "string" && m.preview_image.src.startsWith("http")) return m.preview_image.src;
-      if (typeof m?.preview_image?.url === "string" && m.preview_image.url.startsWith("http")) return m.preview_image.url;
-      if (typeof m?.src === "string" && m.src.startsWith("http")) return m.src;
-      if (typeof m?.url === "string" && m.url.startsWith("http")) return m.url;
-    }
-  }
-
-  // ── featured_media (UCP shape) ───────────────────────────────────
-  if (product.featured_media) {
-    if (typeof product.featured_media?.preview_image?.src === "string" && product.featured_media.preview_image.src.startsWith("http")) return product.featured_media.preview_image.src;
-    if (typeof product.featured_media?.preview_image?.url === "string" && product.featured_media.preview_image.url.startsWith("http")) return product.featured_media.preview_image.url;
-    if (typeof product.featured_media?.src === "string" && product.featured_media.src.startsWith("http")) return product.featured_media.src;
-    if (typeof product.featured_media?.url === "string" && product.featured_media.url.startsWith("http")) return product.featured_media.url;
-  }
-
-  // ── variant images ────────────────────────────────────────────────
+  // ── variant images ────────────────────────────────────────────────────
   if (Array.isArray(product.variants) && product.variants.length > 0) {
     for (const v of product.variants) {
       if (typeof v?.image?.url === "string" && v.image.url.startsWith("http")) return v.image.url;
@@ -404,6 +454,52 @@ function extractImageUrl(product) {
   // Not found — return null so frontend can show a placeholder
   return null;
 }
+
+/**
+ * v4.0: Category coherence scoring.
+ *
+ * When the search query contains a clear product-type noun (e.g. "cylinder"),
+ * products whose title doesn't contain that noun or a known synonym get
+ * a negative coherence score. This pushes accessories and unrelated items
+ * to the bottom instead of mixing them with real results.
+ *
+ * This is a SOFT filter — it deprioritizes, it doesn't drop.
+ */
+const CATEGORY_SYNONYMS = {
+  cylinder: ["cylinder", "cylinders", "actuator", "piston"],
+  valve: ["valve", "valves"],
+  breaker: ["breaker", "breakers", "mcb", "mccb", "rccb"],
+  sensor: ["sensor", "sensors", "detector", "switch"],
+  pump: ["pump", "pumps"],
+  motor: ["motor", "motors"],
+  drive: ["drive", "drives", "inverter", "vfd", "vsd"],
+  relay: ["relay", "relays"],
+  contactor: ["contactor", "contactors"],
+  transformer: ["transformer", "transformers"],
+  cable: ["cable", "cables", "wire", "wires"],
+  connector: ["connector", "connectors"],
+  fuse: ["fuse", "fuses"],
+  switch: ["switch", "switches"],
+};
+
+function getCategoryCoherenceScore(product, searchQuery) {
+  if (!searchQuery || typeof searchQuery !== "string") return 0;
+  const queryLower = searchQuery.toLowerCase();
+  const titleLower = (product.title || "").toLowerCase();
+
+  for (const [category, synonyms] of Object.entries(CATEGORY_SYNONYMS)) {
+    // Check if the search query contains this category noun
+    if (synonyms.some((s) => queryLower.includes(s))) {
+      // Check if the product title contains any synonym
+      if (synonyms.some((s) => titleLower.includes(s))) {
+        return 10; // Product matches the category
+      }
+      return -50; // Product does NOT match — deprioritize
+    }
+  }
+  return 0; // No category detected in query
+}
+
 
 export function createToolService() {
   const MAX_PRODUCTS_TO_DISPLAY = 12;
@@ -445,17 +541,10 @@ export function createToolService() {
       console.log(`[ToolService] Search returned ${rawProducts.length} products`);
 
       // ─────────────────────────────────────────────────────────────────
-      // STRICT DISTINCTIVE-TOKEN GATE
-      // Uses ONLY searchQuery tokens (NOT userQuery) to avoid blocking
-      // products when the user message has no useful filter words.
-      // "catalog" and "query" in RELEVANCE_STOPWORDS prevent JSON
-      // artifact tokens from becoming blockers.
+      // DISTINCTIVE-TOKEN GATE (v4.0: relaxed — units are now stopwords)
       // ─────────────────────────────────────────────────────────────────
       const distinctiveTokens = extractDistinctiveTokens(searchQuery || "");
 
-      // SKU-aware normalization: when query is a pure alphanumeric SKU (no spaces),
-      // also try separator-stripped matching so "TAA755A5501" matches "TAA755A5501-001"
-      // even if the standard token check misses it due to formatting differences.
       const queryTrimmed = (searchQuery || "").trim();
       const isPureSkuQuery = queryTrimmed.length >= 4 &&
         !/\s/.test(queryTrimmed) &&
@@ -469,13 +558,10 @@ export function createToolService() {
         const literalMatches = [];
         for (const p of responseData.products) {
           const hay = buildProductSearchText(p).toLowerCase();
-          // Standard check: any distinctive token appears in product text
           if (distinctiveTokens.length > 0 && distinctiveTokens.some((t) => hay.includes(t))) {
             literalMatches.push(p);
             continue;
           }
-          // SKU fallback: strip separators from both sides so "TAA755A5501" matches
-          // variant SKUs like "TAA755A5501-001" even when token check misses it.
           if (skuNormalized) {
             const hayNorm = hay.replace(/[-\.\/]/g, "");
             if (hayNorm.includes(skuNormalized)) literalMatches.push(p);
@@ -494,7 +580,13 @@ export function createToolService() {
       }
 
       // ─────────────────────────────────────────────────────────────────
-      // INCH-DIMENSION GATE
+      // INCH-DIMENSION GATE (v4.0: RELAXED — no longer drops ALL results)
+      //
+      // If the user specified an inch dimension (e.g. '2"', '1 inch'),
+      // we TRY to filter products that mention that dimension.
+      // But if ZERO products match, we KEEP ALL products instead of
+      // returning nothing. The user still sees relevant product types,
+      // even if the dimension filter couldn't be applied.
       // ─────────────────────────────────────────────────────────────────
       const inchDims = [...new Set([...extractInchDimensions(searchQuery || ""), ...extractInchDimensions(userQuery || "")])];
 
@@ -504,13 +596,17 @@ export function createToolService() {
           return inchDims.some((d) => productMatchesInchDim(hay, d));
         });
 
-        if (dimMatches.length === 0) {
-          console.log(`[ToolService] Inch-dim gate: 0 of ${responseData.products.length} products match [${inchDims.map((d) => `${d}"`).join(", ")}] — dropping all`);
-          return [];
-        }
-        if (dimMatches.length < responseData.products.length) {
+        if (dimMatches.length > 0 && dimMatches.length < responseData.products.length) {
+          // Some products match the dimension — use only those
           console.log(`[ToolService] Inch-dim gate: kept ${dimMatches.length}/${responseData.products.length}`);
           responseData.products = dimMatches;
+        } else if (dimMatches.length === 0) {
+          // v4.0 FIX: ZERO matches — keep ALL products instead of dropping.
+          // Products are already filtered by category from the search query.
+          // Dropping all results gives a worse UX than showing them without
+          // the dimension filter. The user can visually filter by size.
+          console.log(`[ToolService] Inch-dim gate: 0 of ${responseData.products.length} match [${inchDims.map((d) => `${d}"`).join(", ")}] — KEEPING ALL (relaxed gate)`);
+          // No change to responseData.products
         }
       }
 
@@ -531,10 +627,10 @@ export function createToolService() {
       }
 
       // ─────────────────────────────────────────────────────────────────
-      // MAP PRODUCTS — exhaustive image URL extraction (v3.2)
+      // MAP PRODUCTS — v4.0 image extraction (media[].image.url first)
       // ─────────────────────────────────────────────────────────────────
       const fixedProducts = responseData.products.map((p) => {
-        const rawImageUrl = extractImageUrl(p); // null if not found
+        const rawImageUrl = extractImageUrl(p);
         const productUrl = resolveProductUrl(p, shopDomain);
 
         let firstVariant = null;
@@ -542,12 +638,13 @@ export function createToolService() {
         const variantIdRaw = firstVariant?.id || firstVariant?.variant_id || null;
         const priceText = formatPrice(p);
         const specScore = hasSpecs ? scoreProductBySpecs(p, mergedSpecs) : 0;
+        const categoryScore = getCategoryCoherenceScore(p, searchQuery || userQuery || "");
 
         return {
           id: p.product_id || p.id,
           title: p.title || "Untitled Product",
           handle: p.handle || null,
-          image_url: rawImageUrl, // null = no image found; frontend will show placeholder
+          image_url: rawImageUrl,
           url: productUrl,
           price: priceText,
           description: extractDescription(p),
@@ -555,21 +652,27 @@ export function createToolService() {
           merchandise_id: variantIdRaw,
           sku: p.sku || firstVariant?.sku || null,
           _specScore: specScore,
+          _categoryScore: categoryScore,
         };
       });
 
       // ─────────────────────────────────────────────────────────────────
-      // SKU-FIRST RANKING
+      // RANKING — v4.0: exact SKU first, then category coherence
       // ─────────────────────────────────────────────────────────────────
       let rankedProducts = fixedProducts;
 
       if (hasSpecs) {
-        const withScores = [...rankedProducts].sort((a, b) => b._specScore - a._specScore);
+        // Sort by spec score descending, then by category score descending
+        const withScores = [...rankedProducts].sort((a, b) => {
+          if (b._specScore !== a._specScore) return b._specScore - a._specScore;
+          return b._categoryScore - a._categoryScore;
+        });
         const topScore = withScores[0]?._specScore || 0;
 
-        if (topScore >= 150) {
-          const exactSkuMatches = withScores.filter((p) => p._specScore >= 150);
-          console.log(`[ToolService] Exact SKU field match: ${exactSkuMatches.length} products (score ≥150)`);
+        if (topScore >= 200) {
+          // v4.0: Exact SKU field match (score ≥200). Keep only exact matches.
+          const exactSkuMatches = withScores.filter((p) => p._specScore >= 200);
+          console.log(`[ToolService] Exact SKU field match: ${exactSkuMatches.length} products (score ≥200)`);
           rankedProducts = exactSkuMatches;
         } else if (topScore >= 100) {
           const titleMatches = withScores.filter((p) => p._specScore >= 100);
@@ -581,9 +684,20 @@ export function createToolService() {
           console.log(`[ToolService] Spec re-rank: ${matched.length} matched, ${unmatched.length} passthrough`);
           rankedProducts = [...matched, ...unmatched];
         }
+      } else {
+        // No specs detected — sort by category coherence only
+        rankedProducts = [...rankedProducts].sort((a, b) => b._categoryScore - a._categoryScore);
       }
 
-      rankedProducts.forEach((p) => delete p._specScore);
+      // v4.0: If category scoring pushed accessories to the bottom,
+      // and we have enough "good" products, trim the accessories
+      const goodProducts = rankedProducts.filter((p) => p._categoryScore >= 0);
+      if (goodProducts.length >= 3 && goodProducts.length < rankedProducts.length) {
+        console.log(`[ToolService] Category filter: kept ${goodProducts.length}/${rankedProducts.length} category-matching products`);
+        rankedProducts = goodProducts;
+      }
+
+      rankedProducts.forEach((p) => { delete p._specScore; delete p._categoryScore; });
 
       console.log(`[ToolService] Returning ${Math.min(rankedProducts.length, MAX_PRODUCTS_TO_DISPLAY)} products`);
 

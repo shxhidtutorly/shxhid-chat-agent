@@ -504,24 +504,20 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
               // This tells us exactly what image field paths the MCP actually returns
               // so we can fix extractImageUrl() with the correct field name
               // =====================================================================
-              try {
+                 try {
                 const rawText = toolUseResponse?.content?.[0]?.text;
                 if (rawText) {
                   const rawData = JSON.parse(rawText);
                   const firstProduct = (rawData?.products || rawData?.items || rawData?.results || [])[0];
                   if (firstProduct) {
-                    console.log(`[ImageDebug] First product raw image fields:`, JSON.stringify({
-                      image_url: firstProduct.image_url,
-                      featured_image: firstProduct.featured_image,
-                      featuredImage: firstProduct.featuredImage,
-                      image: firstProduct.image,
-                      images: Array.isArray(firstProduct.images) ? `array[${firstProduct.images.length}]` : firstProduct.images,
-                      media: Array.isArray(firstProduct.media) ? `array[${firstProduct.media.length}]` : firstProduct.media,
-                      featured_media: firstProduct.featured_media,
-                      thumbnail: firstProduct.thumbnail,
-                      thumbnail_url: firstProduct.thumbnail_url,
-                      all_keys: Object.keys(firstProduct).join(", "),
-                    }));
+                    // v4.0: Log FULL media[0] object to confirm image field path
+                    const media0 = Array.isArray(firstProduct.media) && firstProduct.media[0]
+                      ? JSON.stringify(firstProduct.media[0]).substring(0, 500)
+                      : "none";
+                    console.log(`[ImageDebug] First product keys: [${Object.keys(firstProduct).join(", ")}]`);
+                    console.log(`[ImageDebug] media[0] FULL: ${media0}`);
+                    console.log(`[ImageDebug] image_url: ${firstProduct.image_url || "absent"}`);
+                    console.log(`[ImageDebug] featured_image: ${typeof firstProduct.featured_image === 'object' ? JSON.stringify(firstProduct.featured_image) : (firstProduct.featured_image || "absent")}`);
                   }
                 }
               } catch (debugErr) {

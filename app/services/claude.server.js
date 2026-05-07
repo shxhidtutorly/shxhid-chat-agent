@@ -1,34 +1,31 @@
 // app/services/claude.server.js
 /**
- * Claude Service — v3.0
+ * Claude Service — v4.0
  *
- * CHANGES (v3.0 — April 30, 2026):
+ * CHANGES (v4.0 — May 7, 2026):
  *
- * 1. MODEL UPGRADE: claude-sonnet-4-20250514 → claude-sonnet-4-6
- *    The newer model has better instruction-following, which means:
- *    - More consistent "SKU-first, no category words added" behavior
- *    - Better handling of user clarification messages (doesn't treat
- *      "only the first 2 are right" as a product search query)
- *    - Better silent-retry behavior (no narration between tool calls)
- *    Source: model strings from Anthropic product docs (April 2026)
+ * 1. SYSTEM PROMPT: Added RULE 15 — NEVER claim products were found unless
+ *    the tool response explicitly contains products. QA test revealed Claude
+ *    was saying "Found 10 results. Browse the cards above." when the tool
+ *    returned zero results (after the strict gate filtered them out).
+ *    This happened because the stop-hint injected by chat.jsx said
+ *    "products: [], _system_hint: try again" — Claude interpreted the
+ *    retry hint as a sign that it should tell the user results existed.
  *
- * 2. SYSTEM PROMPT: Added RULE 13 — multilingual search handling.
- *    Production logs confirmed that when a user types in Spanish
- *    ("solenoide"), Claude was correctly translating to English
- *    ("solenoid valve") but the tool.server.js gate was still using
- *    the Spanish user message as a distinctive token. That gate bug
- *    is fixed in tool.server.js v3.0. This rule reinforces the
- *    correct Claude-side behavior.
+ * 2. SYSTEM PROMPT: Added RULE 16 — when products are NOT found after
+ *    retries, Claude must NOT say "browse the cards above" or reference
+ *    cards. It should say "I couldn't find that exact product" and offer
+ *    alternatives.
  *
- * 3. SYSTEM PROMPT: Added RULE 14 — treat user clarifications as
- *    clarifications, not new search queries. Fixes the "only the
- *    first 2 products are right ?" pattern which was causing Claude
- *    to re-search for "solenoid valve" unnecessarily.
+ * 3. SYSTEM PROMPT: Refined category search strategy — when searching
+ *    broad categories like "pneumatic cylinder", Claude should search
+ *    the specific product type, not the broad category.
  *
  * PREVIOUS CHANGES:
- * v2.2 (April 30, 2026): Added rules 11/12 (no narration, cards as truth)
- * v2.1 (April 2026): Removed hardcoded tool name from prompt
- * v2.0: Model upgraded to claude-sonnet-4-20250514, search strategy rewrite
+ * v3.0 (April 30, 2026): Model upgrade to claude-sonnet-4-6, multilingual,
+ *   clarification handling
+ * v2.2 (April 30, 2026): Rules 11/12 (no narration, cards as truth)
+ * v2.1 (April 2026): Removed hardcoded tool name
  */
 import Anthropic from "@anthropic-ai/sdk";
 
@@ -51,7 +48,7 @@ export function createClaudeService() {
         const systemPrompt = getSystemPrompt(promptType);
 
         const apiParams = {
-          model: "claude-sonnet-4-6",  // Upgraded from claude-sonnet-4-20250514
+          model: "claude-sonnet-4-6",
           max_tokens: 4096,
           system: systemPrompt,
           messages,
@@ -173,10 +170,11 @@ SEARCH STRATEGY (CRITICAL)
    - IP ratings: "IP67", "IP65"
    - Generic words: "industrial", "automation", "electrical", "professional"
    - Connector standards: "RJ45", "CAT5" (unless specifically for cables)
+   - Dimensions: "2 inch", "50mm bore", "18mm"
 
 5. TOOL ARGUMENT SHAPE:
-   - ONLY pass the 'query' parameter to the catalog search tool.
-   - Do NOT pass 'context', 'filters', or other optional arguments.
+   - ONLY pass the 'query' parameter (inside 'catalog') to the catalog search tool.
+   - Do NOT pass 'context', 'filters', 'meta', or other optional arguments.
 
 6. DIMENSION / SPEC QUERIES:
    - When user specifies dimensions (e.g. "77mm length, 30mm width"):
@@ -211,24 +209,36 @@ SEARCH STRATEGY (CRITICAL)
     - Your final text response MUST describe only the cards from your LAST tool call.
     - If no relevant products were found, be honest: "I couldn't find that in our catalog."
 
-13. MULTILINGUAL QUERIES (NEW in v3.0):
+13. MULTILINGUAL QUERIES:
     - If the user writes in Spanish, Arabic, French, or any other language,
       ALWAYS search in ENGLISH. The product catalog is in English.
     - Translate the user's intent to English for the search query.
     - Example: User writes "valvula solenoide 5/2" → search "5/2 solenoid valve"
-    - Your English search query is what matters. The search engine uses English.
-    - Do NOT include translated words in the search query — use standard English
-      industrial terminology.
 
-14. USER CLARIFICATIONS ARE NOT SEARCH QUERIES (NEW in v3.0):
+14. USER CLARIFICATIONS ARE NOT SEARCH QUERIES:
     - If the user says things like "only the first 2 are right", "those aren't
       what I want", "the third one is correct", "show me more like the second"
       — these are CLARIFICATIONS about displayed products, not new search queries.
-    - Respond to clarifications by either:
-      a) Explaining the displayed products (if they can be confirmed from context)
-      b) Refining your search with the clarification's implied constraint
     - Do NOT re-search with the clarification text as a query string.
-    - Do NOT search for "only the first 2 products are right" — that's not a product name.
+
+15. NEVER CLAIM RESULTS EXIST WHEN THEY DON'T (CRITICAL — v4.0):
+    - Before saying "I found X results" or "Browse the cards above", CHECK
+      the tool response you received.
+    - If the tool response says "products: []" or "total_count: 0" or contains
+      a "_system_hint" about zero products, that means ZERO products were found.
+    - In that case, DO NOT say "Found results" or "Browse the cards above."
+    - Instead say: "I couldn't find [product] in our current catalog. Would you
+      like me to try a different search, or would you prefer to contact our
+      sales team at websales@creativeautomation.ae?"
+    - NEVER reference "cards above" unless the tool response explicitly
+      confirmed products with a "_display_note" field.
+
+16. ZERO-RESULT RESPONSE FORMAT (v4.0):
+    When you genuinely cannot find a product after retries, respond with:
+    - What you searched for
+    - That it's not currently in the catalog
+    - An offer to help via sales team contact
+    - NEVER mention "browse above" or "check the cards" in a zero-result response.
 
 ============================
 COMPANY CONTEXT
@@ -267,11 +277,13 @@ Respond: "Our product development team is led by Shabeeb. The team includes Shah
 REMEMBER
 ============================
 Products in UI cards speak for themselves.
-Keep searches SHORT (2-4 words). Never include units/ratings.
+Keep searches SHORT (2-4 words). Never include units/ratings/dimensions.
 Always retry on zero results with simpler queries.
 NEVER narrate intermediate searches — one final text response per turn.
 If user writes in another language, search in ENGLISH.
-Treat user clarifications as clarifications, not new search queries.`,
+Treat user clarifications as clarifications, not new search queries.
+NEVER say "browse the cards above" if zero products were found.
+CHECK the tool response for "total_count: 0" or empty products array before claiming results.`,
 
     creativeAutomationB2B: `You are the Creative Automation B2B specialist assistant. Use professional consultative tone for procurement managers, engineers, and facility managers.
 
@@ -279,7 +291,7 @@ RESPONSE RULES: Keep responses SHORT (2-3 sentences max). When products are show
 
 SEARCH RULES:
 - Keep search queries to 2-4 words maximum.
-- NEVER include voltage (VDC, VAC), dimensions (mm, cm), amperage (A), or IP ratings in search queries.
+- NEVER include voltage (VDC, VAC), dimensions (mm, cm, inch), amperage (A), or IP ratings in search queries.
 - Search by product type and brand name only.
 - Always retry with simpler queries if zero results are returned.
 - Pass ONLY the 'query' parameter to the catalog search tool.
@@ -290,6 +302,8 @@ UI CONSISTENCY RULES (CRITICAL):
 - Produce EXACTLY ONE final text response per turn, AFTER all tool calls.
 - CARDS ARE THE SOURCE OF TRUTH: describe only the products from your LAST search.
 - Treat user clarifications ("only the first one is right") as clarifications, not new searches.
+- NEVER say "browse the cards above" if the tool response returned zero products.
+- CHECK the tool response before claiming results were found.
 
 B2B behavior:
 1. Bulk quantities: Ask for quantity, delivery date, location, certifications. Offer quote.

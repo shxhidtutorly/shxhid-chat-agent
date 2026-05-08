@@ -482,6 +482,90 @@ const CATEGORY_SYNONYMS = {
   switch: ["switch", "switches"],
 };
 
+/**
+ * v4.1: BRAND COHERENCE GATE
+ *
+ * When the user query is a single token that matches a known industrial brand,
+ * we DROP products whose title/description/tags don't contain that brand.
+ * This prevents the "user searches ABB, sees Siemens cards" trust-breaker.
+ *
+ * Raw MCP products do NOT carry a `vendor` field (verified from prod
+ * [ImageDebug] logs: keys are id, title, description, url, price_range,
+ * variants, options, media, tags). So we match brand mentions inside
+ * title + description + tags using a word-boundary regex.
+ *
+ * Whitelist covers brands actually carried by Creative Automation. Multi-word
+ * aliases (e.g. "phoenix-contact", "allen bradley") are normalised: any space
+ * or hyphen in the haystack is treated as either.
+ */
+const KNOWN_BRANDS = [
+  // canonical, [aliases]
+  ["abb", []],
+  ["siemens", []],
+  ["schneider", ["schneider-electric"]],
+  ["phoenix", ["phoenix-contact", "phoenixcontact"]],
+  ["allen-bradley", ["allen bradley", "allenbradley", "ab"]],
+  ["rockwell", []],
+  ["omron", []],
+  ["smc", []],
+  ["festo", []],
+  ["mitsubishi", []],
+  ["eaton", []],
+  ["hager", []],
+  ["legrand", []],
+  ["ifm", []],
+  ["pepperl-fuchs", ["pepperl+fuchs", "pepperl"]],
+  ["sick", []],
+  ["turck", []],
+  ["balluff", []],
+  ["wago", []],
+  ["weidmuller", ["weidmüller"]],
+  ["murr", ["murrelektronik"]],
+  ["beckhoff", []],
+  ["lapp", []],
+  ["pilz", []],
+  ["banner", []],
+  ["telemecanique", []],
+  ["te-connectivity", ["te connectivity"]],
+  ["honeywell", []],
+];
+
+function detectBrandQuery(rawQuery) {
+  if (!rawQuery || typeof rawQuery !== "string") return null;
+  const trimmed = rawQuery.trim();
+  if (!trimmed) return null;
+  // Single-token brand query (e.g. "ABB"), or "<brand>" in a 1-3 word query
+  const lower = trimmed.toLowerCase();
+  const tokens = lower.split(/\s+/);
+  if (tokens.length > 3) return null;
+  const normLower = lower.replace(/\s+/g, " ");
+  for (const [brand, aliases] of KNOWN_BRANDS) {
+    const candidates = [brand, ...aliases];
+    for (const c of candidates) {
+      if (normLower === c || tokens.includes(c)) {
+        return brand;
+      }
+    }
+  }
+  return null;
+}
+
+function buildBrandMatchRegex(brand) {
+  const aliases = KNOWN_BRANDS.find(([b]) => b === brand)?.[1] || [];
+  // Normalise hyphens/spaces in the alternation pattern: "phoenix[ -]?contact"
+  const patterns = [brand, ...aliases].map((s) =>
+    s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/[-\s]+/g, "[-\\s]?")
+  );
+  return new RegExp(`\\b(?:${patterns.join("|")})\\b`, "i");
+}
+
+function productMatchesBrand(product, brandRegex) {
+  const parts = [product.title || "", typeof product.description === "string" ? product.description : "", product.vendor || ""];
+  if (Array.isArray(product.tags)) parts.push(...product.tags);
+  else if (typeof product.tags === "string") parts.push(product.tags);
+  return brandRegex.test(parts.join(" "));
+}
+
 function getCategoryCoherenceScore(product, searchQuery) {
   if (!searchQuery || typeof searchQuery !== "string") return 0;
   const queryLower = searchQuery.toLowerCase();
@@ -576,6 +660,26 @@ export function createToolService() {
         if (literalMatches.length < responseData.products.length) {
           console.log(`[ToolService] Strict gate: kept ${literalMatches.length}/${responseData.products.length} (tokens: [${distinctiveTokens.join(", ")}])`);
           responseData.products = literalMatches;
+        }
+      }
+
+      // ─────────────────────────────────────────────────────────────────
+      // BRAND COHERENCE GATE (v4.1)
+      // If the user query is a known brand name, drop products that don't
+      // mention the brand in title/description/tags. Raw MCP products lack
+      // the `vendor` field, so we match brand text in product content.
+      // ─────────────────────────────────────────────────────────────────
+      const brand = detectBrandQuery(userQuery || "") || detectBrandQuery(searchQuery || "");
+      if (brand) {
+        const brandRegex = buildBrandMatchRegex(brand);
+        const brandMatches = responseData.products.filter((p) => productMatchesBrand(p, brandRegex));
+        if (brandMatches.length === 0) {
+          console.log(`[ToolService] Brand gate: 0 of ${responseData.products.length} products mention "${brand}" — dropping all (mismatched brand)`);
+          return [];
+        }
+        if (brandMatches.length < responseData.products.length) {
+          console.log(`[ToolService] Brand gate: kept ${brandMatches.length}/${responseData.products.length} products containing "${brand}"`);
+          responseData.products = brandMatches;
         }
       }
 
@@ -695,6 +799,44 @@ export function createToolService() {
       if (goodProducts.length >= 3 && goodProducts.length < rankedProducts.length) {
         console.log(`[ToolService] Category filter: kept ${goodProducts.length}/${rankedProducts.length} category-matching products`);
         rankedProducts = goodProducts;
+      }
+
+      // ─────────────────────────────────────────────────────────────────
+      // VOLTAGE FILTER (v4.1)
+      // If the user said "24V", "24VDC", "230VAC" etc., prefer products
+      // whose variant titles/SKUs contain that voltage. If ≥3 match, keep
+      // only those. Otherwise leave the list unchanged.
+      // ─────────────────────────────────────────────────────────────────
+      const voltageQuery = userQuery || searchQuery || "";
+      const voltageMatches = [...voltageQuery.matchAll(/\b(\d{1,4})\s*v(dc|ac)?\b/gi)];
+      if (voltageMatches.length > 0) {
+        const wanted = voltageMatches.map((m) => ({
+          v: m[1],
+          suffix: (m[2] || "").toLowerCase(),
+        }));
+        const productMatchesVoltage = (p) => {
+          const variants = Array.isArray(p.variants) ? p.variants : [];
+          const variantText = variants.map((v) => `${v.title || ""} ${v.sku || ""}`).join(" ").toLowerCase();
+          const productText = `${p.title || ""} ${typeof p.description === "string" ? p.description : ""}`.toLowerCase();
+          const hay = `${variantText} ${productText}`;
+          return wanted.some(({ v, suffix }) => {
+            // "24v", "24 v", "24vdc", "24 vdc" — also "24v dc"
+            const re = new RegExp(`\\b${v}\\s*v${suffix ? suffix : "(?:dc|ac)?"}\\b`, "i");
+            return re.test(hay);
+          });
+        };
+        const filtered = rankedProducts.filter(productMatchesVoltage);
+        if (filtered.length >= 3 && filtered.length < rankedProducts.length) {
+          console.log(`[ToolService] Voltage filter: kept ${filtered.length}/${rankedProducts.length} products matching ${wanted.map((w) => w.v + "V" + w.suffix.toUpperCase()).join(",")}`);
+          rankedProducts = filtered;
+        } else if (filtered.length > 0 && filtered.length < rankedProducts.length) {
+          // Few matches — promote them but keep the rest
+          const rest = rankedProducts.filter((p) => !filtered.includes(p));
+          console.log(`[ToolService] Voltage filter: promoted ${filtered.length} matching products (kept ${rankedProducts.length} total)`);
+          rankedProducts = [...filtered, ...rest];
+        } else {
+          console.log(`[ToolService] Voltage filter: ${filtered.length}/${rankedProducts.length} match — no change`);
+        }
       }
 
       rankedProducts.forEach((p) => { delete p._specScore; delete p._categoryScore; });

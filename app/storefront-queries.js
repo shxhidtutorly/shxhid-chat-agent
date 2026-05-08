@@ -121,6 +121,56 @@ export const SEARCH_PRODUCTS_QUERY = `
   }
 `;
 
+// ─────────────────────────────────────────────────────────────
+// ADMIN API — variant lookup by SKU
+//
+// Storefront `search` indexes variant.sku but with relevance ranking, not
+// strict equality. For exact-SKU lookups (e.g. "E12584") we use the Admin
+// API's productVariants(query: "sku:VALUE") which targets sku as a field.
+//
+// Caveat: the productVariants(query:) sku predicate has a known
+// substring-matching quirk — "sku:E125" can match "E12584". Callers must
+// post-filter for exact equality.
+// ─────────────────────────────────────────────────────────────
+export const SEARCH_VARIANT_BY_SKU_QUERY = `
+  query searchVariantBySku($query: String!, $first: Int) {
+    productVariants(first: $first, query: $query) {
+      edges {
+        node {
+          id
+          title
+          sku
+          availableForSale
+          price
+          product {
+            id
+            title
+            handle
+            description
+            vendor
+            productType
+            tags
+            featuredImage {
+              url
+              altText
+            }
+            priceRange {
+              minVariantPrice {
+                amount
+                currencyCode
+              }
+              maxVariantPrice {
+                amount
+                currencyCode
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
 export const CREATE_CART_MUTATION = `
   mutation createCart($lines: [CartLineInput!]!) {
     cartCreate(input: { lines: $lines }) {

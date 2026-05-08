@@ -141,6 +141,58 @@ async function createStorefrontTokenViaAdminRest() {
 // -----------------------------------------------------------------------------
 
 /**
+ * Execute a Shopify Admin API GraphQL query.
+ *
+ * Uses session.accessToken from Prisma (the same token used to mint
+ * Storefront tokens). Required scopes for productVariants(query: "sku:..."):
+ * read_products. The chat app already requests this scope.
+ *
+ * Used by searchVariantBySku() in storefront-service.js for exact SKU lookups,
+ * which Storefront `search` cannot handle reliably.
+ */
+export async function shopifyAdminGraphqlQuery({ query, variables = {}, shopDomain }) {
+  const domain = shopDomain || STORE_DOMAIN;
+  if (!domain) {
+    throw new Error('[AdminGraphQL] No shop domain available.');
+  }
+
+  const { default: prisma } = await import('./db.server.js');
+  const session = await prisma.session.findFirst({
+    where: { shop: domain },
+    orderBy: { id: 'desc' },
+  });
+
+  if (!session?.accessToken) {
+    throw new Error(`[AdminGraphQL] No Admin access token for ${domain}`);
+  }
+
+  const endpoint = `https://${domain}/admin/api/${API_VERSION}/graphql.json`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'X-Shopify-Access-Token': session.accessToken,
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    console.error(`[AdminGraphQL] HTTP ${response.status}: ${text.slice(0, 300)}`);
+    throw new Error(`Admin GraphQL HTTP ${response.status}`);
+  }
+
+  const json = await response.json();
+  if (json.errors?.length) {
+    const message = json.errors[0]?.message || 'Unknown GraphQL error';
+    console.error('[AdminGraphQL] errors:', JSON.stringify(json.errors).slice(0, 300));
+    throw new Error(`Admin GraphQL error: ${message}`);
+  }
+  return json.data;
+}
+
+/**
  * Execute a Storefront API GraphQL query/mutation.
  * Uses cached token or auto-creates one. Retries once on 401.
  */

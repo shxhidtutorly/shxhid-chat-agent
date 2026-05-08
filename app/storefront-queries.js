@@ -122,6 +122,63 @@ export const SEARCH_PRODUCTS_QUERY = `
 `;
 
 // ─────────────────────────────────────────────────────────────
+// VENDOR-FILTERED SEARCH (v4.2)
+//
+// When the user query leads with a brand (e.g. "ABB circuit breaker") and
+// generic search returns mostly other brands by relevance, we re-issue the
+// query with productFilters: [{productVendor: "Abb"}] to force vendor-only
+// results. Requires the Vendor filter to be enabled in Search & Discovery;
+// when not enabled, the call returns 0 totalCount and we fall through.
+//
+// Source: https://shopify.dev/docs/api/storefront/latest/queries/search
+//         https://shopify.dev/docs/api/storefront/latest/input-objects/productfilter
+// ─────────────────────────────────────────────────────────────
+export const SEARCH_WITH_VENDOR_FILTER = `
+  query searchWithVendor($query: String!, $vendor: String!, $first: Int!) {
+    search(
+      query: $query,
+      types: PRODUCT,
+      first: $first,
+      productFilters: [{ productVendor: $vendor }]
+    ) {
+      totalCount
+      edges {
+        node {
+          ... on Product {
+            id
+            title
+            handle
+            description
+            vendor
+            productType
+            tags
+            featuredImage {
+              url
+              altText
+            }
+            priceRange {
+              minVariantPrice { amount currencyCode }
+              maxVariantPrice { amount currencyCode }
+            }
+            variants(first: 10) {
+              edges {
+                node {
+                  id
+                  title
+                  sku
+                  availableForSale
+                  price { amount currencyCode }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+// ─────────────────────────────────────────────────────────────
 // ADMIN API — variant lookup by SKU
 //
 // Storefront `search` indexes variant.sku but with relevance ranking, not

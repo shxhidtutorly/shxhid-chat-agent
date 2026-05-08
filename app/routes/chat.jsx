@@ -218,7 +218,7 @@ async function tryFallbackSearches(mcpClient, originalQuery, toolName) {
   return null;
 }
 
-async function tryDirectStorefrontFallback({ searchQuery, userMessage, shopDomain, toolService, onResultUsed }) {
+async function tryDirectStorefrontFallback({ searchQuery, userMessage, shopDomain, toolService, onResultUsed, skipBrandGate = false }) {
   let searchProductsForChat;
   let searchVariantBySku;
   let looksLikeSku;
@@ -250,7 +250,7 @@ async function tryDirectStorefrontFallback({ searchQuery, userMessage, shopDomai
     try {
       console.log(`[Search-DirectAPI] SKU lookup (Admin): "${sku}"`);
       const wrapped = await searchVariantBySku(sku, { first: 5, shopDomain });
-      const products = toolService.processProductSearchResult(wrapped, shopDomain, userMessage, sku);
+      const products = toolService.processProductSearchResult(wrapped, shopDomain, userMessage, sku, { skipBrandGate });
       if (products && products.length > 0) {
         console.log(`[Search-DirectAPI] SKU lookup recovered ${products.length} product(s) for: "${sku}"`);
         if (typeof onResultUsed === "function") onResultUsed(wrapped);
@@ -281,7 +281,7 @@ async function tryDirectStorefrontFallback({ searchQuery, userMessage, shopDomai
     try {
       console.log(`[Search-DirectAPI] Trying: "${q}"`);
       const wrapped = await searchProductsForChat(q, { first: 50, shopDomain });
-      const products = toolService.processProductSearchResult(wrapped, shopDomain, userMessage, q);
+      const products = toolService.processProductSearchResult(wrapped, shopDomain, userMessage, q, { skipBrandGate });
       if (products && products.length > 0) {
         console.log(`[Search-DirectAPI] Recovered ${products.length} products for: "${q}"`);
         if (typeof onResultUsed === "function") onResultUsed(wrapped);
@@ -553,12 +553,51 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
               }
 
               let products = toolService.processProductSearchResult(toolUseResponse, shopDomain, userMessage, searchQuery);
+              let brandMatch = products?.brandMatch || null;
+              let brandName = products?.brandName || null;
 
-              // Primary fallback: direct Storefront GraphQL
+              // v4.2: BRAND-NO-MATCH PATH
+              // The brand gate detected a brand name in the query but no
+              // products contained it. Before falling through to the generic
+              // Storefront fallback, try a vendor-filtered search.
+              if (brandMatch === "none" && brandName) {
+                try {
+                  const sfMod = await import("../storefront-service.js");
+                  if (typeof sfMod.searchByVendor === "function") {
+                    // searchTerms = the query minus the leading brand name
+                    const remainder = (searchQuery || userMessage || "")
+                      .replace(new RegExp(`^\\s*${brandName.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\s*`, "i"), "")
+                      .trim();
+                    console.log(`[Search] Brand "${brandName}" not in results — trying vendor-filtered search (remainder="${remainder}")`);
+                    const vendorWrapped = await sfMod.searchByVendor(brandName, remainder, { first: 20, shopDomain });
+                    if (vendorWrapped) {
+                      // skipBrandGate: results are already vendor-filtered.
+                      const vendorProducts = toolService.processProductSearchResult(
+                        vendorWrapped, shopDomain, userMessage, remainder || brandName,
+                        { skipBrandGate: true }
+                      );
+                      if (vendorProducts && vendorProducts.length > 0) {
+                        console.log(`[Search] Vendor-filtered search recovered ${vendorProducts.length} ${brandName} products`);
+                        products = vendorProducts;
+                        toolUseResponse = vendorWrapped;
+                        brandMatch = "vendor";
+                      }
+                    }
+                  }
+                } catch (vendorErr) {
+                  console.warn(`[Search] Vendor-filtered search error: ${vendorErr.message}`);
+                }
+              }
+
+              // Primary fallback: direct Storefront GraphQL.
+              // skipBrandGate: when we already detected a brand mismatch
+              // upstream, don't re-filter the fallback results — the user
+              // should see SOMETHING rather than zero.
               if ((!products || products.length === 0) && searchQuery) {
                 console.log(`[Search] Zero relevant results for: "${searchQuery}" — trying direct Storefront API`);
                 products = await tryDirectStorefrontFallback({
                   searchQuery, userMessage, shopDomain, toolService,
+                  skipBrandGate: brandMatch === "none",
                   onResultUsed: (wrappedResp) => { toolUseResponse = wrappedResp; },
                 });
               }
@@ -567,7 +606,10 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
               if ((!products || products.length === 0) && searchQuery) {
                 const mcpFallback = await tryFallbackSearches(mcpClient, searchQuery, toolName);
                 if (mcpFallback) {
-                  products = toolService.processProductSearchResult(mcpFallback.result, shopDomain, userMessage, mcpFallback.query);
+                  products = toolService.processProductSearchResult(
+                    mcpFallback.result, shopDomain, userMessage, mcpFallback.query,
+                    { skipBrandGate: brandMatch === "none" }
+                  );
                   if (products && products.length > 0) {
                     toolUseResponse = mcpFallback.result;
                     console.log(`[Search-Fallback] Recovered ${products.length} products via: "${mcpFallback.query}"`);
@@ -580,12 +622,21 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
                 stream.sendMessage({ type: "product_results", products });
                 productsSentToFrontend = true;
 
-                // Inject a clear "stop searching" signal so Claude doesn't retry.
-                // Without this, Claude may see the MCP returned 0 and keep looping.
+                // v4.2: When brand was detected but no vendor/title/tag match
+                // (and vendor-filtered search couldn't recover), the products
+                // shown are general matches — NOT from the requested brand.
+                // Tell Claude not to claim brand match.
+                const brandMismatch = brandMatch === "none" && brandName;
+                const displayNote = brandMismatch
+                  ? `${products.length} product card(s) are now displayed but they are NOT from "${brandName}". I could not find ${brandName} products matching this query. Tell the user honestly: you couldn't find ${brandName} matches but here are similar products from other brands. Do NOT claim these are ${brandName} products.`
+                  : `${products.length} product card(s) are now displayed to the user. Do NOT search again. Write one short response acknowledging the results.`;
+
                 const stopHint = JSON.stringify({
-                  products: products.slice(0, 3).map((p) => ({ id: p.id, title: p.title, sku: p.sku || null, price: p.price || null })),
+                  products: products.slice(0, 3).map((p) => ({ id: p.id, title: p.title, sku: p.sku || null, price: p.price || null, vendor: p.vendor || null })),
                   total_count: products.length,
-                  _display_note: `${products.length} product card(s) are now displayed to the user. Do NOT search again. Write one short response acknowledging the results.`,
+                  _display_note: displayNote,
+                  _brand_match: brandMatch,
+                  _brand_name: brandName,
                 });
                 if (!Array.isArray(toolUseResponse.content)) toolUseResponse.content = [];
                 toolUseResponse.content = [{ type: "text", text: stopHint }];

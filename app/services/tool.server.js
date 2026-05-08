@@ -498,72 +498,124 @@ const CATEGORY_SYNONYMS = {
  * aliases (e.g. "phoenix-contact", "allen bradley") are normalised: any space
  * or hyphen in the haystack is treated as either.
  */
-const KNOWN_BRANDS = [
-  // canonical, [aliases]
-  ["abb", []],
-  ["siemens", []],
-  ["schneider", ["schneider-electric"]],
-  ["phoenix", ["phoenix-contact", "phoenixcontact"]],
-  ["allen-bradley", ["allen bradley", "allenbradley", "ab"]],
-  ["rockwell", []],
-  ["omron", []],
-  ["smc", []],
-  ["festo", []],
-  ["mitsubishi", []],
-  ["eaton", []],
-  ["hager", []],
-  ["legrand", []],
-  ["ifm", []],
-  ["pepperl-fuchs", ["pepperl+fuchs", "pepperl"]],
-  ["sick", []],
-  ["turck", []],
-  ["balluff", []],
-  ["wago", []],
-  ["weidmuller", ["weidmüller"]],
-  ["murr", ["murrelektronik"]],
-  ["beckhoff", []],
-  ["lapp", []],
-  ["pilz", []],
-  ["banner", []],
-  ["telemecanique", []],
-  ["te-connectivity", ["te connectivity"]],
-  ["honeywell", []],
-];
+/**
+ * v4.2: BRAND GATE — non-destructive, generic (no whitelist)
+ *
+ * Production logs showed v4.1 dropped ALL results when no product mentioned
+ * the queried brand, leaving the user with nothing. The new gate:
+ *   1. Detects a probable brand name from the query using a generic heuristic
+ *      (no hardcoded brand list).
+ *   2. Filters products by vendor → title → tag in priority order.
+ *   3. If NO match in any tier, returns ALL products with brandMatch='none'.
+ *      The caller (chat.jsx) uses this flag to (a) try a vendor-filtered
+ *      Storefront search, and (b) tell Claude not to claim brand match.
+ */
 
-function detectBrandQuery(rawQuery) {
-  if (!rawQuery || typeof rawQuery !== "string") return null;
-  const trimmed = rawQuery.trim();
-  if (!trimmed) return null;
-  // Single-token brand query (e.g. "ABB"), or "<brand>" in a 1-3 word query
-  const lower = trimmed.toLowerCase();
-  const tokens = lower.split(/\s+/);
-  if (tokens.length > 3) return null;
-  const normLower = lower.replace(/\s+/g, " ");
-  for (const [brand, aliases] of KNOWN_BRANDS) {
-    const candidates = [brand, ...aliases];
-    for (const c of candidates) {
-      if (normLower === c || tokens.includes(c)) {
-        return brand;
-      }
-    }
+/**
+ * Generic brand extraction. Returns the candidate brand string from the query
+ * if the query LOOKS like it leads with a brand/vendor name. No whitelist —
+ * any plausible brand-shaped token qualifies.
+ *
+ * Patterns considered brand-like:
+ *   - First word ALL-CAPS, 2-6 alphabetical chars (e.g. "ABB", "SMC", "IFM").
+ *   - First word Title-case followed by other words (e.g. "Siemens drives").
+ *   - First two words both Title-case with no digits (e.g. "Allen Bradley").
+ *
+ * Excluded:
+ *   - Queries that are very short or very long (>5 tokens).
+ *   - Tokens containing digits (likely SKUs/model numbers).
+ */
+function extractBrandFromQuery(query) {
+  if (!query || typeof query !== "string") return null;
+  const trimmed = query.trim();
+  if (!trimmed || trimmed.length < 2) return null;
+  const words = trimmed.split(/\s+/);
+  if (words.length === 0 || words.length > 5) return null;
+
+  const firstWord = words[0];
+
+  // ALL-CAPS short word (ABB, SMC, IFM, ABB, GE)
+  if (/^[A-Z]{2,6}$/.test(firstWord)) return firstWord;
+
+  // Title-case word: only viable as a brand when followed by other words
+  // ("Siemens circuit breaker"). A single Title-case word ("Siemens") alone
+  // is also a brand query.
+  if (/^[A-Z][a-z]+$/.test(firstWord)) {
+    if (words.length >= 1) return firstWord;
   }
+
+  // Two consecutive Title-case words with no digits ("Allen Bradley")
+  if (
+    words.length >= 2 &&
+    /^[A-Z][a-z]+$/.test(firstWord) &&
+    /^[A-Z][a-z]+$/.test(words[1]) &&
+    !/\d/.test(firstWord) &&
+    !/\d/.test(words[1])
+  ) {
+    return `${firstWord} ${words[1]}`;
+  }
+
   return null;
 }
 
-function buildBrandMatchRegex(brand) {
-  const aliases = KNOWN_BRANDS.find(([b]) => b === brand)?.[1] || [];
-  // Normalise hyphens/spaces in the alternation pattern: "phoenix[ -]?contact"
-  const patterns = [brand, ...aliases].map((s) =>
-    s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/[-\s]+/g, "[-\\s]?")
-  );
-  return new RegExp(`\\b(?:${patterns.join("|")})\\b`, "i");
+/**
+ * Heuristic vendor inference from a product title. Many industrial products
+ * have format "Brand ModelNumber" (e.g. "Siemens 3RA2932-1AA00",
+ * "Abb ACS480"). Used when MCP search_catalog returns no vendor field.
+ */
+function inferVendorFromTitle(title) {
+  if (!title || typeof title !== "string") return null;
+  const firstWord = title.trim().split(/\s+/)[0] || "";
+  // Letters + optional internal hyphen, length 2..20 (e.g. "Phoenix-contact")
+  if (/^[A-Za-z][A-Za-z\-]{1,19}$/.test(firstWord)) return firstWord;
+  return null;
 }
 
-function productMatchesBrand(product, brandRegex) {
-  const parts = [product.title || "", typeof product.description === "string" ? product.description : "", product.vendor || ""];
-  if (Array.isArray(product.tags)) parts.push(...product.tags);
-  else if (typeof product.tags === "string") parts.push(product.tags);
-  return brandRegex.test(parts.join(" "));
+/**
+ * Apply the brand gate. Returns { products, brandMatch, brandName }.
+ * brandMatch: 'vendor' | 'title' | 'tag' | 'none' | null (null = no brand detected).
+ *
+ * NEVER drops to zero. When no products match the brand in any tier, returns
+ * all products unchanged with brandMatch='none' so the caller can decide.
+ */
+function applyBrandGate(products, query) {
+  const brandName = extractBrandFromQuery(query);
+  if (!brandName) return { products, brandMatch: null, brandName: null };
+
+  const brandLower = brandName.toLowerCase();
+
+  const vendorMatches = products.filter((p) => {
+    const v = (p.vendor || "").toString().toLowerCase();
+    return v && (v === brandLower || v.includes(brandLower));
+  });
+  if (vendorMatches.length > 0) {
+    console.log(`[ToolService] Brand gate: ${vendorMatches.length}/${products.length} vendor matches for "${brandName}"`);
+    return { products: vendorMatches, brandMatch: "vendor", brandName };
+  }
+
+  const titleMatches = products.filter((p) =>
+    typeof p.title === "string" && p.title.toLowerCase().includes(brandLower)
+  );
+  if (titleMatches.length > 0) {
+    console.log(`[ToolService] Brand gate: ${titleMatches.length}/${products.length} title matches for "${brandName}"`);
+    return { products: titleMatches, brandMatch: "title", brandName };
+  }
+
+  const tagMatches = products.filter((p) => {
+    const tags = Array.isArray(p.tags)
+      ? p.tags
+      : typeof p.tags === "string"
+      ? p.tags.split(",")
+      : [];
+    return tags.some((t) => String(t).trim().toLowerCase().includes(brandLower));
+  });
+  if (tagMatches.length > 0) {
+    console.log(`[ToolService] Brand gate: ${tagMatches.length}/${products.length} tag matches for "${brandName}"`);
+    return { products: tagMatches, brandMatch: "tag", brandName };
+  }
+
+  console.log(`[ToolService] Brand gate: no "${brandName}" match in ${products.length} products — KEEPING ALL (non-destructive)`);
+  return { products, brandMatch: "none", brandName };
 }
 
 function getCategoryCoherenceScore(product, searchQuery) {
@@ -599,9 +651,19 @@ export function createToolService() {
     return null;
   }
 
-  const processProductSearchResult = (toolUseResponse, shopDomain, userQuery, searchQuery) => {
+  // v4.2: Returned arrays carry .brandMatch and .brandName so callers can
+  // reason about whether the user's brand was actually matched. Backward-
+  // compatible: every consumer iterates the array as before.
+  const tagArray = (arr, meta) => {
+    arr.brandMatch = meta.brandMatch ?? null;
+    arr.brandName = meta.brandName ?? null;
+    return arr;
+  };
+
+  const processProductSearchResult = (toolUseResponse, shopDomain, userQuery, searchQuery, options = {}) => {
+    const skipBrandGate = !!options.skipBrandGate;
     try {
-      if (!toolUseResponse?.content || toolUseResponse.content.length === 0) return [];
+      if (!toolUseResponse?.content || toolUseResponse.content.length === 0) return tagArray([], {});
 
       let contentText = toolUseResponse.content[0].text;
       let responseData;
@@ -610,7 +672,7 @@ export function createToolService() {
         responseData = typeof contentText === "string" ? JSON.parse(contentText) : contentText;
       } catch (e) {
         console.error("[ToolService] Failed to parse tool content:", e.message);
-        return [];
+        return tagArray([], {});
       }
 
       const rawProducts =
@@ -619,8 +681,18 @@ export function createToolService() {
         (Array.isArray(responseData?.results) && responseData.results) ||
         [];
 
-      if (rawProducts.length === 0) return [];
+      if (rawProducts.length === 0) return tagArray([], {});
       responseData.products = rawProducts;
+
+      // v4.2: Infer vendor from title where MCP didn't supply it. The MCP
+      // search_catalog response omits the vendor field; without this, the
+      // brand gate's vendor-priority tier can never match for MCP results.
+      for (const p of responseData.products) {
+        if (!p.vendor) {
+          const inferred = inferVendorFromTitle(p.title);
+          if (inferred) p.vendor = inferred;
+        }
+      }
 
       console.log(`[ToolService] Search returned ${rawProducts.length} products`);
 
@@ -664,23 +736,18 @@ export function createToolService() {
       }
 
       // ─────────────────────────────────────────────────────────────────
-      // BRAND COHERENCE GATE (v4.1)
-      // If the user query is a known brand name, drop products that don't
-      // mention the brand in title/description/tags. Raw MCP products lack
-      // the `vendor` field, so we match brand text in product content.
+      // BRAND GATE (v4.2 — non-destructive, generic)
+      // Heuristic brand detection. Filters by vendor → title → tag in
+      // priority. NEVER drops to zero; on no match returns all products
+      // with brandMatch='none' so the caller can try a vendor-filtered
+      // Storefront search and warn Claude not to claim brand match.
+      // Skipped when caller passes { skipBrandGate: true } (used on
+      // fallback paths so we don't double-filter).
       // ─────────────────────────────────────────────────────────────────
-      const brand = detectBrandQuery(userQuery || "") || detectBrandQuery(searchQuery || "");
-      if (brand) {
-        const brandRegex = buildBrandMatchRegex(brand);
-        const brandMatches = responseData.products.filter((p) => productMatchesBrand(p, brandRegex));
-        if (brandMatches.length === 0) {
-          console.log(`[ToolService] Brand gate: 0 of ${responseData.products.length} products mention "${brand}" — dropping all (mismatched brand)`);
-          return [];
-        }
-        if (brandMatches.length < responseData.products.length) {
-          console.log(`[ToolService] Brand gate: kept ${brandMatches.length}/${responseData.products.length} products containing "${brand}"`);
-          responseData.products = brandMatches;
-        }
+      let brandResult = { products: responseData.products, brandMatch: null, brandName: null };
+      if (!skipBrandGate) {
+        brandResult = applyBrandGate(responseData.products, userQuery || searchQuery || "");
+        responseData.products = brandResult.products;
       }
 
       // ─────────────────────────────────────────────────────────────────
@@ -846,10 +913,10 @@ export function createToolService() {
       responseData.products = rankedProducts;
       toolUseResponse.content[0].text = JSON.stringify(responseData);
 
-      return rankedProducts.slice(0, MAX_PRODUCTS_TO_DISPLAY);
+      return tagArray(rankedProducts.slice(0, MAX_PRODUCTS_TO_DISPLAY), brandResult);
     } catch (error) {
       console.error("[ToolService] Error processing product search results:", error);
-      return [];
+      return tagArray([], {});
     }
   };
 

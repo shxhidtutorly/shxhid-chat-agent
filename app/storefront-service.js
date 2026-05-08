@@ -26,6 +26,7 @@ import {
   STOREFRONT_SEARCH_QUERY,
   SEARCH_PRODUCTS_QUERY,
   SEARCH_VARIANT_BY_SKU_QUERY,
+  SEARCH_WITH_VENDOR_FILTER,
   CREATE_CART_MUTATION,
   ADD_LINES_TO_CART_MUTATION,
 } from './storefront-queries.js';
@@ -136,6 +137,94 @@ function buildSearchQueryString(rawQuery) {
     }
   }
   return trimmed;
+}
+
+/**
+ * v4.2: Vendor-filtered Storefront search.
+ *
+ * Re-issues the search with productFilters: [{ productVendor }] to force
+ * vendor-only results. Tries 4 case variants (exact, Title, UPPER, lower)
+ * because the Storefront API's productVendor filter is case-sensitive and
+ * we don't always know how the catalog stores the vendor name.
+ *
+ * Returns an MCP-shaped tool response so processProductSearchResult() can
+ * consume it directly. Returns null when:
+ *   - Search & Discovery vendor filter is not enabled (totalCount=0 across
+ *     all case variants), OR
+ *   - Genuinely no products from this vendor match the search.
+ */
+export async function searchByVendor(vendor, searchTerms, { first = 20, shopDomain } = {}) {
+  if (!vendor || typeof vendor !== 'string') return null;
+  const vendorTrim = vendor.trim();
+  if (!vendorTrim) return null;
+
+  // searchTerms: the part of the query AFTER the brand. If empty, search
+  // the brand alone — the productFilters constrains to that vendor anyway.
+  const queryString = (searchTerms && searchTerms.trim()) || vendorTrim;
+
+  const variants = [
+    vendorTrim,
+    vendorTrim.charAt(0).toUpperCase() + vendorTrim.slice(1).toLowerCase(),
+    vendorTrim.toUpperCase(),
+    vendorTrim.toLowerCase(),
+  ];
+  const uniqueVendors = [...new Set(variants)];
+
+  for (const v of uniqueVendors) {
+    try {
+      console.log(`[StorefrontService:vendor] Trying productVendor="${v}" query="${queryString.substring(0, 40)}"`);
+      const data = await shopifyStorefrontQuery({
+        query: SEARCH_WITH_VENDOR_FILTER,
+        variables: { query: queryString, vendor: v, first },
+        shopDomain,
+      });
+
+      const totalCount = data?.search?.totalCount ?? 0;
+      const edges = data?.search?.edges || [];
+      if (totalCount === 0 || edges.length === 0) {
+        console.log(`[StorefrontService:vendor] productVendor="${v}" → 0 results`);
+        continue;
+      }
+
+      console.log(`[StorefrontService:vendor] productVendor="${v}" → ${totalCount} totalCount, ${edges.length} returned`);
+
+      const products = edges.map(({ node }) => {
+        const variantsArr = (node.variants?.edges || []).map(({ node: vNode }) => ({
+          id: vNode.id,
+          title: vNode.title,
+          sku: vNode.sku,
+          available: vNode.availableForSale,
+          price: vNode.price,
+        }));
+        return {
+          id: node.id,
+          product_id: node.id,
+          title: node.title,
+          handle: node.handle,
+          description: node.description,
+          vendor: node.vendor,
+          product_type: node.productType,
+          tags: node.tags,
+          image_url: node.featuredImage?.url || '',
+          featuredImage: node.featuredImage,
+          priceRange: node.priceRange,
+          variants: variantsArr,
+          sku: variantsArr[0]?.sku || null,
+        };
+      });
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ products }) }],
+      };
+    } catch (err) {
+      // productVendor filter not enabled in Search & Discovery → GraphQL
+      // error. Log once and try the next variant; if all fail, returns null.
+      console.log(`[StorefrontService:vendor] productVendor="${v}" failed: ${err.message}`);
+    }
+  }
+
+  console.log(`[StorefrontService:vendor] No vendor-filter results for "${vendorTrim}" (filter may not be enabled in Search & Discovery)`);
+  return null;
 }
 
 /**

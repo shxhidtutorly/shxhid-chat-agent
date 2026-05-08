@@ -220,9 +220,13 @@ async function tryFallbackSearches(mcpClient, originalQuery, toolName) {
 
 async function tryDirectStorefrontFallback({ searchQuery, userMessage, shopDomain, toolService, onResultUsed }) {
   let searchProductsForChat;
+  let searchVariantBySku;
+  let looksLikeSku;
   try {
     const mod = await import("../storefront-service.js");
     searchProductsForChat = mod.searchProductsForChat;
+    searchVariantBySku = mod.searchVariantBySku;
+    looksLikeSku = mod.looksLikeSku;
   } catch (importErr) {
     console.error("[Search-DirectAPI] Failed to import storefront-service:", importErr.message);
     return [];
@@ -231,6 +235,30 @@ async function tryDirectStorefrontFallback({ searchQuery, userMessage, shopDomai
   if (typeof searchProductsForChat !== "function") {
     console.error("[Search-DirectAPI] searchProductsForChat not exported");
     return [];
+  }
+
+  // v4.1: SKU-FIRST path. If the query looks like a SKU, try Admin API exact
+  // lookup before any freetext search.
+  const skuCandidates = [];
+  if (typeof looksLikeSku === "function") {
+    if (looksLikeSku(searchQuery)) skuCandidates.push(searchQuery.trim());
+    if (looksLikeSku(userMessage) && !skuCandidates.includes(userMessage.trim())) {
+      skuCandidates.push(userMessage.trim());
+    }
+  }
+  for (const sku of skuCandidates) {
+    try {
+      console.log(`[Search-DirectAPI] SKU lookup (Admin): "${sku}"`);
+      const wrapped = await searchVariantBySku(sku, { first: 5, shopDomain });
+      const products = toolService.processProductSearchResult(wrapped, shopDomain, userMessage, sku);
+      if (products && products.length > 0) {
+        console.log(`[Search-DirectAPI] SKU lookup recovered ${products.length} product(s) for: "${sku}"`);
+        if (typeof onResultUsed === "function") onResultUsed(wrapped);
+        return products;
+      }
+    } catch (err) {
+      console.warn(`[Search-DirectAPI] SKU lookup error on "${sku}":`, err.message);
+    }
   }
 
   const variantSet = new Set();

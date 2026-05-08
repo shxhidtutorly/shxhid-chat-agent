@@ -673,7 +673,7 @@
         const infoDiv = document.createElement('div');
         infoDiv.className = 'shop-ai-product-info';
         infoDiv.innerHTML = `
-          <h4 class="shop-ai-product-title">${safeTitle}</h4>
+          <h4 class="shop-ai-product-title" title="${safeTitle}">${safeTitle}</h4>
           ${safeSku ? `<div class="shop-ai-product-sku">SKU: ${safeSku}</div>` : ''}
           <div class="shop-ai-product-price">${safePrice}</div>
         `;

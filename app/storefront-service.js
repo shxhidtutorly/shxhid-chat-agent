@@ -21,13 +21,24 @@
  *    data.search.edges[].node  (not data.products.edges[].node)
  */
 
-import { shopifyStorefrontQuery } from './shopify-storefront.js';
+import { shopifyStorefrontQuery, shopifyAdminGraphqlQuery } from './shopify-storefront.js';
 import {
   STOREFRONT_SEARCH_QUERY,
   SEARCH_PRODUCTS_QUERY,
+  SEARCH_VARIANT_BY_SKU_QUERY,
   CREATE_CART_MUTATION,
   ADD_LINES_TO_CART_MUTATION,
 } from './storefront-queries.js';
+
+// Industrial brands carried by Creative Automation. When the chat search
+// is a single brand token, we promote it to a vendor-targeted query string
+// so the Storefront index returns brand-coherent results.
+const KNOWN_BRAND_SET = new Set([
+  'abb','siemens','schneider','phoenix','rockwell','allen-bradley','omron',
+  'smc','festo','mitsubishi','eaton','hager','legrand','ifm','sick','turck',
+  'balluff','wago','weidmuller','murr','beckhoff','lapp','pilz','banner',
+  'telemecanique','honeywell',
+]);
 
 const SHOP_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || '';
 
@@ -110,8 +121,117 @@ export async function searchProducts(searchQuery) {
  */
 function buildSearchQueryString(rawQuery) {
   if (!rawQuery || typeof rawQuery !== 'string') return '';
-  // Just use clean plaintext — the search field handles everything
-  return rawQuery.trim();
+  const trimmed = rawQuery.trim();
+  if (!trimmed) return '';
+
+  // v4.1: Brand-targeted boost. Single-token query that matches a known brand
+  // → expand to vendor:BRAND OR title:BRAND OR tag:BRAND. This keeps Storefront
+  // search relevance focused on actual brand inventory rather than text matches.
+  const tokens = trimmed.split(/\s+/);
+  if (tokens.length === 1) {
+    const lower = tokens[0].toLowerCase();
+    if (KNOWN_BRAND_SET.has(lower)) {
+      const v = tokens[0];
+      return `vendor:${v} OR title:${v} OR tag:${v}`;
+    }
+  }
+  return trimmed;
+}
+
+/**
+ * v4.1: Exact SKU lookup via Admin API productVariants(query: "sku:VALUE").
+ *
+ * Returns an MCP-shaped tool response so processProductSearchResult() can
+ * process it without branching. Filters to exact-equality SKU matches to
+ * dodge the Admin API's known sku-substring bug.
+ */
+export async function searchVariantBySku(sku, { first = 5, shopDomain } = {}) {
+  if (!sku || typeof sku !== 'string') {
+    throw new Error('SKU is required');
+  }
+  const cleaned = sku.trim();
+  if (!cleaned) throw new Error('SKU is empty');
+
+  console.log(`[StorefrontService:sku] Admin productVariants lookup: "${cleaned}"`);
+
+  let data;
+  try {
+    data = await shopifyAdminGraphqlQuery({
+      query: SEARCH_VARIANT_BY_SKU_QUERY,
+      variables: { query: `sku:${cleaned}`, first },
+      shopDomain,
+    });
+  } catch (err) {
+    console.warn(`[StorefrontService:sku] Admin lookup failed: ${err.message}`);
+    return { content: [{ type: 'text', text: JSON.stringify({ products: [] }) }] };
+  }
+
+  const edges = data?.productVariants?.edges || [];
+  if (edges.length === 0) {
+    console.log(`[StorefrontService:sku] No variant matches for "${cleaned}"`);
+    return { content: [{ type: 'text', text: JSON.stringify({ products: [] }) }] };
+  }
+
+  // Post-filter: prefer exact-equality matches (Admin sku: query has known
+  // substring bug). If no exact, fall back to all matches.
+  const skuUpper = cleaned.toUpperCase();
+  const exact = edges.filter((e) => String(e.node.sku || '').toUpperCase() === skuUpper);
+  const used = exact.length > 0 ? exact : edges;
+  if (exact.length === 0 && edges.length > 0) {
+    console.log(`[StorefrontService:sku] No exact match — using ${edges.length} substring match(es)`);
+  }
+
+  // Group variants by parent product (so we don't return the same product twice)
+  const byProduct = new Map();
+  for (const { node: variant } of used) {
+    const product = variant.product;
+    if (!product) continue;
+    if (!byProduct.has(product.id)) byProduct.set(product.id, { product, variants: [] });
+    byProduct.get(product.id).variants.push(variant);
+  }
+
+  const products = [];
+  for (const { product, variants } of byProduct.values()) {
+    products.push({
+      id: product.id,
+      product_id: product.id,
+      title: product.title,
+      handle: product.handle,
+      description: product.description,
+      vendor: product.vendor,
+      product_type: product.productType,
+      tags: product.tags,
+      image_url: product.featuredImage?.url || '',
+      featuredImage: product.featuredImage,
+      priceRange: product.priceRange,
+      variants: variants.map((v) => ({
+        id: v.id,
+        title: v.title,
+        sku: v.sku,
+        available: v.availableForSale,
+        price: v.price, // Admin returns string amount; tool.server.formatPrice handles it
+      })),
+      sku: variants[0]?.sku || null,
+    });
+  }
+
+  console.log(`[StorefrontService:sku] Returning ${products.length} product(s) for SKU "${cleaned}"`);
+  return { content: [{ type: 'text', text: JSON.stringify({ products }) }] };
+}
+
+/**
+ * Detect if a query string looks like a SKU (alphanumeric + at least one digit
+ * + at least one letter, length ≥4, no spaces). Used by chat.jsx to decide
+ * whether to attempt searchVariantBySku() before generic search.
+ */
+export function looksLikeSku(query) {
+  if (!query || typeof query !== 'string') return false;
+  const t = query.trim();
+  if (!t || /\s/.test(t)) return false;
+  if (t.length < 4) return false;
+  if (!/[A-Za-z]/.test(t) || !/\d/.test(t)) return false;
+  if (!/^[A-Za-z0-9._\-/]+$/.test(t)) return false;
+  return true;
 }
 
 export async function searchProductsForChat(searchQuery, { first = 50, shopDomain } = {}) {

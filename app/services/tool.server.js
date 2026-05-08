@@ -624,6 +624,18 @@ export function createToolService() {
 
       console.log(`[ToolService] Search returned ${rawProducts.length} products`);
 
+      // Vendor inference: MCP responses lack a `vendor` field. Many industrial
+      // products are titled "BrandName ModelNumber" (e.g. "Siemens 3RA2932-..."),
+      // so use the first alphabetic word as a vendor hint when missing.
+      responseData.products.forEach((p) => {
+        if (!p.vendor && p.title) {
+          const firstWord = String(p.title).split(/\s+/)[0] || "";
+          if (/^[A-Za-z]{2,12}$/.test(firstWord)) {
+            p.vendor = firstWord;
+          }
+        }
+      });
+
       // ─────────────────────────────────────────────────────────────────
       // DISTINCTIVE-TOKEN GATE (v4.0: relaxed — units are now stopwords)
       // ─────────────────────────────────────────────────────────────────
@@ -671,15 +683,30 @@ export function createToolService() {
       // ─────────────────────────────────────────────────────────────────
       const brand = detectBrandQuery(userQuery || "") || detectBrandQuery(searchQuery || "");
       if (brand) {
-        const brandRegex = buildBrandMatchRegex(brand);
-        const brandMatches = responseData.products.filter((p) => productMatchesBrand(p, brandRegex));
-        if (brandMatches.length === 0) {
-          console.log(`[ToolService] Brand gate: 0 of ${responseData.products.length} products mention "${brand}" — dropping all (mismatched brand)`);
-          return [];
-        }
-        if (brandMatches.length < responseData.products.length) {
-          console.log(`[ToolService] Brand gate: kept ${brandMatches.length}/${responseData.products.length} products containing "${brand}"`);
-          responseData.products = brandMatches;
+        const brandLower = brand.toLowerCase();
+        // Prefer the structured vendor field when any product has one
+        const vendorMatches = responseData.products.filter(
+          (p) => typeof p.vendor === "string" && p.vendor.toLowerCase() === brandLower
+        );
+
+        if (vendorMatches.length > 0) {
+          console.log(`[ToolService] Brand gate (vendor): kept ${vendorMatches.length}/${responseData.products.length} for "${brand}"`);
+          responseData.products = vendorMatches;
+        } else {
+          // Fall back to text matching across title/desc/tags/vendor
+          const brandRegex = buildBrandMatchRegex(brand);
+          const textMatches = responseData.products.filter((p) => productMatchesBrand(p, brandRegex));
+          if (textMatches.length > 0) {
+            if (textMatches.length < responseData.products.length) {
+              console.log(`[ToolService] Brand gate (text): kept ${textMatches.length}/${responseData.products.length} for "${brand}"`);
+              responseData.products = textMatches;
+            }
+          } else {
+            // NON-DESTRUCTIVE: keep all products. Claude is told elsewhere
+            // (system prompt) to verify brand from the vendor field before
+            // claiming brand association.
+            console.log(`[ToolService] Brand gate: no "${brand}" match in ${responseData.products.length} — KEEPING ALL (non-destructive)`);
+          }
         }
       }
 

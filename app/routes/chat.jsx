@@ -445,6 +445,52 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
       console.log(`[Chat] SKU annotation injected: ${detectedSkus.join(", ")}`);
     }
 
+    // ───────────────────────────────────────────────────────────────────
+    // SMART SEARCH PRE-PASS (v4.2)
+    // For brand-only / brand+category / SKU queries, run a deterministic
+    // Admin-API search BEFORE handing off to Claude/MCP. This bypasses the
+    // MCP search_catalog brand-recall problem (results lack a vendor field
+    // and the MCP search drops mismatched brands), giving the user the
+    // full vendor catalog when they ask for "ABB", "Siemens relays", etc.
+    // For free-text queries this returns null and the existing MCP flow
+    // runs unchanged.
+    // ───────────────────────────────────────────────────────────────────
+    try {
+      const { smartSearch } = await import("../services/search-router.server.js");
+      const smart = await smartSearch(userMessage, shopDomain);
+      if (smart && Array.isArray(smart.products) && smart.products.length > 0) {
+        console.log(`[Chat] SmartSearch pre-found ${smart.products.length} products (${smart.searchType})`);
+        stream.sendMessage({ type: "product_results", products: smart.products });
+        productsSentToFrontend = true;
+
+        const summary = smart.products.slice(0, 6).map((p) => ({
+          title: p.title,
+          vendor: p.vendor,
+          price: p.price,
+          sku: p.sku,
+        }));
+        const systemNote =
+          `[SYSTEM NOTE — NOT FROM USER] Products have already been pre-found for this query and product cards are ALREADY DISPLAYED. ` +
+          `${smart.systemHint} ` +
+          `Do NOT call search_catalog (or any catalog search tool) again — the results are already shown. ` +
+          `Write ONE short conversational reply (1-2 sentences). ` +
+          `Pre-found product summary: ${JSON.stringify(summary)}`;
+
+        const lastIdx = conversationHistory.length - 1;
+        if (
+          conversationHistory[lastIdx]?.role === "user" &&
+          typeof conversationHistory[lastIdx].content === "string"
+        ) {
+          conversationHistory[lastIdx] = {
+            role: "user",
+            content: `${systemNote}\n\nUser message: ${conversationHistory[lastIdx].content}`,
+          };
+        }
+      }
+    } catch (smartErr) {
+      console.warn(`[Chat] SmartSearch pre-pass failed: ${smartErr.message}`);
+    }
+
     let finalMessage = { role: "user", content: userMessage };
     let fullResponseText = "";
     let currentAssistantMessage = null;

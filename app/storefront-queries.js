@@ -20,8 +20,56 @@
  */
 
 // ─────────────────────────────────────────────────────────────
-// PRIMARY: Use this for all chat product searches
-// Indexes variant.sku — the key difference from SEARCH_PRODUCTS_QUERY
+// PLAIN-TEXT STOREFRONT SEARCH — v5.0
+//
+// No productFilters. No vendor: prefixes. Just raw user text.
+// Storefront `search` indexes title, description, vendor, productType,
+// tags, and variant.sku — so "IFM sensor" returns IFM sensor products
+// ranked by Shopify's relevance engine.
+// `prefix: LAST` enables partial word matching on the trailing token.
+// Docs: https://shopify.dev/docs/api/storefront/latest/queries/search
+// ─────────────────────────────────────────────────────────────
+export const STOREFRONT_PLAIN_SEARCH_QUERY = `
+  query StorefrontPlainSearch($query: String!, $first: Int!) {
+    search(query: $query, types: PRODUCT, first: $first, prefix: LAST) {
+      totalCount
+      nodes {
+        ... on Product {
+          id
+          title
+          handle
+          description
+          vendor
+          productType
+          tags
+          featuredImage {
+            url
+            altText
+          }
+          priceRange {
+            minVariantPrice { amount currencyCode }
+            maxVariantPrice { amount currencyCode }
+          }
+          variants(first: 10) {
+            edges {
+              node {
+                id
+                title
+                sku
+                availableForSale
+                price { amount currencyCode }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+// ─────────────────────────────────────────────────────────────
+// LEGACY: Used by /api/diag and api.cart.jsx fallbacks.
+// Kept for backwards compat — chat search now uses STOREFRONT_PLAIN_SEARCH_QUERY.
 // ─────────────────────────────────────────────────────────────
 export const STOREFRONT_SEARCH_QUERY = `
   query storefrontSearch($query: String!, $first: Int) {

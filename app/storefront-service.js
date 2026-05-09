@@ -23,6 +23,7 @@
 
 import { shopifyStorefrontQuery, shopifyAdminGraphqlQuery } from './shopify-storefront.js';
 import {
+  STOREFRONT_PLAIN_SEARCH_QUERY,
   STOREFRONT_SEARCH_QUERY,
   SEARCH_PRODUCTS_QUERY,
   SEARCH_VARIANT_BY_SKU_QUERY,
@@ -217,6 +218,72 @@ export async function searchVariantBySku(sku, { first = 5, shopDomain } = {}) {
 
   console.log(`[StorefrontService:sku] Returning ${products.length} product(s) for SKU "${cleaned}"`);
   return { content: [{ type: 'text', text: JSON.stringify({ products }) }] };
+}
+
+/**
+ * Plain-text Storefront search — v5.0
+ *
+ * Calls Storefront `search(query: ..., types: PRODUCT, prefix: LAST)` with the
+ * user's raw text. NO productFilters, NO `vendor:` prefixes, NO query DSL.
+ * Shopify's search engine indexes title, description, vendor, productType,
+ * tags, and variant.sku — and ranks results by relevance.
+ *
+ * Docs: https://shopify.dev/docs/api/storefront/latest/queries/search
+ *
+ * Returns { products, totalCount } in a clean shape that the frontend card
+ * renderer expects, or null when no results.
+ */
+export async function searchWithStorefront(query, { first = 20, shopDomain } = {}) {
+  if (!query || typeof query !== 'string') return null;
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+
+  console.log(`[StorefrontSearch] query="${trimmed}" first=${first}`);
+
+  let data;
+  try {
+    data = await shopifyStorefrontQuery({
+      query: STOREFRONT_PLAIN_SEARCH_QUERY,
+      variables: { query: trimmed, first },
+      shopDomain,
+    });
+  } catch (err) {
+    console.warn(`[StorefrontSearch] query failed: ${err.message}`);
+    return null;
+  }
+
+  const nodes = data?.search?.nodes || [];
+  const totalCount = data?.search?.totalCount || 0;
+  console.log(`[StorefrontSearch] returned ${nodes.length} products (total: ${totalCount})`);
+
+  if (nodes.length === 0) return null;
+
+  const products = nodes.map((node) => {
+    const variants = (node.variants?.edges || []).map(({ node: v }) => ({
+      id: v.id,
+      title: v.title,
+      sku: v.sku,
+      available: v.availableForSale,
+      price: v.price,
+    }));
+    return {
+      id: node.id,
+      product_id: node.id,
+      title: node.title,
+      handle: node.handle,
+      description: node.description,
+      vendor: node.vendor,
+      product_type: node.productType,
+      tags: node.tags,
+      image_url: node.featuredImage?.url || '',
+      featuredImage: node.featuredImage,
+      priceRange: node.priceRange,
+      variants,
+      sku: variants[0]?.sku || null,
+    };
+  });
+
+  return { products, totalCount };
 }
 
 /**

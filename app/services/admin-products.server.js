@@ -1,50 +1,17 @@
 /**
- * Admin Products / Variants Search
+ * Admin Products / Variants Search — v5.0 (simplified)
  *
- * Thin wrapper over the existing shopifyAdminGraphqlQuery (which uses
- * the OAuth session.accessToken from Prisma). Used by the search router
- * to do reliable vendor- and SKU-filtered queries that the Storefront
- * search can't do without Search & Discovery vendor filters.
+ * Only two functions remain:
+ *   - searchBySku()    — exact SKU lookup via Admin productVariants(query: "sku:...")
+ *   - getAllVendors()  — diagnostics helper
  *
- * Required scope: read_products (added to shopify.app.toml).
+ * Vendor-targeted product search has been removed; the new flow uses Storefront
+ * `search` (plain text) for everything that isn't a SKU.
+ *
+ * Required scope: read_products.
  */
 
 import { shopifyAdminGraphqlQuery } from "../shopify-storefront.js";
-
-const PRODUCTS_BY_VENDOR_QUERY = `
-  query productsByVendor($vendorQuery: String!, $first: Int!) {
-    products(first: $first, query: $vendorQuery) {
-      nodes {
-        id
-        title
-        handle
-        vendor
-        productType
-        tags
-        descriptionHtml
-        variants(first: 5) {
-          nodes {
-            id
-            title
-            sku
-            price
-            inventoryQuantity
-          }
-        }
-        featuredMedia {
-          preview { image { url altText } }
-        }
-        images(first: 3) {
-          nodes { url altText }
-        }
-        priceRangeV2 {
-          minVariantPrice { amount currencyCode }
-          maxVariantPrice { amount currencyCode }
-        }
-      }
-    }
-  }
-`;
 
 const SKU_SEARCH_QUERY = `
   query skuSearch($skuQuery: String!, $first: Int!) {
@@ -85,37 +52,6 @@ const ALL_VENDORS_QUERY = `
     }
   }
 `;
-
-function escapeQueryValue(s) {
-  return String(s).replace(/"/g, '\\"');
-}
-
-export async function searchProductsByVendor(shopDomain, vendor, categoryTerms = "") {
-  const vendorEsc = escapeQueryValue(vendor);
-  let vendorQuery = `vendor:"${vendorEsc}"`;
-  if (categoryTerms && categoryTerms.trim()) {
-    // Tokenize category terms — Admin API supports unquoted token search on
-    // title and product_type. Keep it simple: just AND the raw terms.
-    const terms = categoryTerms.trim().replace(/"/g, "");
-    vendorQuery = `vendor:"${vendorEsc}" AND (title:${terms} OR product_type:${terms})`;
-  }
-
-  console.log(`[AdminProducts] vendor query: ${vendorQuery}`);
-
-  try {
-    const data = await shopifyAdminGraphqlQuery({
-      query: PRODUCTS_BY_VENDOR_QUERY,
-      variables: { vendorQuery, first: 20 },
-      shopDomain,
-    });
-    const products = data?.products?.nodes || [];
-    console.log(`[AdminProducts] vendor="${vendor}" returned ${products.length} products`);
-    return products;
-  } catch (err) {
-    console.error(`[AdminProducts] vendor search failed: ${err.message}`);
-    return null;
-  }
-}
 
 export async function searchBySku(shopDomain, sku) {
   const skuTrim = String(sku).trim();

@@ -185,117 +185,6 @@ async function handleChatRequest(request) {
   }
 }
 
-async function tryFallbackSearches(mcpClient, originalQuery, toolName) {
-  const fallbackQueries = generateFallbackQueries(originalQuery);
-
-  for (const fallbackQuery of fallbackQueries) {
-    try {
-      console.log(`[Search-Fallback] Trying: "${fallbackQuery}" with tool "${toolName}"`);
-      // For fallbacks, try nested schema first (current), then flat (legacy)
-      const toolArgs = mcpClient._catalogSearchSchema === 'flat'
-        ? { query: fallbackQuery }
-        : { catalog: { query: fallbackQuery } };
-
-      const result = await mcpClient.callStorefrontTool(toolName, toolArgs);
-
-      if (result && !result.error) {
-        let parsed;
-        try {
-          const text = result.content?.[0]?.text;
-          parsed = typeof text === "string" ? JSON.parse(text) : text;
-        } catch (e) { continue; }
-
-        const products = parsed?.products || parsed?.items || parsed?.results;
-        if (Array.isArray(products) && products.length > 0) {
-          console.log(`[Search-Fallback] "${fallbackQuery}" → ${products.length} products`);
-          return { result, query: fallbackQuery };
-        }
-      }
-    } catch (e) {
-      console.warn(`[Search-Fallback] Error on "${fallbackQuery}":`, e.message);
-    }
-  }
-  return null;
-}
-
-async function tryDirectStorefrontFallback({ searchQuery, userMessage, shopDomain, toolService, onResultUsed }) {
-  let searchProductsForChat;
-  let searchVariantBySku;
-  let looksLikeSku;
-  try {
-    const mod = await import("../storefront-service.js");
-    searchProductsForChat = mod.searchProductsForChat;
-    searchVariantBySku = mod.searchVariantBySku;
-    looksLikeSku = mod.looksLikeSku;
-  } catch (importErr) {
-    console.error("[Search-DirectAPI] Failed to import storefront-service:", importErr.message);
-    return [];
-  }
-
-  if (typeof searchProductsForChat !== "function") {
-    console.error("[Search-DirectAPI] searchProductsForChat not exported");
-    return [];
-  }
-
-  // v4.1: SKU-FIRST path. If the query looks like a SKU, try Admin API exact
-  // lookup before any freetext search.
-  const skuCandidates = [];
-  if (typeof looksLikeSku === "function") {
-    if (looksLikeSku(searchQuery)) skuCandidates.push(searchQuery.trim());
-    if (looksLikeSku(userMessage) && !skuCandidates.includes(userMessage.trim())) {
-      skuCandidates.push(userMessage.trim());
-    }
-  }
-  for (const sku of skuCandidates) {
-    try {
-      console.log(`[Search-DirectAPI] SKU lookup (Admin): "${sku}"`);
-      const wrapped = await searchVariantBySku(sku, { first: 5, shopDomain });
-      const products = toolService.processProductSearchResult(wrapped, shopDomain, userMessage, sku);
-      if (products && products.length > 0) {
-        console.log(`[Search-DirectAPI] SKU lookup recovered ${products.length} product(s) for: "${sku}"`);
-        if (typeof onResultUsed === "function") onResultUsed(wrapped);
-        return products;
-      }
-    } catch (err) {
-      console.warn(`[Search-DirectAPI] SKU lookup error on "${sku}":`, err.message);
-    }
-  }
-
-  const variantSet = new Set();
-  const tryQueries = [];
-  const push = (q) => {
-    if (!q || typeof q !== "string") return;
-    const trimmed = q.trim();
-    if (trimmed.length < 2) return;
-    const key = trimmed.toLowerCase();
-    if (variantSet.has(key)) return;
-    variantSet.add(key);
-    tryQueries.push(trimmed);
-  };
-
-  push(searchQuery);
-  push(userMessage);
-  for (const fb of generateFallbackQueries(searchQuery || userMessage || "")) push(fb);
-
-  for (const q of tryQueries) {
-    try {
-      console.log(`[Search-DirectAPI] Trying: "${q}"`);
-      const wrapped = await searchProductsForChat(q, { first: 50, shopDomain });
-      const products = toolService.processProductSearchResult(wrapped, shopDomain, userMessage, q);
-      if (products && products.length > 0) {
-        console.log(`[Search-DirectAPI] Recovered ${products.length} products for: "${q}"`);
-        if (typeof onResultUsed === "function") onResultUsed(wrapped);
-        return products;
-      }
-    } catch (err) {
-      console.warn(`[Search-DirectAPI] Error on "${q}":`, err.message);
-    }
-  }
-
-  console.log(`[Search-DirectAPI] All attempts returned 0 relevant products`);
-  return [];
-}
-
 /**
  * Detect SKU-like tokens in a user message.
  * Returns an array of probable SKU strings found (uppercase, digits+letters, with separators).
@@ -323,38 +212,6 @@ function detectSkuTokens(message) {
     matches.push(token);
   }
   return matches;
-}
-
-function generateFallbackQueries(originalQuery) {
-  if (!originalQuery || typeof originalQuery !== "string") return [];
-  const queries = [];
-  const trimmed = originalQuery.trim();
-
-  const noSeparators = trimmed.replace(/[-\.\/]/g, " ").replace(/\s+/g, " ").trim();
-  if (noSeparators !== trimmed) queries.push(noSeparators);
-
-  const noUnits = trimmed
-    .replace(/\d+\s*(?:VDC|VAC|V|mm|cm|inch|A|W|kW|HP)\b/gi, "")
-    .replace(/\b(?:IP\d{2}|AC\d|DC\d|CAT\d[A-Z]?|RJ\d+)\b/gi, "")
-    .replace(/\s+/g, " ").trim();
-  if (noUnits && noUnits !== trimmed && noUnits.length >= 3) queries.push(noUnits);
-
-  const words = trimmed.split(/\s+/).filter((w) => w.length >= 2);
-  if (words.length > 2) { queries.push(words.slice(0, 3).join(" ")); queries.push(words.slice(0, 2).join(" ")); }
-  if (words.length > 1 && words[0].length >= 3) queries.push(words[0]);
-
-  const skuLike = trimmed.replace(/\s+/g, "");
-  if (/^[A-Z0-9\-\.\/]{4,}$/i.test(skuLike) && skuLike !== trimmed) {
-    const noSep = skuLike.replace(/[-\.\/]/g, "");
-    if (!queries.includes(noSep)) queries.push(noSep);
-    if (skuLike.length >= 6) {
-      const firstHalf = skuLike.substring(0, Math.ceil(skuLike.length / 2));
-      if (firstHalf.length >= 3 && !queries.includes(firstHalf)) queries.push(firstHalf);
-    }
-  }
-
-  const seen = new Set([trimmed.toLowerCase()]);
-  return queries.filter((q) => { const lower = q.toLowerCase(); if (seen.has(lower)) return false; seen.add(lower); return true; });
 }
 
 async function handleChatSession({ request, userMessage, conversationId, promptType, stream, visitorId, fingerprintId, shopDomain, helpers }) {
@@ -598,28 +455,7 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
                 console.warn("[ImageDebug] Could not parse product for debug:", debugErr.message);
               }
 
-              let products = toolService.processProductSearchResult(toolUseResponse, shopDomain, userMessage, searchQuery);
-
-              // Primary fallback: direct Storefront GraphQL
-              if ((!products || products.length === 0) && searchQuery) {
-                console.log(`[Search] Zero relevant results for: "${searchQuery}" — trying direct Storefront API`);
-                products = await tryDirectStorefrontFallback({
-                  searchQuery, userMessage, shopDomain, toolService,
-                  onResultUsed: (wrappedResp) => { toolUseResponse = wrappedResp; },
-                });
-              }
-
-              // Secondary fallback: MCP with simplified query
-              if ((!products || products.length === 0) && searchQuery) {
-                const mcpFallback = await tryFallbackSearches(mcpClient, searchQuery, toolName);
-                if (mcpFallback) {
-                  products = toolService.processProductSearchResult(mcpFallback.result, shopDomain, userMessage, mcpFallback.query);
-                  if (products && products.length > 0) {
-                    toolUseResponse = mcpFallback.result;
-                    console.log(`[Search-Fallback] Recovered ${products.length} products via: "${mcpFallback.query}"`);
-                  }
-                }
-              }
+              const products = toolService.processProductSearchResult(toolUseResponse, shopDomain, userMessage, searchQuery);
 
               if (products && products.length > 0) {
                 console.log(`[Search] Sending ${products.length} products to frontend for: "${searchQuery}"`);
@@ -627,7 +463,6 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
                 productsSentToFrontend = true;
 
                 // Inject a clear "stop searching" signal so Claude doesn't retry.
-                // Without this, Claude may see the MCP returned 0 and keep looping.
                 const stopHint = JSON.stringify({
                   products: products.slice(0, 3).map((p) => ({ id: p.id, title: p.title, sku: p.sku || null, price: p.price || null })),
                   total_count: products.length,
@@ -636,10 +471,10 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
                 if (!Array.isArray(toolUseResponse.content)) toolUseResponse.content = [];
                 toolUseResponse.content = [{ type: "text", text: stopHint }];
               } else {
-                console.log(`[Search] Zero results for: "${searchQuery}" (all fallbacks exhausted)`);
+                console.log(`[Search] Zero results for: "${searchQuery}"`);
                 const retryHint = JSON.stringify({
                   products: [], total_count: 0,
-                  _system_hint: `IMPORTANT: Zero products found for "${searchQuery}" even after fallbacks. You MUST try a COMPLETELY DIFFERENT query. Try: 1) Brand name only. 2) Product category only. 3) Single generic keyword. Do NOT repeat similar queries. If 3 attempts all return zero, tell the user the product may not be in catalog and offer to connect with sales team.`
+                  _system_hint: `Zero products found for "${searchQuery}". Try a simpler query (2-3 words). If still zero after 2 attempts, tell the user the product may not be in our catalog and offer websales@creativeautomation.ae`,
                 });
                 if (!Array.isArray(toolUseResponse.content)) toolUseResponse.content = [];
                 toolUseResponse.content = [{ type: "text", text: retryHint }];

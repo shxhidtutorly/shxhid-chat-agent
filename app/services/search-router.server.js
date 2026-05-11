@@ -100,25 +100,56 @@ function dedupeById(items) {
   return out;
 }
 
-function looksLikeSku(token) {
-  if (!token || token.length < 4) return false;
-  const t = token.replace(/\s+/g, "");
-  if (!/[A-Za-z]/.test(t) || !/\d/.test(t)) return false;
-  if (!/^[A-Za-z0-9\-\.\/]+$/.test(t)) return false;
-  // Skip pure measurements: 24VDC, 18MM, 100A
-  if (/^\d+(?:MM|CM|VDC|VAC|V|A|W|KW|HP|INCH|IN|FT|FEET|FOOT)$/i.test(t)) return false;
-  return true;
-}
+/**
+ * SKU detection — patterns ordered by specificity.
+ * Returns the SKU string if matched, null otherwise.
+ *
+ * Patterns:
+ *   1. Standard alphanumeric SKU (≥6 chars):     ABC123, SKU-456-789, PROD_001
+ *   2. Thread/metric standards (single word):    M12-1.5, G1/2, 3/4NPT, M8x1.25
+ *   3. Explicit SKU/Part prefix:                 "SKU: ABC123", "part# 12345"
+ *   4. Fraction-based parts (single word):       1/2BSP, 3/4NPT
+ *   5. Mixed alphanumeric short codes:           ACS580, MGPM12 (≥5 chars,
+ *                                                must have both letters & digits)
+ */
+function detectSku(message) {
+  const normalized = message.trim();
+  if (!normalized) return null;
 
-function extractSkuToken(message) {
-  const words = message.split(/\s+/);
-  if (words.length <= 2) {
-    const candidate = words.length === 1 ? words[0] : words.join("");
-    if (looksLikeSku(candidate)) return candidate;
+  // Pattern 3 first: explicit "SKU: X" / "part# X" wins regardless of word count
+  const explicitPrefix = normalized.match(/(?:sku|part(?:\s*#)?)[:\s]+([A-Z0-9][A-Z0-9\-_\.\/]{2,})/i);
+  if (explicitPrefix) return explicitPrefix[1];
+
+  const words = normalized.split(/\s+/);
+  if (words.length !== 1) return null; // SKU patterns are single-token only
+
+  const token = words[0];
+
+  // Skip pure measurement tokens: 24VDC, 18MM, 100A, IP67, 2INCH
+  if (/^\d+(?:MM|CM|VDC|VAC|V|A|W|KW|HP|INCH|IN|FT|FEET|FOOT)$/i.test(token)) return null;
+  if (/^IP\d{2}$/i.test(token)) return null;
+
+  // Pattern 1: Standard alphanumeric SKUs (≥6 chars, contains digit+letter)
+  if (/^[A-Z0-9][A-Z0-9\-_]{5,}$/i.test(token) && /[A-Za-z]/.test(token) && /\d/.test(token)) {
+    return token;
   }
-  for (const word of words) {
-    if (looksLikeSku(word) && word.length >= 5) return word;
+
+  // Pattern 2: Thread/metric (e.g. M12-1.5, G1/2, M8x1.25, 3/4NPT)
+  if (/^[A-Z]*\d+[xX\-\/\.]\d+(?:[\.\d]*)?[A-Z]*$/i.test(token)) {
+    return token;
   }
+
+  // Pattern 4: Fraction-based part codes (1/2, 3/4NPT)
+  if (/^\d+\/\d+[A-Z]*$/i.test(token)) {
+    return token;
+  }
+
+  // Pattern 5: Short mixed alphanumeric codes (≥5 chars, has letter+digit)
+  // Catches ACS580, MGPM12, 6SL3220
+  if (token.length >= 5 && /[A-Za-z]/.test(token) && /\d/.test(token) && /^[A-Z0-9\-\.\/]+$/i.test(token)) {
+    return token;
+  }
+
   return null;
 }
 
@@ -135,9 +166,27 @@ function isConversationalMessage(msg) {
 }
 
 function simplifyQuery(query) {
-  const fillers = /\b(show|me|find|search|for|looking|do|you|have|some|any|the|a|an|please|can|i|need|want)\b/gi;
+  // Drop common chat fillers AND generic industrial modifiers
+  const fillers = /\b(show|me|find|search|for|looking|do|you|have|some|any|the|a|an|please|can|i|need|want|industrial|commercial|heavy|duty|professional|grade)\b/gi;
   const simplified = query.replace(fillers, "").replace(/\s+/g, " ").trim();
   return simplified.length >= 3 ? simplified : null;
+}
+
+function pluralSingularVariant(query) {
+  const words = query.split(/\s+/);
+  if (words.length === 0) return null;
+  const last = words[words.length - 1];
+  if (last.length < 4) return null;
+  const variant = last.endsWith("s") ? last.slice(0, -1) : last + "s";
+  if (variant === last) return null;
+  return [...words.slice(0, -1), variant].join(" ");
+}
+
+function mainNoun(query) {
+  const words = query.split(/\s+/).filter((w) => w.length >= 3);
+  if (words.length <= 1) return null;
+  // Heuristic: the last token is usually the noun ("ABB relay" → "relay")
+  return words[words.length - 1];
 }
 
 function formatStorefrontResult(products, searchType, query) {
@@ -203,38 +252,60 @@ async function handleSkuSearch(sku, originalMessage, shopDomain) {
   return null;
 }
 
+/**
+ * 4-tier fallback strategy:
+ *   1. Original query
+ *   2. Plural/singular variation of the last word
+ *   3. Simplified (drop fillers and generic modifiers)
+ *   4. Main noun only (last 3+ char word)
+ *
+ * Stops on the first attempt that returns ≥1 product.
+ */
 async function handleTextSearch(query, shopDomain) {
   console.log(`[SearchRouter] text search: "${query}" → storefront search`);
+  const { searchWithStorefront } = await import("../storefront-service.js");
+  const attempts = [];
+  const tried = new Set();
 
-  try {
-    const { searchWithStorefront } = await import("../storefront-service.js");
-    const result = await searchWithStorefront(query, { first: 20, shopDomain });
+  const tryQuery = async (q, strategy) => {
+    if (!q || typeof q !== "string") return null;
+    const trimmed = q.trim();
+    if (!trimmed) return null;
+    const key = trimmed.toLowerCase();
+    if (tried.has(key)) return null;
+    tried.add(key);
 
-    if (!result || !result.products || result.products.length === 0) {
-      const simplified = simplifyQuery(query);
-      if (simplified && simplified !== query) {
-        console.log(`[SearchRouter] retrying with simplified query: "${simplified}"`);
-        const retry = await searchWithStorefront(simplified, { first: 20, shopDomain });
-        if (retry?.products?.length > 0) {
-          return formatStorefrontResult(
-            retry.products.map(storefrontProductToCardShape),
-            "storefront_search_simplified",
-            simplified
-          );
-        }
-      }
-      return null;
+    try {
+      const result = await searchWithStorefront(trimmed, { first: 20, shopDomain });
+      const count = result?.products?.length || 0;
+      attempts.push({ strategy, query: trimmed, count });
+      if (count > 0) return { result, strategy, query: trimmed };
+    } catch (err) {
+      console.warn(`[SearchRouter] ${strategy} failed: ${err.message}`);
     }
-
-    return formatStorefrontResult(
-      result.products.map(storefrontProductToCardShape),
-      "storefront_search",
-      query
-    );
-  } catch (err) {
-    console.warn(`[SearchRouter] Storefront search failed: ${err.message}`);
     return null;
-  }
+  };
+
+  // Attempt 1: original
+  let hit = await tryQuery(query, "original");
+
+  // Attempt 2: plural/singular
+  if (!hit) hit = await tryQuery(pluralSingularVariant(query), "plural_singular");
+
+  // Attempt 3: simplified
+  if (!hit) hit = await tryQuery(simplifyQuery(query), "simplified");
+
+  // Attempt 4: main noun
+  if (!hit) hit = await tryQuery(mainNoun(query), "main_noun");
+
+  console.log(`[SearchRouter] attempts: ${JSON.stringify(attempts)}`);
+
+  if (!hit) return null;
+
+  const products = hit.result.products.map(storefrontProductToCardShape);
+  const searchType =
+    hit.strategy === "original" ? "storefront_search" : `storefront_search_${hit.strategy}`;
+  return formatStorefrontResult(products, searchType, hit.query);
 }
 
 export async function smartSearch(userMessage, shopDomain) {
@@ -246,9 +317,13 @@ export async function smartSearch(userMessage, shopDomain) {
     return null;
   }
 
-  const skuToken = extractSkuToken(trimmed);
+  const skuToken = detectSku(trimmed);
   if (skuToken) {
-    return await handleSkuSearch(skuToken, trimmed, shopDomain);
+    const skuResult = await handleSkuSearch(skuToken, trimmed, shopDomain);
+    if (skuResult) return skuResult;
+    // SKU not found anywhere — fall through to plain text search using the
+    // original message, so the user gets *something* rather than a dead end.
+    console.log(`[SearchRouter] SKU "${skuToken}" not found — falling back to text search`);
   }
 
   return await handleTextSearch(trimmed, shopDomain);

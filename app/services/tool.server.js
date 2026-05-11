@@ -119,11 +119,42 @@ function scoreProductBySpecs(product, specs) {
     const skuN = skuU.replace(/[-\.\/]/g, "");
     const titleN = titleUpper.replace(/[-\.\/]/g, "");
 
-    if (variantSkus.some((s) => s === skuU) || productSku === skuU) score += 250;
-    else if (variantSkus.some((s) => s.includes(skuU)) || productSku.includes(skuU)) score += 200;
-    else if (variantSkus.some((s) => s.replace(/[-\.\/]/g, "").includes(skuN)) || productSku.replace(/[-\.\/]/g, "").includes(skuN)) score += 150;
-    else if (titleUpper.includes(skuU) || titleN.includes(skuN)) score += 100;
+    if (variantSkus.some((s) => s === skuU) || productSku === skuU) score += 1000;
+    else if (variantSkus.some((s) => s.includes(skuU)) || productSku.includes(skuU)) score += 800;
+    else if (variantSkus.some((s) => s.replace(/[-\.\/]/g, "").includes(skuN)) || productSku.replace(/[-\.\/]/g, "").includes(skuN)) score += 600;
+    else if (titleUpper.includes(skuU) || titleN.includes(skuN)) score += 400;
   }
+
+  return score;
+}
+
+/**
+ * Generic relevance score (independent of SKU). Used to re-rank text-search
+ * results so exact / starts-with title matches float above loose matches.
+ */
+function scoreProductByRelevance(product, query) {
+  if (!query || typeof query !== "string") return 0;
+  const q = query.toLowerCase().trim();
+  if (!q) return 0;
+
+  const title = String(product.title || "").toLowerCase();
+  let score = 0;
+
+  if (title === q) score += 500;
+  else if (title.startsWith(q)) score += 200;
+
+  const queryWords = q.split(/\s+/).filter((w) => w.length >= 2);
+  if (queryWords.length > 0) {
+    const titleWords = title.split(/\s+/);
+    const matches = queryWords.filter((w) => titleWords.includes(w)).length;
+    score += matches * 50;
+  }
+
+  // Small bonuses to break ties — prefer in-stock and image-bearing products
+  const variants = Array.isArray(product.variants) ? product.variants : [];
+  const anyAvailable = variants.some((v) => v?.available || v?.availableForSale);
+  if (anyAvailable) score += 20;
+  if (product.image_url) score += 10;
 
   return score;
 }
@@ -156,67 +187,79 @@ function extractDescription(product) {
 /**
  * Extract a valid image URL from a product object.
  *
- * Priority order based on production log evidence: media[].image.url is the
- * field populated by the current MCP search_catalog UCP response.
+ * Tries every known shape — MCP, Storefront GraphQL (edges/nodes), Admin REST,
+ * legacy formats. Returns the first URL that starts with "http".
  */
 function extractImageUrl(product) {
-  if (Array.isArray(product.media) && product.media.length > 0) {
-    for (const m of product.media) {
-      if (typeof m?.image?.url === "string" && m.image.url.startsWith("http")) return m.image.url;
-      if (typeof m?.image?.src === "string" && m.image.src.startsWith("http")) return m.image.src;
-      if (typeof m?.preview_image?.src === "string" && m.preview_image.src.startsWith("http")) return m.preview_image.src;
-      if (typeof m?.preview_image?.url === "string" && m.preview_image.url.startsWith("http")) return m.preview_image.url;
-      if (typeof m?.url === "string" && m.url.startsWith("http")) return m.url;
-      if (typeof m?.src === "string" && m.src.startsWith("http")) return m.src;
+  if (!product) return null;
+
+  const paths = [
+    // MCP search_catalog UCP shape
+    () => product.media?.[0]?.image?.url,
+    () => product.media?.[0]?.image?.src,
+    () => product.media?.[0]?.preview_image?.src,
+    () => product.media?.[0]?.preview_image?.url,
+    () => product.media?.[0]?.url,
+    () => product.media?.[0]?.src,
+
+    // featured_media variants
+    () => product.featured_media?.image?.url,
+    () => product.featured_media?.preview_image?.src,
+    () => product.featured_media?.preview_image?.url,
+    () => product.featured_media?.url,
+    () => product.featured_media?.src,
+
+    // Flat URL fields
+    () => (typeof product.image_url === "string" ? product.image_url : null),
+    () => (typeof product.thumbnail_url === "string" ? product.thumbnail_url : null),
+    () => (typeof product.thumbnail === "string" ? product.thumbnail : null),
+
+    // featured_image (REST / snake_case)
+    () => (typeof product.featured_image === "string" ? product.featured_image : null),
+    () => product.featured_image?.url,
+    () => product.featured_image?.src,
+
+    // featuredImage (GraphQL camelCase)
+    () => product.featuredImage?.url,
+    () => product.featuredImage?.src,
+    () => product.featuredImage?.image?.url,
+    () => (typeof product.featuredImage === "string" ? product.featuredImage : null),
+
+    // image (single object or string)
+    () => (typeof product.image === "string" ? product.image : null),
+    () => product.image?.url,
+    () => product.image?.src,
+
+    // images array (multiple shapes)
+    () => product.images?.[0]?.url,
+    () => product.images?.[0]?.src,
+    () => (typeof product.images?.[0] === "string" ? product.images[0] : null),
+    () => product.images?.edges?.[0]?.node?.url,
+    () => product.images?.edges?.[0]?.node?.src,
+    () => product.images?.nodes?.[0]?.url,
+    () => product.images?.nodes?.[0]?.src,
+    () => product.images?.image?.url,
+
+    // variant images (last resort)
+    () => product.variants?.[0]?.image?.url,
+    () => product.variants?.[0]?.image?.src,
+    () => (typeof product.variants?.[0]?.image === "string" ? product.variants[0].image : null),
+    () => product.variants?.nodes?.[0]?.image?.url,
+    () => product.variants?.edges?.[0]?.node?.image?.url,
+  ];
+
+  for (const get of paths) {
+    try {
+      const url = get();
+      if (typeof url === "string" && url.startsWith("http")) return url;
+    } catch (_e) {
+      // path doesn't exist on this product shape, continue
     }
   }
 
-  if (product.featured_media) {
-    if (typeof product.featured_media?.image?.url === "string" && product.featured_media.image.url.startsWith("http")) return product.featured_media.image.url;
-    if (typeof product.featured_media?.preview_image?.src === "string" && product.featured_media.preview_image.src.startsWith("http")) return product.featured_media.preview_image.src;
-    if (typeof product.featured_media?.preview_image?.url === "string" && product.featured_media.preview_image.url.startsWith("http")) return product.featured_media.preview_image.url;
-    if (typeof product.featured_media?.src === "string" && product.featured_media.src.startsWith("http")) return product.featured_media.src;
-    if (typeof product.featured_media?.url === "string" && product.featured_media.url.startsWith("http")) return product.featured_media.url;
-  }
-
-  if (typeof product.image_url === "string" && product.image_url.startsWith("http")) return product.image_url;
-  if (typeof product.thumbnail_url === "string" && product.thumbnail_url.startsWith("http")) return product.thumbnail_url;
-  if (typeof product.thumbnail === "string" && product.thumbnail.startsWith("http")) return product.thumbnail;
-
-  if (product.featured_image) {
-    if (typeof product.featured_image === "string" && product.featured_image.startsWith("http")) return product.featured_image;
-    if (typeof product.featured_image?.url === "string" && product.featured_image.url.startsWith("http")) return product.featured_image.url;
-    if (typeof product.featured_image?.src === "string" && product.featured_image.src.startsWith("http")) return product.featured_image.src;
-  }
-
-  if (product.featuredImage) {
-    if (typeof product.featuredImage?.url === "string" && product.featuredImage.url.startsWith("http")) return product.featuredImage.url;
-    if (typeof product.featuredImage?.src === "string" && product.featuredImage.src.startsWith("http")) return product.featuredImage.src;
-    if (typeof product.featuredImage === "string" && product.featuredImage.startsWith("http")) return product.featuredImage;
-  }
-
-  if (product.image) {
-    if (typeof product.image === "string" && product.image.startsWith("http")) return product.image;
-    if (typeof product.image?.url === "string" && product.image.url.startsWith("http")) return product.image.url;
-    if (typeof product.image?.src === "string" && product.image.src.startsWith("http")) return product.image.src;
-  }
-
-  if (Array.isArray(product.images) && product.images.length > 0) {
-    for (const img of product.images) {
-      if (typeof img === "string" && img.startsWith("http")) return img;
-      if (typeof img?.url === "string" && img.url.startsWith("http")) return img.url;
-      if (typeof img?.src === "string" && img.src.startsWith("http")) return img.src;
-    }
-  }
-
-  if (Array.isArray(product.variants) && product.variants.length > 0) {
-    for (const v of product.variants) {
-      if (typeof v?.image?.url === "string" && v.image.url.startsWith("http")) return v.image.url;
-      if (typeof v?.image?.src === "string" && v.image.src.startsWith("http")) return v.image.src;
-      if (typeof v?.image === "string" && v.image.startsWith("http")) return v.image;
-    }
-  }
-
+  console.warn(
+    `[ImageDebug] No valid image URL for product: id=${product.id || "?"} title="${(product.title || "").slice(0, 60)}" keys=[${Object.keys(product).join(", ")}]`
+  );
   return null;
 }
 
@@ -279,22 +322,32 @@ export function createToolService() {
         };
       });
 
-      // SKU-aware re-rank only when the user typed a SKU-like token.
+      // Re-rank: exact SKU > title-equality > title-starts-with > word-overlap
+      //          > availability > has-image. Always relevance-rank; add SKU
+      //          score on top when the user typed a SKU-like token.
       const userSpecs = extractQuerySpecs(userQuery || "");
       const searchSpecs = extractQuerySpecs(searchQuery || "");
       const skuPatterns = [...new Set([...userSpecs.skuPatterns, ...searchSpecs.skuPatterns])];
+      const rankQuery = (searchQuery || userQuery || "").trim();
 
-      let ranked = mappedProducts;
       if (skuPatterns.length > 0) {
         console.log(`[ToolService] SKU re-rank for: [${skuPatterns.join(", ")}]`);
-        ranked = [...mappedProducts].sort((a, b) => {
-          const sa = scoreProductBySpecs({ sku: a.sku, title: a.title, variants: a._variants }, { skuPatterns });
-          const sb = scoreProductBySpecs({ sku: b.sku, title: b.title, variants: b._variants }, { skuPatterns });
-          return sb - sa;
-        });
       }
 
+      const ranked = [...mappedProducts].sort((a, b) => {
+        const skuA = skuPatterns.length > 0
+          ? scoreProductBySpecs({ sku: a.sku, title: a.title, variants: a._variants }, { skuPatterns })
+          : 0;
+        const skuB = skuPatterns.length > 0
+          ? scoreProductBySpecs({ sku: b.sku, title: b.title, variants: b._variants }, { skuPatterns })
+          : 0;
+        const relA = scoreProductByRelevance({ ...a, variants: a._variants }, rankQuery);
+        const relB = scoreProductByRelevance({ ...b, variants: b._variants }, rankQuery);
+        return (skuB + relB) - (skuA + relA);
+      });
+
       ranked.forEach((p) => { delete p._variants; });
+      console.log(`[ToolService] Re-ranked top: "${ranked[0]?.title || ""}"`);
 
       console.log(`[ToolService] Returning ${Math.min(ranked.length, MAX_PRODUCTS_TO_DISPLAY)} products`);
       return ranked.slice(0, MAX_PRODUCTS_TO_DISPLAY);

@@ -14,6 +14,7 @@
  */
 
 import { isAlgoliaConfigured, algoliaSearch } from './algolia.server.js';
+import { rewriteQueryForSearch } from './query-intelligence.server.js';
 
 const STOREFRONT_HOST = "creativeautomation.ae"; // public storefront for product URLs
 
@@ -272,26 +273,44 @@ async function handleSkuSearch(sku, originalMessage, shopDomain) {
  *
  * Stops on the first attempt that returns ≥1 product.
  */
-async function handleTextSearch(query, shopDomain) {
+async function handleTextSearch(query, shopDomain, conversationHistory = []) {
   console.log(`[SearchRouter] text search: "${query}"`);
 
-  // TIER 1: Algolia — best relevance at 200k+ scale
+  // ── Query Intelligence: rewrite query for best Algolia results ──
+  // Run query rewriter BEFORE Algolia. Uses conversation context to
+  // understand follow-up questions like "which ones have 4mm range?"
+  let algoliaQuery = query;
+  let skipAlgolia = false;
+
   if (isAlgoliaConfigured()) {
     try {
-      const result = await algoliaSearch(query, { first: 20, shopDomain });
+      const intel = await rewriteQueryForSearch(query, conversationHistory);
+      skipAlgolia = intel.skip;
+      algoliaQuery = intel.query || query;
+    } catch (err) {
+      console.warn(`[SearchRouter] Query intelligence failed: ${err.message}`);
+      algoliaQuery = query; // fall back to original
+    }
+  }
+
+  // TIER 1: Algolia — best relevance for brand/product-type queries
+  if (isAlgoliaConfigured() && !skipAlgolia && algoliaQuery) {
+    try {
+      const result = await algoliaSearch(algoliaQuery, { first: 20, shopDomain });
       if (result?.products?.length > 0) {
         console.log(
-          `[SearchRouter] Algolia: ${result.products.length} results for "${query}"`
+          `[SearchRouter] Algolia: ${result.products.length} results for "${algoliaQuery}"`
         );
-        return formatStorefrontResult(result.products, 'algolia_search', query);
+        return formatStorefrontResult(result.products, 'algolia_search', algoliaQuery);
       }
-      console.log(`[SearchRouter] Algolia: 0 results — trying Storefront fallback`);
+      console.log(`[SearchRouter] Algolia: 0 results for "${algoliaQuery}" — trying Storefront`);
     } catch (err) {
       console.warn(`[SearchRouter] Algolia failed (${err.message}) — falling back`);
     }
   }
 
-  // TIER 2: Storefront search fallback
+  // TIER 2: Storefront search — better for spec/attribute queries
+  // Also used when Algolia returns 0 results or was skipped
   const { searchWithStorefront } = await import('../storefront-service.js');
   const tried = new Set();
   const attempts = [];
@@ -312,7 +331,9 @@ async function handleTextSearch(query, shopDomain) {
     }
   };
 
+  // Try original query, then the rewritten query if different, then simplifications
   let hit = await tryQuery(query, 'original');
+  if (!hit && algoliaQuery !== query) hit = await tryQuery(algoliaQuery, 'rewritten');
   if (!hit) hit = await tryQuery(pluralSingularVariant(query), 'plural_singular');
   if (!hit) hit = await tryQuery(simplifyQuery(query), 'simplified');
   if (!hit) hit = await tryQuery(mainNoun(query), 'main_noun');
@@ -327,7 +348,7 @@ async function handleTextSearch(query, shopDomain) {
   return formatStorefrontResult(products, searchType, hit.query);
 }
 
-export async function smartSearch(userMessage, shopDomain) {
+export async function smartSearch(userMessage, shopDomain, conversationHistory = []) {
   if (!userMessage || !shopDomain) return null;
   const trimmed = userMessage.trim();
   if (!trimmed) return null;
@@ -345,5 +366,5 @@ export async function smartSearch(userMessage, shopDomain) {
     console.log(`[SearchRouter] SKU "${skuToken}" not found — falling back to text search`);
   }
 
-  return await handleTextSearch(trimmed, shopDomain);
+  return await handleTextSearch(trimmed, shopDomain, conversationHistory);
 }

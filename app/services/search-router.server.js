@@ -278,7 +278,7 @@ async function handleTextSearch(query, shopDomain) {
   // TIER 1: Algolia — best relevance at 200k+ scale
   if (isAlgoliaConfigured()) {
     try {
-      const result = await algoliaSearch(query, { first: 20 });
+      const result = await algoliaSearch(query, { first: 20, shopDomain });
       if (result?.products?.length > 0) {
         console.log(
           `[SearchRouter] Algolia: ${result.products.length} results for "${query}"`

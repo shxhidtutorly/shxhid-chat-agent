@@ -33,8 +33,12 @@ RULES:
 2. Set skip:true ONLY if the message has NO product search intent whatsoever
 3. Extract brand name + product type as the core query (2-5 words max)
 4. REMOVE from query: dimensions (mm, inch), voltages (V, VDC), IP ratings, sensing ranges, wire counts
-   These are NOT in product titles and hurt Algolia relevance
-5. Fix typos silently
+   These are NOT in product titles and hurt Algolia relevance.
+   EXCEPTION: NEVER strip SKU / part / model codes. Any alphanumeric token
+   with letters AND digits and length >= 5 (e.g. "BP06PP-PTT4-B", "S201-B16",
+   "ACS580", "T4171010405-001", "DSNU-20-50-P-A") is a SKU — keep it verbatim
+   and make it the ENTIRE query. Do not add brand or category words around it.
+5. Fix typos silently — but never "fix" SKU/part codes; copy them exactly.
 6. Use catalog-standard terminology (see mappings below)
 7. If conversation context is provided, use it to fill in missing product type
 
@@ -86,7 +90,19 @@ User: "thanks" or "ok" or "yes"
 
 User: "which one has the longest range?"
 Context: user was asking about photoelectric sensors
-→ {"query":"photoelectric sensor long range","skip":false,"reason":"context_used"}`;
+→ {"query":"photoelectric sensor long range","skip":false,"reason":"context_used"}
+
+User: "do you have 1/4 Inch AODD Pumps BP06PP-PTT4-B -BSK"
+→ {"query":"BP06PP-PTT4-B","skip":false,"reason":"sku_extracted"}
+
+User: "show me ABB circuit breakers S201-B16"
+→ {"query":"S201-B16","skip":false,"reason":"sku_extracted"}
+
+User: "can you find the BA25SS-STT3-A AODD pump"
+→ {"query":"BA25SS-STT3-A","skip":false,"reason":"sku_extracted"}
+
+User: "looking for DSNU-20-50-P-A"
+→ {"query":"DSNU-20-50-P-A","skip":false,"reason":"sku_only"}`;
 
 // Simple in-memory cache to avoid duplicate rewriter calls for same query
 const queryCache = new Map();

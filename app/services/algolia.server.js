@@ -168,6 +168,15 @@ export async function algoliaSearch(query, { first = 20, shopDomain } = {}) {
   const trimmed = query.trim();
   if (!trimmed) return null;
 
+  // Detect if this looks like a SKU/part code — if so, search EXACTLY as-is
+  // SKUs in Algolia are indexed in the 'sku' field; exact match is critical
+  const looksLikeSku = /^[A-Z0-9]{2,}[-\.][A-Z0-9][-A-Z0-9\.\/]{2,}$/i.test(trimmed) ||
+    (/^[A-Z]{2,}\d{2,}/.test(trimmed) && trimmed.length >= 5 && trimmed.length <= 20);
+
+  if (looksLikeSku) {
+    console.log(`[Algolia] SKU query detected — searching exact: "${trimmed}"`);
+  }
+
   const indexName = process.env.ALGOLIA_INDEX_NAME || 'shopify_products';
   console.log(`[Algolia] Searching: "${trimmed}" in "${indexName}"`);
 
@@ -193,6 +202,14 @@ export async function algoliaSearch(query, { first = 20, shopDomain } = {}) {
           'product_image', 'image', 'featured_image', 'images',
           'variants', 'sku', 'named_tags',
         ],
+        // For SKU queries: require all tokens to match (exact SKU search)
+        // For text queries: allow some words to be optional for broader matching
+        ...(looksLikeSku ? {
+          optionalWords: [],  // all words required for SKU search
+          typoTolerance: false, // no typos for SKU
+        } : {
+          typoTolerance: true,
+        }),
       }],
     });
     hits = response.results?.[0]?.hits || [];

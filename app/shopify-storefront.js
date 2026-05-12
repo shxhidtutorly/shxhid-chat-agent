@@ -18,8 +18,11 @@ const STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || '';
 
 // In-memory cache (per process). Initialized ONCE from env var.
 // After that, only the cache is used — env var is NEVER re-read at call time.
-let cachedToken = process.env.SHOPIFY_STOREFRONT_TOKEN || null;
-let envTokenDiscarded = false; // Set true after env token returns 401 — never use env token again
+// Do not read SHOPIFY_STOREFRONT_TOKEN at startup.
+// Token is always auto-created fresh via Admin REST API to avoid
+// stale token 401s on deploy. Remove this env var from Railway.
+let cachedToken = null;
+let envTokenDiscarded = true; // env var path permanently disabled
 
 // Startup diagnostics
 if (!STORE_DOMAIN) {
@@ -54,14 +57,8 @@ async function getStorefrontToken() {
  * If the env var token caused the 401, mark it as permanently discarded.
  */
 function invalidateToken() {
-  if (process.env.SHOPIFY_STOREFRONT_TOKEN && !envTokenDiscarded) {
-    console.error(
-      '[Storefront] SHOPIFY_STOREFRONT_TOKEN env var returned 401 — PERMANENTLY DISCARDING. ' +
-      'Will auto-create a fresh token via Admin REST API.'
-    );
-    envTokenDiscarded = true;
-  }
   cachedToken = null;
+  console.warn('[Storefront] Token invalidated — will auto-create fresh token');
 }
 
 /**

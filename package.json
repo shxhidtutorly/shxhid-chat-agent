@@ -20,6 +20,7 @@
     "postinstall": "prisma generate"
   },
   "dependencies": {
+    "@algolia/client-search": "^5.52.1",
     "@anthropic-ai/sdk": "^0.40.0",
     "@prisma/client": "^6.19.1",
     "@react-router/dev": "7.11.0",

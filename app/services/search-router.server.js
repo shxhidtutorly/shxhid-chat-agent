@@ -13,6 +13,8 @@
  *   Admin productVariants:    https://shopify.dev/docs/api/admin-graphql/latest/queries/productVariants
  */
 
+import { isAlgoliaConfigured, algoliaSearch } from './algolia.server.js';
+
 const STOREFRONT_HOST = "creativeautomation.ae"; // public storefront for product URLs
 
 function plainTextFromHtml(html) {
@@ -154,14 +156,23 @@ function detectSku(message) {
 }
 
 function isConversationalMessage(msg) {
+  if (!msg || typeof msg !== 'string') return true;
   const lower = msg.toLowerCase().trim();
   if (lower.length < 3) return true;
-  const chatPrefix = /^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|please|help|how|what|why|when|where|who|can you|do you|i need|i want|show me|find me|looking for|search for)\b/i;
-  if (chatPrefix.test(lower)) {
-    const remainder = lower.replace(chatPrefix, "").trim();
-    if (remainder.length < 2) return true;
-    return false; // has substance — let it search
-  }
+
+  // Pure greetings/acks with no product substance
+  const pureChat = /^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|sure|got it|great|perfect|sounds good|appreciate it|noted|understood|alright|cool|nice|good|fine)[\s!?.]*$/i;
+  if (pureChat.test(lower)) return true;
+
+  // Follow-up questions about previous results — NOT new searches
+  const followUp = /\b(other brand|another brand|different brand|any other|something else|other option|alternative|instead|other model|another model|similar to|like that|like this|show more|more like|anything else|what else|do you have|do you carry|can you show|tell me more|what about|how about)\b/i;
+  if (followUp.test(lower)) return true;
+
+  // Clarifications referencing "the" / "that" / "these" —
+  // they refer to already-shown results, not new queries
+  const clarification = /^(the (first|second|third|last|one|product|item)|that (one|product|item)|these|those|this one|all of them|both|which one)\b/i;
+  if (clarification.test(lower)) return true;
+
   return false;
 }
 
@@ -262,49 +273,57 @@ async function handleSkuSearch(sku, originalMessage, shopDomain) {
  * Stops on the first attempt that returns ≥1 product.
  */
 async function handleTextSearch(query, shopDomain) {
-  console.log(`[SearchRouter] text search: "${query}" → storefront search`);
-  const { searchWithStorefront } = await import("../storefront-service.js");
-  const attempts = [];
+  console.log(`[SearchRouter] text search: "${query}"`);
+
+  // TIER 1: Algolia — best relevance at 200k+ scale
+  if (isAlgoliaConfigured()) {
+    try {
+      const result = await algoliaSearch(query, { first: 20 });
+      if (result?.products?.length > 0) {
+        console.log(
+          `[SearchRouter] Algolia: ${result.products.length} results for "${query}"`
+        );
+        return formatStorefrontResult(result.products, 'algolia_search', query);
+      }
+      console.log(`[SearchRouter] Algolia: 0 results — trying Storefront fallback`);
+    } catch (err) {
+      console.warn(`[SearchRouter] Algolia failed (${err.message}) — falling back`);
+    }
+  }
+
+  // TIER 2: Storefront search fallback
+  const { searchWithStorefront } = await import('../storefront-service.js');
   const tried = new Set();
+  const attempts = [];
 
   const tryQuery = async (q, strategy) => {
-    if (!q || typeof q !== "string") return null;
-    const trimmed = q.trim();
-    if (!trimmed) return null;
-    const key = trimmed.toLowerCase();
-    if (tried.has(key)) return null;
-    tried.add(key);
-
+    if (!q || typeof q !== 'string') return null;
+    const t = q.trim();
+    if (!t || tried.has(t.toLowerCase())) return null;
+    tried.add(t.toLowerCase());
     try {
-      const result = await searchWithStorefront(trimmed, { first: 20, shopDomain });
-      const count = result?.products?.length || 0;
-      attempts.push({ strategy, query: trimmed, count });
-      if (count > 0) return { result, strategy, query: trimmed };
+      const r = await searchWithStorefront(t, { first: 20, shopDomain });
+      const count = r?.products?.length || 0;
+      attempts.push({ strategy, query: t, count });
+      return count > 0 ? { result: r, strategy, query: t } : null;
     } catch (err) {
       console.warn(`[SearchRouter] ${strategy} failed: ${err.message}`);
+      return null;
     }
-    return null;
   };
 
-  // Attempt 1: original
-  let hit = await tryQuery(query, "original");
+  let hit = await tryQuery(query, 'original');
+  if (!hit) hit = await tryQuery(pluralSingularVariant(query), 'plural_singular');
+  if (!hit) hit = await tryQuery(simplifyQuery(query), 'simplified');
+  if (!hit) hit = await tryQuery(mainNoun(query), 'main_noun');
 
-  // Attempt 2: plural/singular
-  if (!hit) hit = await tryQuery(pluralSingularVariant(query), "plural_singular");
-
-  // Attempt 3: simplified
-  if (!hit) hit = await tryQuery(simplifyQuery(query), "simplified");
-
-  // Attempt 4: main noun
-  if (!hit) hit = await tryQuery(mainNoun(query), "main_noun");
-
-  console.log(`[SearchRouter] attempts: ${JSON.stringify(attempts)}`);
-
+  console.log(`[SearchRouter] Storefront attempts: ${JSON.stringify(attempts)}`);
   if (!hit) return null;
 
   const products = hit.result.products.map(storefrontProductToCardShape);
-  const searchType =
-    hit.strategy === "original" ? "storefront_search" : `storefront_search_${hit.strategy}`;
+  const searchType = hit.strategy === 'original'
+    ? 'storefront_search'
+    : `storefront_search_${hit.strategy}`;
   return formatStorefrontResult(products, searchType, hit.query);
 }
 

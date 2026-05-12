@@ -104,16 +104,19 @@ function dedupeById(items) {
 }
 
 /**
- * SKU detection — patterns ordered by specificity.
- * Returns the SKU string if matched, null otherwise.
+ * SKU detection — scans every whitespace-separated token in the message.
+ * Returns the first SKU-like string found, or null.
  *
- * Patterns:
+ * Pattern coverage (single token):
  *   1. Standard alphanumeric SKU (≥6 chars):     ABC123, SKU-456-789, PROD_001
- *   2. Thread/metric standards (single word):    M12-1.5, G1/2, 3/4NPT, M8x1.25
+ *   2. Thread/metric standards:                  M12-1.5, G1/2, 3/4NPT, M8x1.25
  *   3. Explicit SKU/Part prefix:                 "SKU: ABC123", "part# 12345"
- *   4. Fraction-based parts (single word):       1/2BSP, 3/4NPT
- *   5. Mixed alphanumeric short codes:           ACS580, MGPM12 (≥5 chars,
- *                                                must have both letters & digits)
+ *   4. Fraction-based parts:                     1/2BSP, 3/4NPT
+ *   5. Mixed alphanumeric short codes (≥5 chars, has letter+digit)
+ *
+ * Multi-word inputs are supported: each token is checked independently so
+ * messages like "do you have the BA25SS-STT3-A AODD pump" still find the
+ * SKU "BA25SS-STT3-A".
  */
 function detectSku(message) {
   const normalized = message.trim();
@@ -123,10 +126,22 @@ function detectSku(message) {
   const explicitPrefix = normalized.match(/(?:sku|part(?:\s*#)?)[:\s]+([A-Z0-9][A-Z0-9\-_\.\/]{2,})/i);
   if (explicitPrefix) return explicitPrefix[1];
 
-  const words = normalized.split(/\s+/);
-  if (words.length !== 1) return null; // SKU patterns are single-token only
+  // Strip leading/trailing punctuation off each token, then test in order.
+  const tokens = normalized
+    .split(/\s+/)
+    .map((w) => w.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, ""))
+    .filter(Boolean);
 
-  const token = words[0];
+  for (const token of tokens) {
+    const candidate = matchSkuToken(token);
+    if (candidate) return candidate;
+  }
+
+  return null;
+}
+
+function matchSkuToken(token) {
+  if (!token) return null;
 
   // Skip pure measurement tokens: 24VDC, 18MM, 100A, IP67, 2INCH
   if (/^\d+(?:MM|CM|VDC|VAC|V|A|W|KW|HP|INCH|IN|FT|FEET|FOOT)$/i.test(token)) return null;
@@ -166,7 +181,7 @@ function isConversationalMessage(msg) {
   if (pureChat.test(lower)) return true;
 
   // Follow-up questions about previous results — NOT new searches
-  const followUp = /\b(other brand|another brand|different brand|any other|something else|other option|alternative|instead|other model|another model|similar to|like that|like this|show more|more like|anything else|what else|do you have|do you carry|can you show|tell me more|what about|how about)\b/i;
+  const followUp = /\b(other brand|another brand|different brand|any other|something else|other option|alternative|instead|other model|another model|similar to|like that|like this|show more|more like|anything else|what else|can you show|tell me more|what about|how about)\b/i;
   if (followUp.test(lower)) return true;
 
   // Clarifications referencing "the" / "that" / "these" —
@@ -353,10 +368,8 @@ export async function smartSearch(userMessage, shopDomain, conversationHistory =
   const trimmed = userMessage.trim();
   if (!trimmed) return null;
 
-  if (isConversationalMessage(trimmed)) {
-    return null;
-  }
-
+  // SKU check FIRST — an embedded part code overrides conversational phrasing.
+  // "do you have the BA25SS-STT3-A AODD pump" still resolves the SKU lookup.
   const skuToken = detectSku(trimmed);
   if (skuToken) {
     const skuResult = await handleSkuSearch(skuToken, trimmed, shopDomain);
@@ -364,6 +377,10 @@ export async function smartSearch(userMessage, shopDomain, conversationHistory =
     // SKU not found anywhere — fall through to plain text search using the
     // original message, so the user gets *something* rather than a dead end.
     console.log(`[SearchRouter] SKU "${skuToken}" not found — falling back to text search`);
+  }
+
+  if (isConversationalMessage(trimmed)) {
+    return null;
   }
 
   return await handleTextSearch(trimmed, shopDomain, conversationHistory);

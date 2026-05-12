@@ -89,34 +89,76 @@ export async function algoliaSearch(query, { first = 20 } = {}) {
     }
     console.log(`[Algolia] ${hits.length} results for "${trimmed}"`);
 
+    // DIAGNOSTIC: Log first hit's exact field shapes so we can fix image/variant mapping
+    if (hits.length > 0) {
+      const h = hits[0];
+      console.log(`[AlgoliaDiag] objectID=${h.objectID} title="${h.title}"`);
+      console.log(`[AlgoliaDiag] image type=${typeof h.image} value=${JSON.stringify(h.image)?.substring(0, 200)}`);
+      console.log(`[AlgoliaDiag] featured_image type=${typeof h.featured_image} value=${JSON.stringify(h.featured_image)?.substring(0, 200)}`);
+      console.log(`[AlgoliaDiag] images=${JSON.stringify(h.images)?.substring(0, 200)}`);
+      console.log(`[AlgoliaDiag] variants[0]=${JSON.stringify(h.variants?.[0])?.substring(0, 200)}`);
+      console.log(`[AlgoliaDiag] price=${h.price} price_min=${h.price_min} currency_code=${h.currency_code}`);
+    }
+
     const products = hits.map(hit => {
       const rawId = hit.objectID || hit.id || '';
       const productId = rawId.includes('gid://')
         ? rawId
         : `gid://shopify/Product/${rawId}`;
 
-      const firstVariant = hit.variants?.[0];
-      const rawVariantId = firstVariant?.id;
-      const variantId = rawVariantId
-        ? (String(rawVariantId).includes('gid://')
+      const firstVariant = Array.isArray(hit.variants) && hit.variants.length > 0
+        ? hit.variants[0]
+        : null;
+
+      // Algolia stores variant IDs as plain numbers (e.g. 44823571415113)
+      // The cart API requires GID format: gid://shopify/ProductVariant/44823571415113
+      const rawVariantId = firstVariant?.id ?? firstVariant?.variant_id ?? null;
+      const variantId = rawVariantId != null
+        ? (String(rawVariantId).startsWith('gid://')
             ? String(rawVariantId)
             : `gid://shopify/ProductVariant/${rawVariantId}`)
         : null;
 
-      const priceNum = hit.price_min ?? hit.price ?? null;
-      const currency = hit.currency_code || 'AED';
-      const price = priceNum != null
-        ? `${parseFloat(priceNum).toFixed(2)} ${currency}`
+      const variantSku = firstVariant?.sku
+        || firstVariant?.product_sku
+        || hit.sku
+        || null;
+
+      // Algolia Shopify integration price shapes:
+      // price_min: 150.00 (float, already in currency units)
+      // price: 150.00 or "150.00"
+      // variants[0].price: "150.00"
+      const rawPrice = hit.price_min ?? hit.price ?? firstVariant?.price ?? null;
+      const currency = hit.currency_code || hit.price_currency || 'AED';
+      const price = rawPrice != null && rawPrice !== ''
+        ? `${parseFloat(String(rawPrice).replace(/[^0-9.]/g, '')).toFixed(2)} ${currency}`
         : null;
 
-      // Algolia Shopify integration stores images in multiple shapes
+      // Algolia Shopify integration image field shapes:
+      // - hit.image = { src: "https://..." }  (most common)
+      // - hit.image = "https://..."           (string form)
+      // - hit.featured_image = "https://..."  (string)
+      // - hit.images = ["https://...", ...]   (array of strings)
+      // - hit.images = [{ src: "https://..." }] (array of objects)
       const imageUrl =
-        hit.image?.src ||
-        hit.image?.url ||
-        (typeof hit.featured_image === 'string' ? hit.featured_image : null) ||
-        hit.featured_image?.url ||
-        hit.images?.[0]?.src ||
-        hit.images?.[0] ||
+        // hit.image object with src
+        (hit.image && typeof hit.image === 'object' && typeof hit.image.src === 'string' && hit.image.src.startsWith('http')
+          ? hit.image.src : null) ||
+        // hit.image as string
+        (typeof hit.image === 'string' && hit.image.startsWith('http')
+          ? hit.image : null) ||
+        // featured_image as string (most common in Algolia Shopify integration)
+        (typeof hit.featured_image === 'string' && hit.featured_image.startsWith('http')
+          ? hit.featured_image : null) ||
+        // featured_image as object
+        (hit.featured_image && typeof hit.featured_image === 'object'
+          ? hit.featured_image?.url || hit.featured_image?.src : null) ||
+        // images array — string items
+        (typeof hit.images?.[0] === 'string' && hit.images[0].startsWith('http')
+          ? hit.images[0] : null) ||
+        // images array — object items
+        (hit.images?.[0] && typeof hit.images[0] === 'object'
+          ? hit.images[0]?.src || hit.images[0]?.url : null) ||
         null;
 
       const description = typeof hit.body_html === 'string'
@@ -136,7 +178,7 @@ export async function algoliaSearch(query, { first = 20 } = {}) {
         description,
         variant_id: variantId,
         merchandise_id: variantId,
-        sku: hit.sku || firstVariant?.sku || null,
+        sku: variantSku,
       };
     });
 

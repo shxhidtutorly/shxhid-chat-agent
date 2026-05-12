@@ -194,13 +194,18 @@ function extractImageUrl(product) {
   if (!product) return null;
 
   const paths = [
-    // MCP search_catalog UCP shape
+    // MCP search_catalog confirmed shape from production logs:
+    // media[0] = { type: "image", url: "...", alt_text: "..." }
+    () => product.media?.[0]?.url,
+    () => product.media?.[0]?.src,
+    // Also check nested .image in case MCP version changes
     () => product.media?.[0]?.image?.url,
     () => product.media?.[0]?.image?.src,
     () => product.media?.[0]?.preview_image?.src,
     () => product.media?.[0]?.preview_image?.url,
-    () => product.media?.[0]?.url,
-    () => product.media?.[0]?.src,
+    // Iterate all media items (not just [0]) as a fallback
+    () => product.media?.find(m => m?.url?.startsWith('http'))?.url,
+    () => product.media?.find(m => m?.image?.url)?.image?.url,
 
     // featured_media variants
     () => product.featured_media?.image?.url,

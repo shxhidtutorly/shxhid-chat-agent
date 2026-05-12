@@ -348,6 +348,21 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
       console.warn(`[Chat] SmartSearch pre-pass failed: ${smartErr.message}`);
     }
 
+    // Strip catalog-search tools when smartSearch already found products.
+    // This prevents Claude from re-searching and overwriting accurate results.
+    if (productsSentToFrontend) {
+      const before = mcpClient.tools.length;
+      mcpClient.storefrontTools = (mcpClient.storefrontTools || [])
+        .filter(t => !isCatalogSearchTool(t.name));
+      mcpClient.tools = (mcpClient.tools || [])
+        .filter(t => !isCatalogSearchTool(t.name));
+      const after = mcpClient.tools.length;
+      console.log(
+        `[Chat] Products pre-found — stripped catalog tools ` +
+        `(${before} → ${after} tools). Claude cannot re-search.`
+      );
+    }
+
     let finalMessage = { role: "user", content: userMessage };
     let fullResponseText = "";
     let currentAssistantMessage = null;

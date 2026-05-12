@@ -314,7 +314,10 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
     // ───────────────────────────────────────────────────────────────────
     try {
       const { smartSearch } = await import("../services/search-router.server.js");
-      const smart = await smartSearch(userMessage, shopDomain);
+      // Pass conversation history so query intelligence can use context
+      // (e.g., "which ones have 4mm range?" uses context "user asked about IFM sensors")
+      const historyForSearch = conversationHistory.slice(-6); // last 3 turns
+      const smart = await smartSearch(userMessage, shopDomain, historyForSearch);
       if (smart && Array.isArray(smart.products) && smart.products.length > 0) {
         console.log(`[Chat] SmartSearch pre-found ${smart.products.length} products (${smart.searchType})`);
         stream.sendMessage({ type: "product_results", products: smart.products });

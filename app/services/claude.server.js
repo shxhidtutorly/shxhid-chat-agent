@@ -48,7 +48,7 @@ export function createClaudeService() {
         const systemPrompt = getSystemPrompt(promptType);
 
         const apiParams = {
-          model: "claude-sonnet-4-6",
+          model: "claude-haiku-4-5",
           max_tokens: 4096,
           system: systemPrompt,
           messages,

@@ -14,8 +14,18 @@ async function getClient() {
   if (!appId || !apiKey) {
     throw new Error('[Algolia] ALGOLIA_APP_ID and ALGOLIA_SEARCH_KEY must be set');
   }
-  // Dynamic import so the module loads even when env vars are absent
-  const { algoliasearch } = await import('@algolia/client-search');
+  // algoliasearch package — correct server-side client
+  // Try multiple import styles to handle different package versions
+  let algoliasearch;
+  try {
+    const mod = await import('algoliasearch');
+    algoliasearch = mod.default || mod.algoliasearch || mod;
+    if (typeof algoliasearch !== 'function') {
+      throw new Error('algoliasearch is not a function after import');
+    }
+  } catch (importErr) {
+    throw new Error(`[Algolia] Failed to import algoliasearch: ${importErr.message}. Run: npm install algoliasearch`);
+  }
   _client = algoliasearch(appId, apiKey);
   return _client;
 }
@@ -34,23 +44,45 @@ export async function algoliaSearch(query, { first = 20 } = {}) {
 
   try {
     const client = await getClient();
-    const response = await client.search({
-      requests: [{
-        indexName,
-        query: trimmed,
-        hitsPerPage: first,
-        attributesToRetrieve: [
-          'id', 'objectID', 'title', 'handle', 'vendor',
-          'product_type', 'tags', 'body_html',
-          'price', 'price_min', 'price_max', 'currency_code',
-          'image', 'featured_image', 'images',
-          'variants', 'sku'
-        ],
-        typoTolerance: true,
-      }]
-    });
 
-    const hits = response.results?.[0]?.hits || [];
+    let hits = [];
+    try {
+      // algoliasearch v5 style
+      const response = await client.search({
+        requests: [{
+          indexName,
+          query: trimmed,
+          hitsPerPage: first,
+          attributesToRetrieve: [
+            'id', 'objectID', 'title', 'handle', 'vendor',
+            'product_type', 'tags', 'body_html',
+            'price', 'price_min', 'price_max', 'currency_code',
+            'image', 'featured_image', 'images',
+            'variants', 'sku'
+          ],
+        }]
+      });
+      hits = response.results?.[0]?.hits || [];
+    } catch (v5Err) {
+      // algoliasearch v4 style fallback
+      try {
+        const index = client.initIndex(indexName);
+        const response = await index.search(trimmed, {
+          hitsPerPage: first,
+          attributesToRetrieve: [
+            'id', 'objectID', 'title', 'handle', 'vendor',
+            'product_type', 'tags', 'body_html',
+            'price', 'price_min', 'price_max', 'currency_code',
+            'image', 'featured_image', 'images',
+            'variants', 'sku'
+          ],
+        });
+        hits = response.hits || [];
+      } catch (v4Err) {
+        throw new Error(`Algolia search failed (v5: ${v5Err.message}, v4: ${v4Err.message})`);
+      }
+    }
+
     if (hits.length === 0) {
       console.log(`[Algolia] 0 results for "${trimmed}"`);
       return null;

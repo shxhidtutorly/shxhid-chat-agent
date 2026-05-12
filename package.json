@@ -20,7 +20,6 @@
     "postinstall": "prisma generate"
   },
   "dependencies": {
-    "@algolia/client-search": "^5.52.1",
     "@anthropic-ai/sdk": "^0.40.0",
     "@prisma/client": "^6.19.1",
     "@react-router/dev": "7.11.0",
@@ -30,6 +29,7 @@
     "@shopify/app-bridge-react": "^4.1.6",
     "@shopify/shopify-app-react-router": "^1.0.0",
     "@shopify/shopify-app-session-storage-prisma": "^7.0.0",
+    "algoliasearch": "^5.52.1",
     "dotenv": "^16.3.1",
     "isbot": "^5.1.0",
     "posthog-node": "^4.0.0",

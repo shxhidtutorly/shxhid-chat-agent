@@ -1,32 +1,41 @@
 /**
- * Algolia Search Service — v1.0
- * Primary text search layer for 200k+ product catalog.
- * SKU exact lookups still use Admin API (admin-products.server.js).
- * Storefront search is the fallback when Algolia is not configured.
+ * Algolia Search Service — v3.0
+ *
+ * CONFIRMED field shapes from Algolia dashboard (May 2026):
+ *   product_image  → string URL (the image field)
+ *   price          → integer in AED (e.g. 4437)
+ *   sku            → string at top level
+ *   id / objectID  → numeric Shopify product ID
+ *   handle         → product handle string
+ *   variants       → NOT present in index (product-level index)
+ *
+ * Since variant IDs are not in the Algolia index, we batch-fetch them
+ * from the Storefront API after getting Algolia results.
  */
 
 let _client = null;
 
 async function getClient() {
   if (_client) return _client;
+
   const appId = process.env.ALGOLIA_APP_ID;
   const apiKey = process.env.ALGOLIA_SEARCH_KEY;
+
   if (!appId || !apiKey) {
     throw new Error('[Algolia] ALGOLIA_APP_ID and ALGOLIA_SEARCH_KEY must be set');
   }
-  // algoliasearch package — correct server-side client
-  // Try multiple import styles to handle different package versions
-  let algoliasearch;
-  try {
-    const mod = await import('algoliasearch');
-    algoliasearch = mod.default || mod.algoliasearch || mod;
-    if (typeof algoliasearch !== 'function') {
-      throw new Error('algoliasearch is not a function after import');
-    }
-  } catch (importErr) {
-    throw new Error(`[Algolia] Failed to import algoliasearch: ${importErr.message}. Run: npm install algoliasearch`);
+
+  const mod = await import('algoliasearch');
+  const algoliasearch = mod.algoliasearch || mod.default;
+
+  if (typeof algoliasearch !== 'function') {
+    throw new Error(
+      `[Algolia] Cannot find constructor. Keys: [${Object.keys(mod).join(', ')}]. Run: npm install algoliasearch`
+    );
   }
+
   _client = algoliasearch(appId, apiKey);
+  console.log('[Algolia] Client initialized');
   return _client;
 }
 
@@ -34,7 +43,68 @@ export function isAlgoliaConfigured() {
   return !!(process.env.ALGOLIA_APP_ID && process.env.ALGOLIA_SEARCH_KEY);
 }
 
-export async function algoliaSearch(query, { first = 20 } = {}) {
+/**
+ * Fetch first variant IDs for a list of product handles from Storefront API.
+ * Returns a Map of handle → { variantId, variantSku }
+ */
+async function fetchVariantIdsByHandles(handles, shopDomain) {
+  if (!handles || handles.length === 0) return new Map();
+
+  // Build a query that fetches first variant for each handle
+  const handleList = handles
+    .filter(Boolean)
+    .map((h) => `"${h}"`)
+    .join(' OR ');
+
+  const query = `
+    query GetVariantsByHandles($queryStr: String!) {
+      products(first: ${handles.length}, query: $queryStr) {
+        edges {
+          node {
+            handle
+            variants(first: 1) {
+              edges {
+                node {
+                  id
+                  sku
+                  availableForSale
+                  price { amount currencyCode }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  try {
+    const { shopifyStorefrontQuery } = await import('../shopify-storefront.js');
+    const data = await shopifyStorefrontQuery({
+      query,
+      variables: { queryStr: `handle:${handleList}` },
+      shopDomain,
+    });
+
+    const variantMap = new Map();
+    for (const { node } of data?.products?.edges || []) {
+      const firstVariant = node.variants?.edges?.[0]?.node;
+      if (firstVariant) {
+        variantMap.set(node.handle, {
+          variantId: firstVariant.id,
+          variantSku: firstVariant.sku || null,
+        });
+      }
+    }
+    console.log(`[Algolia] Fetched variant IDs for ${variantMap.size}/${handles.length} products`);
+    return variantMap;
+  } catch (err) {
+    console.warn(`[Algolia] Failed to fetch variant IDs: ${err.message}`);
+    return new Map();
+  }
+}
+
+export async function algoliaSearch(query, { first = 20, shopDomain } = {}) {
   if (!query || typeof query !== 'string') return null;
   const trimmed = query.trim();
   if (!trimmed) return null;
@@ -42,149 +112,139 @@ export async function algoliaSearch(query, { first = 20 } = {}) {
   const indexName = process.env.ALGOLIA_INDEX_NAME || 'shopify_products';
   console.log(`[Algolia] Searching: "${trimmed}" in "${indexName}"`);
 
+  let client;
   try {
-    const client = await getClient();
-
-    let hits = [];
-    try {
-      // algoliasearch v5 style
-      const response = await client.search({
-        requests: [{
-          indexName,
-          query: trimmed,
-          hitsPerPage: first,
-          attributesToRetrieve: [
-            'id', 'objectID', 'title', 'handle', 'vendor',
-            'product_type', 'tags', 'body_html',
-            'price', 'price_min', 'price_max', 'currency_code',
-            'image', 'featured_image', 'images',
-            'variants', 'sku'
-          ],
-        }]
-      });
-      hits = response.results?.[0]?.hits || [];
-    } catch (v5Err) {
-      // algoliasearch v4 style fallback
-      try {
-        const index = client.initIndex(indexName);
-        const response = await index.search(trimmed, {
-          hitsPerPage: first,
-          attributesToRetrieve: [
-            'id', 'objectID', 'title', 'handle', 'vendor',
-            'product_type', 'tags', 'body_html',
-            'price', 'price_min', 'price_max', 'currency_code',
-            'image', 'featured_image', 'images',
-            'variants', 'sku'
-          ],
-        });
-        hits = response.hits || [];
-      } catch (v4Err) {
-        throw new Error(`Algolia search failed (v5: ${v5Err.message}, v4: ${v4Err.message})`);
-      }
-    }
-
-    if (hits.length === 0) {
-      console.log(`[Algolia] 0 results for "${trimmed}"`);
-      return null;
-    }
-    console.log(`[Algolia] ${hits.length} results for "${trimmed}"`);
-
-    // DIAGNOSTIC: Log first hit's exact field shapes so we can fix image/variant mapping
-    if (hits.length > 0) {
-      const h = hits[0];
-      console.log(`[AlgoliaDiag] objectID=${h.objectID} title="${h.title}"`);
-      console.log(`[AlgoliaDiag] image type=${typeof h.image} value=${JSON.stringify(h.image)?.substring(0, 200)}`);
-      console.log(`[AlgoliaDiag] featured_image type=${typeof h.featured_image} value=${JSON.stringify(h.featured_image)?.substring(0, 200)}`);
-      console.log(`[AlgoliaDiag] images=${JSON.stringify(h.images)?.substring(0, 200)}`);
-      console.log(`[AlgoliaDiag] variants[0]=${JSON.stringify(h.variants?.[0])?.substring(0, 200)}`);
-      console.log(`[AlgoliaDiag] price=${h.price} price_min=${h.price_min} currency_code=${h.currency_code}`);
-    }
-
-    const products = hits.map(hit => {
-      const rawId = hit.objectID || hit.id || '';
-      const productId = rawId.includes('gid://')
-        ? rawId
-        : `gid://shopify/Product/${rawId}`;
-
-      const firstVariant = Array.isArray(hit.variants) && hit.variants.length > 0
-        ? hit.variants[0]
-        : null;
-
-      // Algolia stores variant IDs as plain numbers (e.g. 44823571415113)
-      // The cart API requires GID format: gid://shopify/ProductVariant/44823571415113
-      const rawVariantId = firstVariant?.id ?? firstVariant?.variant_id ?? null;
-      const variantId = rawVariantId != null
-        ? (String(rawVariantId).startsWith('gid://')
-            ? String(rawVariantId)
-            : `gid://shopify/ProductVariant/${rawVariantId}`)
-        : null;
-
-      const variantSku = firstVariant?.sku
-        || firstVariant?.product_sku
-        || hit.sku
-        || null;
-
-      // Algolia Shopify integration price shapes:
-      // price_min: 150.00 (float, already in currency units)
-      // price: 150.00 or "150.00"
-      // variants[0].price: "150.00"
-      const rawPrice = hit.price_min ?? hit.price ?? firstVariant?.price ?? null;
-      const currency = hit.currency_code || hit.price_currency || 'AED';
-      const price = rawPrice != null && rawPrice !== ''
-        ? `${parseFloat(String(rawPrice).replace(/[^0-9.]/g, '')).toFixed(2)} ${currency}`
-        : null;
-
-      // Algolia Shopify integration image field shapes:
-      // - hit.image = { src: "https://..." }  (most common)
-      // - hit.image = "https://..."           (string form)
-      // - hit.featured_image = "https://..."  (string)
-      // - hit.images = ["https://...", ...]   (array of strings)
-      // - hit.images = [{ src: "https://..." }] (array of objects)
-      const imageUrl =
-        // hit.image object with src
-        (hit.image && typeof hit.image === 'object' && typeof hit.image.src === 'string' && hit.image.src.startsWith('http')
-          ? hit.image.src : null) ||
-        // hit.image as string
-        (typeof hit.image === 'string' && hit.image.startsWith('http')
-          ? hit.image : null) ||
-        // featured_image as string (most common in Algolia Shopify integration)
-        (typeof hit.featured_image === 'string' && hit.featured_image.startsWith('http')
-          ? hit.featured_image : null) ||
-        // featured_image as object
-        (hit.featured_image && typeof hit.featured_image === 'object'
-          ? hit.featured_image?.url || hit.featured_image?.src : null) ||
-        // images array — string items
-        (typeof hit.images?.[0] === 'string' && hit.images[0].startsWith('http')
-          ? hit.images[0] : null) ||
-        // images array — object items
-        (hit.images?.[0] && typeof hit.images[0] === 'object'
-          ? hit.images[0]?.src || hit.images[0]?.url : null) ||
-        null;
-
-      const description = typeof hit.body_html === 'string'
-        ? hit.body_html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500)
-        : '';
-
-      return {
-        id: productId,
-        title: hit.title || 'Untitled Product',
-        handle: hit.handle || null,
-        vendor: hit.vendor || null,
-        image_url: imageUrl,
-        url: hit.handle
-          ? `https://www.creativeautomation.ae/products/${hit.handle}`
-          : null,
-        price,
-        description,
-        variant_id: variantId,
-        merchandise_id: variantId,
-        sku: variantSku,
-      };
-    });
-
-    return { products };
+    client = await getClient();
   } catch (err) {
-    console.error(`[Algolia] Search failed: ${err.message}`);
+    console.error(`[Algolia] Client init failed: ${err.message}`);
     return null;
   }
+
+  let hits = [];
+  try {
+    const response = await client.search({
+      requests: [{
+        indexName,
+        query: trimmed,
+        hitsPerPage: first,
+        attributesToRetrieve: [
+          'objectID', 'id', 'title', 'handle', 'vendor',
+          'product_type', 'tags', 'body_html', 'body_html_safe',
+          'price', 'variants_min_price', 'variants_max_price', 'currency_code',
+          'product_image', 'image', 'featured_image', 'images',
+          'variants', 'sku', 'named_tags',
+        ],
+      }],
+    });
+    hits = response.results?.[0]?.hits || [];
+  } catch (searchErr) {
+    const msg = searchErr.message || '';
+    if (
+      msg.includes('does not exist') ||
+      msg.includes('Index not found') ||
+      searchErr.status === 404
+    ) {
+      console.warn(
+        `[Algolia] Index "${indexName}" not found. ` +
+        `Sync at dashboard.algolia.com → Data Sources → Integrations → Shopify`
+      );
+      return null;
+    }
+    console.error(`[Algolia] Search error: ${msg}`);
+    return null;
+  }
+
+  if (hits.length === 0) {
+    console.log(`[Algolia] 0 results for "${trimmed}"`);
+    return null;
+  }
+
+  console.log(`[Algolia] ${hits.length} results for "${trimmed}"`);
+
+  // Diagnostic log for first hit to verify field shapes
+  if (hits.length > 0) {
+    const h = hits[0];
+    console.log(`[AlgoliaDiag] title="${h.title}" sku="${h.sku}" handle="${h.handle}"`);
+    console.log(`[AlgoliaDiag] product_image="${h.product_image?.substring(0, 80)}"`);
+    console.log(`[AlgoliaDiag] price=${h.price} variants_min_price=${h.variants_min_price}`);
+    console.log(`[AlgoliaDiag] has variants=${Array.isArray(h.variants) ? h.variants.length : 'none'}`);
+    console.log(`[AlgoliaDiag] objectID=${h.objectID} id=${h.id}`);
+  }
+
+  // Collect handles that need variant ID lookup
+  const handles = hits.map((h) => h.handle).filter(Boolean);
+
+  // Fetch variant IDs from Storefront (needed for Add to Cart)
+  // Pass shopDomain so the right store is queried
+  const variantMap = await fetchVariantIdsByHandles(handles, shopDomain);
+
+  const STOREFRONT_HOST = 'www.creativeautomation.ae';
+
+  const products = hits.map((hit) => {
+    const rawId = hit.objectID || hit.id || '';
+    const productId = String(rawId).startsWith('gid://')
+      ? rawId
+      : `gid://shopify/Product/${rawId}`;
+
+    // IMAGE: confirmed field is product_image (plain string URL)
+    const imageUrl =
+      (typeof hit.product_image === 'string' && hit.product_image.startsWith('http')
+        ? hit.product_image : null) ||
+      // Fallback: check other possible image fields just in case
+      (hit.image && typeof hit.image === 'object' && typeof hit.image.src === 'string'
+        ? hit.image.src : null) ||
+      (typeof hit.image === 'string' && hit.image.startsWith('http')
+        ? hit.image : null) ||
+      (typeof hit.featured_image === 'string' && hit.featured_image.startsWith('http')
+        ? hit.featured_image : null) ||
+      (typeof hit.images?.[0] === 'string' && hit.images[0].startsWith('http')
+        ? hit.images[0] : null) ||
+      null;
+
+    // PRICE: integer in AED (e.g. 4437), NOT cents
+    const rawPrice = hit.variants_min_price ?? hit.price ?? null;
+    const currency = hit.currency_code || 'AED';
+    const price = rawPrice != null
+      ? `${parseFloat(String(rawPrice)).toFixed(2)} ${currency}`
+      : null;
+
+    // VARIANT ID: from Storefront lookup (Algolia index is product-level)
+    const variantInfo = hit.handle ? variantMap.get(hit.handle) : null;
+    const variantId = variantInfo?.variantId || null;
+    const variantSku = variantInfo?.variantSku || hit.sku || null;
+
+    // DESCRIPTION: from body_html_safe (already sanitized) or body_html
+    const rawDesc = hit.body_html_safe || hit.body_html || '';
+    const description = typeof rawDesc === 'string'
+      ? rawDesc.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500)
+      : '';
+
+    const result = {
+      id: productId,
+      title: hit.title || 'Untitled Product',
+      handle: hit.handle || null,
+      vendor: hit.vendor || null,
+      image_url: imageUrl,
+      url: hit.handle
+        ? `https://${STOREFRONT_HOST}/products/${hit.handle}`
+        : null,
+      price,
+      description,
+      variant_id: variantId,
+      merchandise_id: variantId,
+      sku: variantSku,
+    };
+
+    // Log if image or variant is still missing after fix
+    if (!imageUrl) {
+      console.warn(`[Algolia] No image for "${hit.title}" — product_image=${hit.product_image}`);
+    }
+    if (!variantId) {
+      console.warn(`[Algolia] No variant_id for "${hit.title}" handle="${hit.handle}"`);
+    }
+
+    return result;
+  });
+
+  return { products };
 }

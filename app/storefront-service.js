@@ -1,24 +1,18 @@
 /**
  * Storefront Service — High-level API for cart operations and chat search
  *
- * PATCH v3.0 — April 2026
+ * PATCH v3.1 — May 2026
  *
  * KEY CHANGES:
  *
+ * 1. searchWithStorefront() — reduced default `first` from 20 to 10.
+ *    Sending 20 product cards overwhelms the chat UI. 10 is sufficient.
+ *
+ * PREVIOUS CHANGES (v3.0 — April 2026):
  * 1. searchProductsForChat() now uses STOREFRONT_SEARCH_QUERY (the `search`
  *    field) instead of SEARCH_PRODUCTS_QUERY (the `products` field).
- *    The `search` field indexes variant.sku; `products` does not.
- *    Verified against Shopify docs: shopify.dev/docs/api/storefront/2025-01/queries/search
- *
- * 2. Removed buildStorefrontQueryString() entirely. It generated
- *    `sku:*VALUE*` clauses which are NOT valid filters on the Storefront
- *    `products(query:)` connection. The only valid filters there are:
- *    title, product_type, vendor, tag, variants.price, available_for_sale.
- *    Source: shopify.dev/docs/api/storefront/2025-01/queries/products
- *    The `search` query natively handles SKU lookup without field prefixes.
- *
- * 3. Response parsing updated for the search query shape:
- *    data.search.edges[].node  (not data.products.edges[].node)
+ * 2. Removed buildStorefrontQueryString() entirely (invalid field syntax).
+ * 3. Response parsing updated for the search query shape.
  */
 
 import { shopifyStorefrontQuery, shopifyAdminGraphqlQuery } from './shopify-storefront.js';
@@ -31,9 +25,6 @@ import {
   ADD_LINES_TO_CART_MUTATION,
 } from './storefront-queries.js';
 
-// Industrial brands carried by Creative Automation. When the chat search
-// is a single brand token, we promote it to a vendor-targeted query string
-// so the Storefront index returns brand-coherent results.
 const KNOWN_BRAND_SET = new Set([
   'abb','siemens','schneider','phoenix','rockwell','allen-bradley','omron',
   'smc','festo','mitsubishi','eaton','hager','legrand','ifm','sick','turck',
@@ -43,9 +34,6 @@ const KNOWN_BRAND_SET = new Set([
 
 const SHOP_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || '';
 
-/**
- * Validate that a variant ID is a proper Shopify GID.
- */
 function isValidVariantGid(variantId) {
   if (!variantId || typeof variantId !== 'string') return false;
   return /^gid:\/\/shopify\/ProductVariant\/\d+$/.test(variantId);
@@ -53,7 +41,6 @@ function isValidVariantGid(variantId) {
 
 // ============================================
 // SEARCH PRODUCTS (used by api.cart.jsx)
-// Uses products(query:) — fine for title/handle lookups
 // ============================================
 export async function searchProducts(searchQuery) {
   if (!searchQuery || typeof searchQuery !== 'string') {
@@ -94,58 +81,8 @@ export async function searchProducts(searchQuery) {
 }
 
 // ============================================
-// CHAT-COMPATIBLE SEARCH (primary fallback when MCP returns unrelated results)
-//
-// Uses the Storefront `search` query which:
-//   1. Indexes variant.sku — essential for B2B SKU lookups
-//   2. Supports `prefix: LAST` — matches "MGPM12" → "MGPM12-10Z"
-//   3. Uses the same index as the storefront search bar
-//
-// Returns results in MCP tool response shape so processProductSearchResult()
-// in tool.server.js can process them without branching.
+// SKU LOOKUP via Admin API
 // ============================================
-
-/**
- * Build a clean, plain-text search query for the `search` field.
- *
- * The `search` field does NOT use Shopify's field-targeted syntax
- * (title:, sku:, vendor:) — it's a full-text search that automatically
- * searches across all indexed fields including variant.sku.
- *
- * We deliberately use plain freetext — no `sku:*value*` syntax —
- * because `sku:` is only valid on the Admin API's `productVariants`
- * query, NOT the Storefront API's `products` or `search` queries.
- *
- * For SKU-like tokens, the search engine naturally finds products
- * whose variant.sku contains that token. With `prefix: LAST` in the
- * GraphQL query, even partial SKU strings match.
- */
-function buildSearchQueryString(rawQuery) {
-  if (!rawQuery || typeof rawQuery !== 'string') return '';
-  const trimmed = rawQuery.trim();
-  if (!trimmed) return '';
-
-  // v4.1: Brand-targeted boost. Single-token query that matches a known brand
-  // → expand to vendor:BRAND OR title:BRAND OR tag:BRAND. This keeps Storefront
-  // search relevance focused on actual brand inventory rather than text matches.
-  const tokens = trimmed.split(/\s+/);
-  if (tokens.length === 1) {
-    const lower = tokens[0].toLowerCase();
-    if (KNOWN_BRAND_SET.has(lower)) {
-      const v = tokens[0];
-      return `vendor:${v} OR title:${v} OR tag:${v}`;
-    }
-  }
-  return trimmed;
-}
-
-/**
- * v4.1: Exact SKU lookup via Admin API productVariants(query: "sku:VALUE").
- *
- * Returns an MCP-shaped tool response so processProductSearchResult() can
- * process it without branching. Filters to exact-equality SKU matches to
- * dodge the Admin API's known sku-substring bug.
- */
 export async function searchVariantBySku(sku, { first = 5, shopDomain } = {}) {
   if (!sku || typeof sku !== 'string') {
     throw new Error('SKU is required');
@@ -173,8 +110,6 @@ export async function searchVariantBySku(sku, { first = 5, shopDomain } = {}) {
     return { content: [{ type: 'text', text: JSON.stringify({ products: [] }) }] };
   }
 
-  // Post-filter: prefer exact-equality matches (Admin sku: query has known
-  // substring bug). If no exact, fall back to all matches.
   const skuUpper = cleaned.toUpperCase();
   const exact = edges.filter((e) => String(e.node.sku || '').toUpperCase() === skuUpper);
   const used = exact.length > 0 ? exact : edges;
@@ -182,7 +117,6 @@ export async function searchVariantBySku(sku, { first = 5, shopDomain } = {}) {
     console.log(`[StorefrontService:sku] No exact match — using ${edges.length} substring match(es)`);
   }
 
-  // Group variants by parent product (so we don't return the same product twice)
   const byProduct = new Map();
   for (const { node: variant } of used) {
     const product = variant.product;
@@ -210,7 +144,7 @@ export async function searchVariantBySku(sku, { first = 5, shopDomain } = {}) {
         title: v.title,
         sku: v.sku,
         available: v.availableForSale,
-        price: v.price, // Admin returns string amount; tool.server.formatPrice handles it
+        price: v.price,
       })),
       sku: variants[0]?.sku || null,
     });
@@ -221,19 +155,17 @@ export async function searchVariantBySku(sku, { first = 5, shopDomain } = {}) {
 }
 
 /**
- * Plain-text Storefront search — v5.0
+ * Plain-text Storefront search — v5.1
  *
  * Calls Storefront `search(query: ..., types: PRODUCT, prefix: LAST)` with the
  * user's raw text. NO productFilters, NO `vendor:` prefixes, NO query DSL.
- * Shopify's search engine indexes title, description, vendor, productType,
- * tags, and variant.sku — and ranks results by relevance.
  *
- * Docs: https://shopify.dev/docs/api/storefront/latest/queries/search
+ * v3.1 change: `first` default reduced from 20 → 10.
  *
  * Returns { products, totalCount } in a clean shape that the frontend card
  * renderer expects, or null when no results.
  */
-export async function searchWithStorefront(query, { first = 20, shopDomain } = {}) {
+export async function searchWithStorefront(query, { first = 10, shopDomain } = {}) {
   if (!query || typeof query !== 'string') return null;
   const trimmed = query.trim();
   if (!trimmed) return null;
@@ -286,11 +218,6 @@ export async function searchWithStorefront(query, { first = 20, shopDomain } = {
   return { products, totalCount };
 }
 
-/**
- * Detect if a query string looks like a SKU (alphanumeric + at least one digit
- * + at least one letter, length ≥4, no spaces). Used by chat.jsx to decide
- * whether to attempt searchVariantBySku() before generic search.
- */
 export function looksLikeSku(query) {
   if (!query || typeof query !== 'string') return false;
   const t = query.trim();
@@ -301,19 +228,18 @@ export function looksLikeSku(query) {
   return true;
 }
 
-export async function searchProductsForChat(searchQuery, { first = 50, shopDomain } = {}) {
+export async function searchProductsForChat(searchQuery, { first = 10, shopDomain } = {}) {
   if (!searchQuery || typeof searchQuery !== 'string') {
     throw new Error('Search query is required');
   }
 
   const trimmed = searchQuery.trim();
-  const queryString = buildSearchQueryString(trimmed);
 
-  console.log(`[StorefrontService:chat] Search query: "${queryString.substring(0, 80)}"`);
+  console.log(`[StorefrontService:chat] Search query: "${trimmed.substring(0, 80)}"`);
 
   const data = await shopifyStorefrontQuery({
     query: STOREFRONT_SEARCH_QUERY,
-    variables: { query: queryString, first },
+    variables: { query: trimmed, first },
     shopDomain,
   });
 
@@ -324,13 +250,12 @@ export async function searchProductsForChat(searchQuery, { first = 50, shopDomai
   }
 
   const products = edges.map(({ node }) => {
-    // node is a Product (we specified types: PRODUCT in the query)
     const variants = (node.variants?.edges || []).map(({ node: v }) => ({
       id: v.id,
       title: v.title,
       sku: v.sku,
       available: v.availableForSale,
-      price: v.price, // { amount, currencyCode } — formatPrice handles this
+      price: v.price,
     }));
 
     return {
@@ -344,7 +269,7 @@ export async function searchProductsForChat(searchQuery, { first = 50, shopDomai
       tags: node.tags,
       image_url: node.featuredImage?.url || '',
       featuredImage: node.featuredImage,
-      priceRange: node.priceRange, // { minVariantPrice, maxVariantPrice }
+      priceRange: node.priceRange,
       variants,
       sku: variants[0]?.sku || null,
     };
@@ -352,7 +277,6 @@ export async function searchProductsForChat(searchQuery, { first = 50, shopDomai
 
   console.log(`[StorefrontService:chat] search() returned ${products.length} products for "${trimmed.substring(0, 40)}"`);
 
-  // Wrap in MCP tool response shape that processProductSearchResult expects
   return {
     content: [{
       type: 'text',

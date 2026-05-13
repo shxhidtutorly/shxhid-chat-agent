@@ -1,12 +1,25 @@
 /**
- * Search Router — v5.0 (Simplified)
+ * Search Router — v5.1 (Production Fix)
+ *
+ * CHANGES (v5.1 — May 2026):
+ *
+ * CRITICAL BUG FIX: matchSkuToken Pattern 4 was too broad.
+ *   The old regex `^\d+\/\d+[A-Z]*$` matched ANY fraction because [A-Z]* allows
+ *   ZERO letters. This caused "1/4", "5/2", "3/4" etc. to be classified as SKUs,
+ *   triggering an admin lookup that fails, then a storefront search for "1/4"
+ *   which returns 18,000+ completely irrelevant products.
+ *
+ *   Fixed: Pattern 4 now requires 2+ INDUSTRIAL letters after the fraction
+ *   (NPT, BSP, BSPP, BSPT, etc.) and explicitly excludes dimension units
+ *   (INCH, IN, FT, MM, CM). Pure fractions and valve configs (1/4, 5/2, 3/4)
+ *   are NOT SKUs — they fall through to handleTextSearch where QueryIntel
+ *   correctly interprets them in context.
+ *
+ * RESULT COUNT: Reduced from 20 to 10 across all search paths.
  *
  * Two paths only:
  *   SKU → Admin productVariants exact lookup (then Storefront fallback)
  *   Everything else → Storefront `search` (plain text, no filters)
- *
- * No brand gates. No vendor filters. No query classification beyond SKU
- * detection. Trust Shopify's search relevance ranking.
  *
  * Shopify docs:
  *   Storefront search:        https://shopify.dev/docs/api/storefront/latest/queries/search
@@ -107,16 +120,17 @@ function dedupeById(items) {
  * SKU detection — scans every whitespace-separated token in the message.
  * Returns the first SKU-like string found, or null.
  *
+ * CRITICAL FIX v5.1:
+ *   Pattern 4 now requires INDUSTRIAL THREAD SUFFIX (2+ letters, not dimension units).
+ *   This prevents "1/4", "5/2", "3/4" from being classified as SKUs when they
+ *   are dimensions ("1/4 Inch AODD Pumps") or valve configs ("5/2 way solenoid valve").
+ *
  * Pattern coverage (single token):
- *   1. Standard alphanumeric SKU (≥6 chars):     ABC123, SKU-456-789, PROD_001
+ *   1. Standard alphanumeric SKUs (≥6 chars):     ABC123, SKU-456-789, PROD_001
  *   2. Thread/metric standards:                  M12-1.5, G1/2, 3/4NPT, M8x1.25
  *   3. Explicit SKU/Part prefix:                 "SKU: ABC123", "part# 12345"
- *   4. Fraction-based parts:                     1/2BSP, 3/4NPT
+ *   4. Fraction WITH industrial thread suffix:   1/4NPT, 3/4BSP, 1/2BSPP (NOT plain 1/4, 5/2)
  *   5. Mixed alphanumeric short codes (≥5 chars, has letter+digit)
- *
- * Multi-word inputs are supported: each token is checked independently so
- * messages like "do you have the BA25SS-STT3-A AODD pump" still find the
- * SKU "BA25SS-STT3-A".
  */
 function detectSku(message) {
   const normalized = message.trim();
@@ -157,9 +171,26 @@ function matchSkuToken(token) {
     return token;
   }
 
-  // Pattern 4: Fraction-based part codes (1/2, 3/4NPT)
-  if (/^\d+\/\d+[A-Z]*$/i.test(token)) {
-    return token;
+  // Pattern 4 (FIXED v5.1): Fraction-based part codes WITH industrial suffix ONLY
+  //
+  // ALLOWED (industrial thread standards):
+  //   1/4NPT → NPT = National Pipe Thread ✅
+  //   3/4BSP → BSP = British Standard Pipe ✅
+  //   1/2BSPP → BSPP = BSP Parallel ✅
+  //   1/2BSPT → BSPT = BSP Tapered ✅
+  //
+  // REJECTED (dimensions or valve configs — NOT SKUs):
+  //   1/4   → no suffix: bare fraction = dimension ("1/4 Inch AODD Pump") ✅
+  //   5/2   → no suffix: valve config = "5 ports / 2 positions" ✅
+  //   3/4   → no suffix: bare fraction = pipe size designation ✅
+  //   1/4INCH → dimension unit suffix ✅
+  //   1/4IN   → dimension unit suffix ✅
+  //
+  // Requires: 2+ letters after fraction AND NOT a dimension unit
+  if (/^\d+\/\d+[A-Z]{2,}$/i.test(token)) {
+    const suffix = (token.match(/[A-Z]+$/i) || [''])[0].toUpperCase();
+    const dimensionUnits = new Set(['INCH', 'INCHES', 'IN', 'FT', 'FEET', 'FOOT', 'MM', 'CM', 'KM', 'UM']);
+    if (!dimensionUnits.has(suffix)) return token;
   }
 
   // Pattern 5: Short mixed alphanumeric codes (≥5 chars, has letter+digit)
@@ -287,13 +318,12 @@ async function handleSkuSearch(sku, originalMessage, shopDomain) {
  *   4. Main noun only (last 3+ char word)
  *
  * Stops on the first attempt that returns ≥1 product.
+ * All searches capped at first: 10 (was 20).
  */
 async function handleTextSearch(query, shopDomain, conversationHistory = []) {
   console.log(`[SearchRouter] text search: "${query}"`);
 
   // ── Query Intelligence: rewrite query for best Algolia results ──
-  // Run query rewriter BEFORE Algolia. Uses conversation context to
-  // understand follow-up questions like "which ones have 4mm range?"
   let algoliaQuery = query;
   let skipAlgolia = false;
 
@@ -304,14 +334,15 @@ async function handleTextSearch(query, shopDomain, conversationHistory = []) {
       algoliaQuery = intel.query || query;
     } catch (err) {
       console.warn(`[SearchRouter] Query intelligence failed: ${err.message}`);
-      algoliaQuery = query; // fall back to original
+      algoliaQuery = query;
     }
   }
 
   // TIER 1: Algolia — best relevance for brand/product-type queries
   if (isAlgoliaConfigured() && !skipAlgolia && algoliaQuery) {
     try {
-      const result = await algoliaSearch(algoliaQuery, { first: 20, shopDomain });
+      // Cap at 10 results (was 20)
+      const result = await algoliaSearch(algoliaQuery, { first: 10, shopDomain });
       if (result?.products?.length > 0) {
         console.log(
           `[SearchRouter] Algolia: ${result.products.length} results for "${algoliaQuery}"`
@@ -325,7 +356,6 @@ async function handleTextSearch(query, shopDomain, conversationHistory = []) {
   }
 
   // TIER 2: Storefront search — better for spec/attribute queries
-  // Also used when Algolia returns 0 results or was skipped
   const { searchWithStorefront } = await import('../storefront-service.js');
   const tried = new Set();
   const attempts = [];
@@ -336,7 +366,8 @@ async function handleTextSearch(query, shopDomain, conversationHistory = []) {
     if (!t || tried.has(t.toLowerCase())) return null;
     tried.add(t.toLowerCase());
     try {
-      const r = await searchWithStorefront(t, { first: 20, shopDomain });
+      // Cap at 10 results (was 20)
+      const r = await searchWithStorefront(t, { first: 10, shopDomain });
       const count = r?.products?.length || 0;
       attempts.push({ strategy, query: t, count });
       return count > 0 ? { result: r, strategy, query: t } : null;
@@ -346,7 +377,6 @@ async function handleTextSearch(query, shopDomain, conversationHistory = []) {
     }
   };
 
-  // Try original query, then the rewritten query if different, then simplifications
   let hit = await tryQuery(query, 'original');
   if (!hit && algoliaQuery !== query) hit = await tryQuery(algoliaQuery, 'rewritten');
   if (!hit) hit = await tryQuery(pluralSingularVariant(query), 'plural_singular');

@@ -1,13 +1,27 @@
 /**
- * Query Intelligence Service — v1.0
+ * Query Intelligence Service — v1.1 (Production Fix)
+ *
+ * CHANGES (v1.1 — May 2026):
+ *
+ * FIX 1: Size designations are PRODUCT IDENTIFIERS, not specs to strip.
+ *   Previous SYSTEM_PROMPT said "REMOVE dimensions (mm, inch)" too broadly.
+ *   This caused queries like "1/4 inch AODD pump" to potentially lose "1/4 inch"
+ *   — but the Algolia index has products literally titled "1/4 Inch AODD Pumps".
+ *   Stripping the size makes it impossible to find the right pump.
+ *
+ *   UPDATED RULE: Keep sizes/dimensions when they ARE the product designation
+ *   (pump size, pipe size, valve port count). Strip them only when they are
+ *   separate filter criteria unrelated to the product name/type.
+ *
+ * FIX 2: Valve configurations (5/2 way, 3/2 way) are NOT SKUs.
+ *   Added explicit example in prompt: "5/2 way solenoid valve" → keep "5/2 way".
+ *   The SKU detector was fixed separately (Pattern 4), but QueryIntel should
+ *   also understand valve port/position notation.
+ *
+ * FIX 3: Added examples for AODD pump sizes and valve configurations.
  *
  * Uses Claude Haiku (fast, cheap) to convert natural language
  * user messages into optimized 2-5 word Algolia search queries.
- *
- * Why Haiku here (not Sonnet):
- *   - Task is simple: extract search intent, ~20 token output
- *   - ~200ms latency, $0.0001 per call
- *   - Runs in parallel with MCP connection — net latency ~0ms
  *
  * Input:  user message + last 2 conversation turns (context)
  * Output: { query, skip, reason }
@@ -32,15 +46,33 @@ RULES:
 1. Output ONLY valid JSON on a single line: {"query":"...","skip":false,"reason":"..."}
 2. Set skip:true ONLY if the message has NO product search intent whatsoever
 3. Extract brand name + product type as the core query (2-5 words max)
-4. REMOVE from query: dimensions (mm, inch), voltages (V, VDC), IP ratings, sensing ranges, wire counts
-   These are NOT in product titles and hurt Algolia relevance.
-   EXCEPTION: NEVER strip SKU / part / model codes. Any alphanumeric token
+
+4. WHAT TO STRIP vs KEEP:
+   STRIP (these are filter specs that don't appear in product titles):
+     - Electrical specs: voltage (24V, 230VAC, 400V), amperage (100A), frequency (50Hz)
+     - IP/protection ratings: IP67, IP68
+     - Wire count: "3 wire", "4 wire"
+     - Sensing range as standalone spec: "4mm range", "sensing distance 50mm"
+     - Generic fillers: industrial, commercial, heavy duty, professional grade
+
+   KEEP (these ARE the product designation or appear in the product title):
+     - Pipe/pump sizes: "1/4 inch", "1/2 inch", "3/4 inch", "2 inch", "3 inch"
+       → "1/4 Inch AODD Pumps" is a real product title; never strip this size
+     - Valve port/position config: "5/2 way", "3/2 way", "4/2 way"
+       → "5/2 way solenoid valve" — the "5/2 way" IS the valve type
+     - Cable/hose length when it identifies the product: "20m ethernet cable", "5m sensor cable"
+     - Thread type: NPT, BSP, BSPP (these are product attributes in titles)
+     - Power rating when it's the product designator: "30kW inverter drive"
+     - Body material when in title: "aluminium", "stainless steel", "polypropylene"
+
+5. EXCEPTION — NEVER strip SKU / part / model codes. Any alphanumeric token
    with letters AND digits and length >= 5 (e.g. "BP06PP-PTT4-B", "S201-B16",
    "ACS580", "T4171010405-001", "DSNU-20-50-P-A") is a SKU — keep it verbatim
-   and make it the ENTIRE query. Do not add brand or category words around it.
-5. Fix typos silently — but never "fix" SKU/part codes; copy them exactly.
-6. Use catalog-standard terminology (see mappings below)
-7. If conversation context is provided, use it to fill in missing product type
+   and make it the ENTIRE query.
+
+6. Fix typos silently — but never "fix" SKU/part codes; copy them exactly.
+7. Use catalog-standard terminology (see mappings below)
+8. If conversation context is provided, use it to fill in missing product type
 
 TERMINOLOGY MAPPINGS (user term → catalog term):
 "flush mount/flush type/embeddable" → "flush" (keep it)
@@ -58,10 +90,27 @@ TERMINOLOGY MAPPINGS (user term → catalog term):
 "encoder/rotary encoder" → "rotary encoder"
 "RTD/thermocouple" → keep as-is
 "current transformer/CT" → "current transformer"
+"5/2 way / 5-2 way / 5/2-way" → keep as "5/2 solenoid valve" (valve type, not SKU)
+"3/2 way / 3-2 way" → keep as "3/2 solenoid valve"
 
 EXAMPLES:
 User: "show me flush mount proximity sensors"
 → {"query":"flush inductive proximity sensor","skip":false,"reason":"spec_cleaned"}
+
+User: "1/4 Inch AODD Pumps"
+→ {"query":"1/4 inch AODD pump","skip":false,"reason":"size_designation_kept"}
+
+User: "do you have 1/4 inch BSK pumps?"
+→ {"query":"1/4 inch AODD pump BSK","skip":false,"reason":"size_kept_brand_added"}
+
+User: "1/2 inch polypropylene AODD pump"
+→ {"query":"1/2 inch AODD pump polypropylene","skip":false,"reason":"size_and_material_kept"}
+
+User: "5/2 way solenoid valve"
+→ {"query":"5/2 solenoid valve","skip":false,"reason":"valve_config_kept"}
+
+User: "3/2 way directional control valve"
+→ {"query":"3/2 directional control valve","skip":false,"reason":"valve_config_kept"}
 
 User: "4mm sensing range M12"
 Context: user was asking about IFM sensors
@@ -71,13 +120,16 @@ User: "te connectivity productsd"
 → {"query":"TE Connectivity","skip":false,"reason":"brand_query_typo_fixed"}
 
 User: "NPN output 3 wire 24VDC"
-→ {"query":"NPN proximity sensor","skip":false,"reason":"specs_stripped"}
+→ {"query":"NPN proximity sensor","skip":false,"reason":"specs_stripped_kept_output_type"}
 
 User: "AODD pump 3 inch aluminum body"
-→ {"query":"3 inch AODD pump aluminium","skip":false,"reason":"cleaned"}
+→ {"query":"3 inch AODD pump aluminium","skip":false,"reason":"size_and_material_kept"}
 
 User: "push in fittings 6mm"
 → {"query":"push-in pneumatic fitting","skip":false,"reason":"term_mapped"}
+
+User: "inverter drive 30kw power rating"
+→ {"query":"inverter drive 30kw","skip":false,"reason":"power_rating_kept_as_designator"}
 
 User: "M12 threaded body non flush"
 → {"query":"M12 non-flush proximity sensor","skip":false,"reason":"spec_mapped"}
@@ -99,10 +151,16 @@ User: "show me ABB circuit breakers S201-B16"
 → {"query":"S201-B16","skip":false,"reason":"sku_extracted"}
 
 User: "can you find the BA25SS-STT3-A AODD pump"
-→ {"query":"BA25SS-STT3-A","skip":false,"reason":"sku_extracted"}
+→ {"query":"BA25SS-STT3-A","skip":false,"reason":"sku_only"}
 
 User: "looking for DSNU-20-50-P-A"
-→ {"query":"DSNU-20-50-P-A","skip":false,"reason":"sku_only"}`;
+→ {"query":"DSNU-20-50-P-A","skip":false,"reason":"sku_only"}
+
+User: "I need pneumatic components for manufacturing"
+→ {"query":"pneumatic cylinder valve","skip":false,"reason":"broad_category_expanded"}
+
+User: "pneumatic parts"
+→ {"query":"pneumatic cylinder SMC","skip":false,"reason":"broad_category_expanded_with_brand"}`;
 
 // Simple in-memory cache to avoid duplicate rewriter calls for same query
 const queryCache = new Map();

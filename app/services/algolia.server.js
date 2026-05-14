@@ -68,29 +68,6 @@ async function fetchVariantIdsByHandles(handles, shopDomain) {
   const { shopifyStorefrontQuery } = await import('../shopify-storefront.js');
   const variantMap = new Map();
 
-  const batchSize = 15;
-  const BATCH_QUERY = `
-    query GetVariantsByHandles($queryStr: String!, $count: Int!) {
-      products(first: $count, query: $queryStr) {
-        edges {
-          node {
-            handle
-            variants(first: 1) {
-              edges {
-                node {
-                  id
-                  sku
-                  availableForSale
-                  price { amount currencyCode }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  `;
-
   const SINGLE_QUERY = `
     query GetVariantByHandle($handle: String!) {
       productByHandle(handle: $handle) {
@@ -121,46 +98,8 @@ async function fetchVariantIdsByHandles(handles, shopDomain) {
       } catch (err) {
         console.warn(`[Algolia] variant lookup failed for "${handle}": ${err.message}`);
       }
-    } catch (err) {
-      console.warn(`[Algolia] Batch variant fetch failed: ${err.message}`);
-    }
-  }
-
-  // Step 2: per-handle fallback for anything the batch missed
-  const missing = handles.filter(h => h && !variantMap.has(h));
-
-  if (missing.length > 0) {
-    console.log(`[Algolia] Per-handle fallback for ${missing.length} missed: ${missing.join(', ')}`);
-    await Promise.allSettled(
-      missing.map(async (handle) => {
-        try {
-          const data = await shopifyStorefrontQuery({
-            query: SINGLE_QUERY,
-            variables: { handle },
-            shopDomain,
-          });
-          const product = data?.productByHandle;
-          if (product) {
-            const firstVariant = product.variants?.edges?.[0]?.node;
-            if (firstVariant) {
-              variantMap.set(handle, {
-                variantId: firstVariant.id,
-                variantSku: firstVariant.sku || null,
-              });
-            }
-          }
-        } catch (err) {
-          console.warn(`[Algolia] Single handle fetch failed for "${handle}": ${err.message}`);
-        }
-      })
-    );
-  }
-
-  const stillMissing = handles.filter(h => h && !variantMap.has(h));
-  if (stillMissing.length > 0) {
-    console.warn(`[Algolia] Variant IDs unresolvable: ${stillMissing.join(', ')}`);
-  }
-  console.log(`[Algolia] Variant IDs resolved: ${variantMap.size}/${handles.length}`);
+    })
+  );
 
   console.log(`[Algolia] variant IDs resolved: ${variantMap.size}/${handles.length}`);
   return variantMap;

@@ -1,5 +1,5 @@
 /**
- * Search Router — v5.0 (Simplified)
+ * Search Router -- v5.0 (Simplified)
  *
  * Two paths only:
  *   SKU → Admin productVariants exact lookup (then Storefront fallback)
@@ -105,15 +105,15 @@ function dedupeById(items) {
 }
 
 /**
- * SKU detection — scans every whitespace-separated token in the message.
+ * SKU detection -- scans every whitespace-separated token in the message.
  * Returns the first SKU-like string found, or null.
  *
  * Pattern coverage (single token):
- *   1. Standard alphanumeric SKU (≥6 chars):     ABC123, SKU-456-789, PROD_001
+ *   1. Standard alphanumeric SKU (>=6 chars):     ABC123, SKU-456-789, PROD_001
  *   2. Thread/metric standards:                  M12-1.5, G1/2, 3/4NPT, M8x1.25
  *   3. Explicit SKU/Part prefix:                 "SKU: ABC123", "part# 12345"
  *   4. Fraction-based parts:                     1/2BSP, 3/4NPT
- *   5. Mixed alphanumeric short codes (≥5 chars, has letter+digit)
+ *   5. Mixed alphanumeric short codes (>=5 chars, has letter+digit)
  *
  * Multi-word inputs are supported: each token is checked independently so
  * messages like "do you have the BA25SS-STT3-A AODD pump" still find the
@@ -148,12 +148,12 @@ function matchSkuToken(token) {
   if (/^\d+(?:MM|CM|VDC|VAC|V|A|W|KW|HP|INCH|IN|FT|FEET|FOOT)$/i.test(token)) return null;
   if (/^IP\d{2}$/i.test(token)) return null;
 
-  // Pattern 1: Standard alphanumeric SKUs (≥6 chars, contains digit+letter)
+  // Pattern 1: Standard alphanumeric SKUs (>=6 chars, contains digit+letter)
   if (/^[A-Z0-9][A-Z0-9\-_]{5,}$/i.test(token) && /[A-Za-z]/.test(token) && /\d/.test(token)) {
     return token;
   }
 
-  // Pattern 2 (FIXED): Thread/metric codes — REQUIRE leading letter(s).
+  // Pattern 2 (FIXED): Thread/metric codes -- REQUIRE leading letter(s).
   // Matches: M12-1.5, G1/2, M8x1.25, R1/4
   // Rejects: 1/2, 3/4, 5/2, 1.5, 2.5 (no leading letter)
   // Bare-fraction + thread suffix (3/4NPT, 1/2BSP) is handled by Pattern 4.
@@ -162,14 +162,14 @@ function matchSkuToken(token) {
   }
 
   // Pattern 4: Fraction-based part codes WITH a thread suffix (3/4NPT, 1/2BSP).
-  // The trailing letters are required — a bare "1/2" / "3/4" is a dimension,
+  // The trailing letters are required -- a bare "1/2" / "3/4" is a dimension,
   // not a SKU, and previously matched here, sending dimension queries to the
   // SKU lookup path and back to a broad Storefront fallback. Reject those.
   if (/^\d+\/\d+[A-Z]+$/i.test(token)) {
     return token;
   }
 
-  // Pattern 5: Short mixed alphanumeric codes (≥5 chars, has letter+digit)
+  // Pattern 5: Short mixed alphanumeric codes (>=5 chars, has letter+digit)
   // Catches ACS580, MGPM12, 6SL3220
   if (token.length >= 5 && /[A-Za-z]/.test(token) && /\d/.test(token) && /^[A-Z0-9\-\.\/]+$/i.test(token)) {
     return token;
@@ -219,11 +219,11 @@ function isConversationalMessage(msg) {
   const pureChat = /^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|sure|got it|great|perfect|sounds good|appreciate it|noted|understood|alright|cool|nice|good|fine)[\s!?.]*$/i;
   if (pureChat.test(lower)) return true;
 
-  // Follow-up questions about previous results — NOT new searches
+  // Follow-up questions about previous results -- NOT new searches
   const followUp = /\b(other brand|another brand|different brand|any other|something else|other option|alternative|instead|other model|another model|similar to|like that|like this|show more|more like|anything else|what else|can you show|tell me more|what about|how about)\b/i;
   if (followUp.test(lower)) return true;
 
-  // Clarifications referencing "the" / "that" / "these" —
+  // Clarifications referencing "the" / "that" / "these" --
   // they refer to already-shown results, not new queries
   const clarification = /^(the (first|second|third|last|one|product|item)|that (one|product|item)|these|those|this one|all of them|both|which one)\b/i;
   if (clarification.test(lower)) return true;
@@ -259,7 +259,7 @@ function formatStorefrontResult(products, searchType, query) {
   return {
     products,
     searchType,
-    systemHint: `Found ${products.length} product(s) for "${query}". Acknowledge briefly — cards are already displayed.`,
+    systemHint: `Found ${products.length} product(s) for "${query}". Acknowledge briefly -- cards are already displayed.`,
   };
 }
 
@@ -278,7 +278,7 @@ async function handleSkuSearch(sku, originalMessage, shopDomain) {
           searchType: result.type === "exact" ? "sku_exact" : "sku_partial",
           systemHint:
             result.type === "exact"
-              ? `Found exact SKU match for "${sku}". Acknowledge briefly — the product card is already shown.`
+              ? `Found exact SKU match for "${sku}". Acknowledge briefly -- the product card is already shown.`
               : `Found similar products for "${sku}". Tell the user no exact match was found and these are alternatives.`,
         };
       }
@@ -295,7 +295,7 @@ async function handleSkuSearch(sku, originalMessage, shopDomain) {
     && /\d/.test(sku);
 
   if (!tokenIsRichEnough) {
-    console.log(`[SearchRouter] SKU "${sku}" too short/numeric for Storefront fallback — returning null so caller can try text search`);
+    console.log(`[SearchRouter] SKU "${sku}" too short/numeric for Storefront fallback -- returning null so caller can try text search`);
     return null;
   }
 
@@ -332,16 +332,16 @@ async function handleSkuSearch(sku, originalMessage, shopDomain) {
 
 /**
  * Three-tier search hierarchy, explicit and auditable:
- *   TIER 1 — Algolia (primary)        single request, hitsPerPage=10
- *   TIER 2 — Admin productByQuery     same data, tighter index, max 10
- *   TIER 3 — Storefront search        last resort, max 10, rejects if
+ *   TIER 1 -- Algolia (primary)        single request, hitsPerPage=10
+ *   TIER 2 -- Admin productByQuery     same data, tighter index, max 10
+ *   TIER 3 -- Storefront search        last resort, max 10, rejects if
  *                                     totalCount > 1000 (too broad → noise)
  *
- * Algolia wins outright when it returns ≥1 product — tiers 2 and 3 are
+ * Algolia wins outright when it returns >=1 product -- tiers 2 and 3 are
  * never consulted in that case. QueryIntel.skip → early null (no search).
  */
 async function handleTextSearch(query, shopDomain, conversationHistory = []) {
-  console.log(`[SearchRouter] ─── text search start: "${query}" ───`);
+  console.log(`[SearchRouter] --- text search start: "${query}" ---`);
 
   // Run QueryIntel for the rewritten query that Algolia performs best on.
   let algoliaQuery = query;
@@ -354,18 +354,18 @@ async function handleTextSearch(query, shopDomain, conversationHistory = []) {
       algoliaQuery = intel.query || query;
       console.log(`[SearchRouter] QueryIntel: "${query}" → "${algoliaQuery}" (skip=${skipSearch}, reason=${intel.reason})`);
     } catch (err) {
-      console.warn(`[SearchRouter] QueryIntel error: ${err.message} — using original query`);
+      console.warn(`[SearchRouter] QueryIntel error: ${err.message} -- using original query`);
     }
   }
 
-  // ─── EARLY EXIT: conversational input, NO product search at all ────
+  // --- EARLY EXIT: conversational input, NO product search at all ----
   // This fixes Bug B: previously Storefront ran on "hi how are you" etc.
   if (skipSearch) {
-    console.log(`[SearchRouter] Conversational input detected — skipping ALL search tiers`);
+    console.log(`[SearchRouter] Conversational input detected -- skipping ALL search tiers`);
     return null;
   }
 
-  // ─── TIER 1: ALGOLIA (PRIMARY) ─────────────────────────────────────
+  // --- TIER 1: ALGOLIA (PRIMARY) -------------------------------------
   // Single request, max 10 results, no pagination.
   if (isAlgoliaConfigured() && algoliaQuery) {
     console.log(`[SearchRouter] TIER 1 (Algolia): querying "${algoliaQuery}"`);
@@ -374,25 +374,25 @@ async function handleTextSearch(query, shopDomain, conversationHistory = []) {
       const count = result?.products?.length || 0;
       console.log(`[SearchRouter] TIER 1 (Algolia): ${count} results`);
       if (count > 0) {
-        console.log(`[SearchRouter] ✓ Returning Algolia results — tiers 2/3 NOT consulted`);
+        console.log(`[SearchRouter] OK Returning Algolia results -- tiers 2/3 NOT consulted`);
         return formatStorefrontResult(result.products, 'algolia_search', algoliaQuery);
       }
     } catch (err) {
       console.warn(`[SearchRouter] TIER 1 (Algolia) ERROR: ${err.message}`);
     }
   } else {
-    console.warn(`[SearchRouter] TIER 1 (Algolia) SKIPPED — not configured. Set ALGOLIA_APP_ID, ALGOLIA_SEARCH_KEY, ALGOLIA_INDEX_NAME.`);
+    console.warn(`[SearchRouter] TIER 1 (Algolia) SKIPPED -- not configured. Set ALGOLIA_APP_ID, ALGOLIA_SEARCH_KEY, ALGOLIA_INDEX_NAME.`);
   }
 
-  // ─── TIER 2: SHOPIFY ADMIN (first fallback for stale Algolia index) ─
-  // Use Admin productVariants search rather than Storefront — same data,
+  // --- TIER 2: SHOPIFY ADMIN (first fallback for stale Algolia index) -
+  // Use Admin productVariants search rather than Storefront -- same data,
   // but indexed fields are tighter (vendor, sku, title), so noise is lower.
   console.log(`[SearchRouter] TIER 2 (Admin): falling back for "${algoliaQuery}"`);
   try {
     const adminResult = await adminTextSearch(algoliaQuery, shopDomain);
     if (adminResult?.products?.length > 0) {
       console.log(`[SearchRouter] TIER 2 (Admin): ${adminResult.products.length} results`);
-      console.log(`[SearchRouter] ✓ Returning Admin results — tier 3 NOT consulted`);
+      console.log(`[SearchRouter] OK Returning Admin results -- tier 3 NOT consulted`);
       const products = adminResult.products.map(storefrontProductToCardShape);
       return formatStorefrontResult(products, 'admin_text_search', algoliaQuery);
     }
@@ -401,7 +401,7 @@ async function handleTextSearch(query, shopDomain, conversationHistory = []) {
     console.warn(`[SearchRouter] TIER 2 (Admin) ERROR: ${err.message}`);
   }
 
-  // ─── TIER 3: STOREFRONT search_catalog (ABSOLUTE LAST RESORT) ──────
+  // --- TIER 3: STOREFRONT search_catalog (ABSOLUTE LAST RESORT) ------
   // Only reached when Algolia AND Admin both returned nothing.
   console.log(`[SearchRouter] TIER 3 (Storefront): last-resort fallback`);
   const { searchWithStorefront } = await import('../storefront-service.js');
@@ -411,9 +411,9 @@ async function handleTextSearch(query, shopDomain, conversationHistory = []) {
     console.log(`[SearchRouter] TIER 3 (Storefront): ${count} results`);
     if (count > 0) {
       // Accuracy guard: reject Storefront result if total match count is
-      // suspiciously high (likely irrelevant — common substring match).
+      // suspiciously high (likely irrelevant -- common substring match).
       if (r.totalCount && r.totalCount > 1000) {
-        console.warn(`[SearchRouter] TIER 3 REJECTED: totalCount=${r.totalCount} (>1000) — query too broad, results would be irrelevant`);
+        console.warn(`[SearchRouter] TIER 3 REJECTED: totalCount=${r.totalCount} (>1000) -- query too broad, results would be irrelevant`);
         return null;
       }
       return formatStorefrontResult(
@@ -426,7 +426,7 @@ async function handleTextSearch(query, shopDomain, conversationHistory = []) {
     console.warn(`[SearchRouter] TIER 3 (Storefront) ERROR: ${err.message}`);
   }
 
-  console.log(`[SearchRouter] ─── all tiers exhausted: 0 results for "${query}" ───`);
+  console.log(`[SearchRouter] --- all tiers exhausted: 0 results for "${query}" ---`);
   return null;
 }
 
@@ -435,15 +435,15 @@ export async function smartSearch(userMessage, shopDomain, conversationHistory =
   const trimmed = userMessage.trim();
   if (!trimmed) return null;
 
-  // SKU check FIRST — an embedded part code overrides conversational phrasing.
+  // SKU check FIRST -- an embedded part code overrides conversational phrasing.
   // "do you have the BA25SS-STT3-A AODD pump" still resolves the SKU lookup.
   const skuToken = detectSku(trimmed);
   if (skuToken) {
     const skuResult = await handleSkuSearch(skuToken, trimmed, shopDomain);
     if (skuResult) return skuResult;
-    // SKU not found anywhere — fall through to plain text search using the
+    // SKU not found anywhere -- fall through to plain text search using the
     // original message, so the user gets *something* rather than a dead end.
-    console.log(`[SearchRouter] SKU "${skuToken}" not found — falling back to text search`);
+    console.log(`[SearchRouter] SKU "${skuToken}" not found -- falling back to text search`);
   }
 
   if (isConversationalMessage(trimmed)) {

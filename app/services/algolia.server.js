@@ -55,11 +55,16 @@ export function isAlgoliaConfigured() {
 
 /**
  * Fetch first variant IDs for a list of product handles from Storefront API.
- * Returns a Map of handle → { variantId, variantSku }
+ * Returns a Map of handle → { variantId, variantSku }.
+ *
+ * Implementation note: the previous batched `products(query: handle:"x" OR handle:"y" ...)`
+ * path returned zero results in production — Storefront `search` is full-text
+ * and does not OR multiple handle predicates. We now fire one `productByHandle`
+ * query per handle in parallel; one HTTP round-trip's worth of wall time, but
+ * exact and complete.
  */
 async function fetchVariantIdsByHandles(handles, shopDomain) {
   if (!handles || handles.length === 0) return new Map();
-
   const { shopifyStorefrontQuery } = await import('../shopify-storefront.js');
   const variantMap = new Map();
 
@@ -91,40 +96,30 @@ async function fetchVariantIdsByHandles(handles, shopDomain) {
       productByHandle(handle: $handle) {
         handle
         variants(first: 1) {
-          edges {
-            node {
-              id
-              sku
-              availableForSale
-              price { amount currencyCode }
-            }
-          }
+          edges { node { id sku availableForSale price { amount currencyCode } } }
         }
       }
     }
   `;
 
-  // Step 1: batch fetch
-  for (let i = 0; i < handles.length; i += batchSize) {
-    const batch = handles.slice(i, i + batchSize).filter(Boolean);
-    if (batch.length === 0) continue;
-
-    try {
-      const queryStr = batch.map(h => `handle:"${h}"`).join(' OR ');
-      const data = await shopifyStorefrontQuery({
-        query: BATCH_QUERY,
-        variables: { queryStr, count: batch.length + 5 },
-        shopDomain,
-      });
-
-      for (const { node } of data?.products?.edges || []) {
-        const firstVariant = node.variants?.edges?.[0]?.node;
-        if (firstVariant && node.handle) {
-          variantMap.set(node.handle, {
+  await Promise.allSettled(
+    handles.filter(Boolean).map(async (handle) => {
+      try {
+        const data = await shopifyStorefrontQuery({
+          query: SINGLE_QUERY,
+          variables: { handle },
+          shopDomain,
+        });
+        const product = data?.productByHandle;
+        const firstVariant = product?.variants?.edges?.[0]?.node;
+        if (firstVariant) {
+          variantMap.set(handle, {
             variantId: firstVariant.id,
             variantSku: firstVariant.sku || null,
           });
         }
+      } catch (err) {
+        console.warn(`[Algolia] variant lookup failed for "${handle}": ${err.message}`);
       }
     } catch (err) {
       console.warn(`[Algolia] Batch variant fetch failed: ${err.message}`);
@@ -167,6 +162,7 @@ async function fetchVariantIdsByHandles(handles, shopDomain) {
   }
   console.log(`[Algolia] Variant IDs resolved: ${variantMap.size}/${handles.length}`);
 
+  console.log(`[Algolia] variant IDs resolved: ${variantMap.size}/${handles.length}`);
   return variantMap;
 }
 

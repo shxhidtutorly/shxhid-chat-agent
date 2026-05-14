@@ -312,6 +312,7 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
     // For free-text queries this returns null and the existing MCP flow
     // runs unchanged.
     // ───────────────────────────────────────────────────────────────────
+    let smartResult = null;
     try {
       const { smartSearch } = await import("../services/search-router.server.js");
       // Pass conversation history so query intelligence can use context
@@ -319,6 +320,7 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
       const historyForSearch = conversationHistory.slice(-6); // last 3 turns
       const smart = await smartSearch(userMessage, shopDomain, historyForSearch);
       if (smart && Array.isArray(smart.products) && smart.products.length > 0) {
+        smartResult = smart;
         console.log(`[Chat] SmartSearch pre-found ${smart.products.length} products (${smart.searchType})`);
         stream.sendMessage({ type: "product_results", products: smart.products });
         productsSentToFrontend = true;
@@ -351,19 +353,32 @@ async function handleChatSession({ request, userMessage, conversationId, promptT
       console.warn(`[Chat] SmartSearch pre-pass failed: ${smartErr.message}`);
     }
 
-    // Strip catalog-search tools when smartSearch already found products.
-    // This prevents Claude from re-searching and overwriting accurate results.
+    // Strip catalog-search tools when smartSearch already found products via
+    // a HIGH-CONFIDENCE path. For LOW-CONFIDENCE paths (broad Storefront
+    // fallback, SKU-fuzzy fallbacks) we keep the catalog tools so Claude can
+    // re-search and recover if the pre-found results are off-target.
     if (productsSentToFrontend) {
-      const before = mcpClient.tools.length;
-      mcpClient.storefrontTools = (mcpClient.storefrontTools || [])
-        .filter(t => !isCatalogSearchTool(t.name));
-      mcpClient.tools = (mcpClient.tools || [])
-        .filter(t => !isCatalogSearchTool(t.name));
-      const after = mcpClient.tools.length;
-      console.log(
-        `[Chat] Products pre-found — stripped catalog tools ` +
-        `(${before} → ${after} tools). Claude cannot re-search.`
-      );
+      const lowConfidencePaths = new Set([
+        'sku_storefront_fallback',
+        'sku_nosep_fallback',
+        'storefront_search_last_resort',
+      ]);
+      if (smartResult && lowConfidencePaths.has(smartResult.searchType)) {
+        console.log(
+          `[Chat] Products pre-found via LOW-CONFIDENCE path (${smartResult.searchType}) — ` +
+          `keeping catalog tools available so Claude can recover.`
+        );
+      } else {
+        const before = mcpClient.tools.length;
+        mcpClient.storefrontTools = (mcpClient.storefrontTools || [])
+          .filter(t => !isCatalogSearchTool(t.name));
+        mcpClient.tools = (mcpClient.tools || [])
+          .filter(t => !isCatalogSearchTool(t.name));
+        console.log(
+          `[Chat] Products pre-found via HIGH-CONFIDENCE path (${smartResult?.searchType || 'unknown'}) — ` +
+          `stripped catalog tools (${before} → ${mcpClient.tools.length} tools).`
+        );
+      }
     }
 
     let finalMessage = { role: "user", content: userMessage };

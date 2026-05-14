@@ -64,6 +64,10 @@ RULES:
      - Thread type: NPT, BSP, BSPP (these are product attributes in titles)
      - Power rating when it's the product designator: "30kW inverter drive"
      - Body material when in title: "aluminium", "stainless steel", "polypropylene"
+     - Sensing ranges and dimensions: write with a space between value
+       and unit ("60 mm" not "60mm", "5 mm" not "5mm"). The catalog
+       titles use the spaced form. Concatenating loses phrase-match
+       opportunities downstream.
 
 5. EXCEPTION — NEVER strip SKU / part / model codes. Any alphanumeric token
    with letters AND digits and length >= 5 (e.g. "BP06PP-PTT4-B", "S201-B16",
@@ -111,6 +115,13 @@ User: "5/2 way solenoid valve"
 
 User: "3/2 way directional control valve"
 → {"query":"3/2 directional control valve","skip":false,"reason":"valve_config_kept"}
+
+User: "60 mm sensing range"
+Context: user was asking about SICK proximity sensors
+→ {"query":"SICK proximity sensor 60 mm","skip":false,"reason":"context_enriched_size_kept_spaced"}
+
+User: "M12 4mm sensing range"
+→ {"query":"M12 proximity sensor 4 mm","skip":false,"reason":"size_spaced"}
 
 User: "4mm sensing range M12"
 Context: user was asking about IFM sensors

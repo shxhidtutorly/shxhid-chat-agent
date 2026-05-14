@@ -118,6 +118,130 @@ function isValidImageUrl(value) {
   return value.startsWith('http');
 }
 
+/**
+ * Extract numeric+unit tokens from a query: "60mm", "60 mm", "24V",
+ * "10A", "IP67", "M12". Returns [{ value: 60, unit: "mm", raw: "60mm" }]
+ *
+ * These are HIGH-SIGNAL tokens. A product whose title/description/SKU
+ * matches the EXACT numeric value must rank above a product that
+ * only matches the brand/type words.
+ */
+function extractSpecTokens(query) {
+  if (!query || typeof query !== "string") return [];
+  const tokens = [];
+  // Numeric+unit: 60mm, 60 mm, 5mm, 24V, 24VDC, 100A, 1000Hz
+  const re = /(\d+(?:\.\d+)?)\s*(mm|cm|m|inch|in|"|v|vdc|vac|a|w|kw|hz|khz|°c|c)\b/gi;
+  let m;
+  while ((m = re.exec(query)) !== null) {
+    tokens.push({
+      value: parseFloat(m[1]),
+      unit: m[2].toLowerCase().replace("°c", "c"),
+      raw: m[0].toLowerCase(),
+    });
+  }
+  // IP ratings
+  const ipRe = /\bIP(\d{2})\b/gi;
+  while ((m = ipRe.exec(query)) !== null) {
+    tokens.push({ value: parseInt(m[1]), unit: "ip", raw: `ip${m[1]}` });
+  }
+  // M-thread codes (M8, M12, M18, M30) — treat as a categorical match,
+  // not a numeric range, since adjacent sizes (M8 vs M10) are different
+  // products entirely, not "close enough".
+  const mRe = /\bM(\d{1,2})\b/g;
+  while ((m = mRe.exec(query)) !== null) {
+    tokens.push({ value: parseInt(m[1]), unit: "m_thread", raw: `m${m[1]}` });
+  }
+  return tokens;
+}
+
+/**
+ * Build all the textual surfaces of a product that we can match
+ * spec tokens against (lowercased, no html). Used by the re-ranker
+ * because metafields aren't in the Algolia hit but the values often
+ * leak into title/description/tags.
+ */
+function flattenHitText(hit) {
+  const parts = [
+    hit.title,
+    hit.handle,
+    hit.product_type,
+    hit.vendor,
+    Array.isArray(hit.tags) ? hit.tags.join(" ") : hit.tags,
+    Array.isArray(hit.named_tags) ? hit.named_tags.join(" ") : "",
+    hit.body_html_safe || hit.body_html || "",
+    hit.sku,
+  ];
+  return parts
+    .filter(Boolean)
+    .join(" ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+/**
+ * Score a hit against the query's spec tokens. EXACT numeric
+ * matches earn a large positive score. Wrong numeric values earn a
+ * large NEGATIVE score (so a 5mm product never outranks a 60mm
+ * product when the user asked for 60mm).
+ *
+ * The unit-aware regex matches BOTH "60mm" and "60 mm" forms in
+ * the product text — critical because the catalog uses the spaced
+ * form ("60 mm") and QueryIntel emits the unspaced form ("60mm").
+ */
+function scoreHitBySpec(hit, specTokens) {
+  if (!specTokens.length) return 0;
+  const text = flattenHitText(hit);
+  let score = 0;
+
+  for (const tok of specTokens) {
+    // Build a regex that matches the value+unit with optional whitespace.
+    // For unit "m_thread" the pattern is "m12" (no space).
+    let pattern;
+    if (tok.unit === "m_thread") {
+      pattern = new RegExp(`\\bm${tok.value}\\b`, "i");
+    } else if (tok.unit === "ip") {
+      pattern = new RegExp(`\\bip${tok.value}\\b`, "i");
+    } else {
+      pattern = new RegExp(
+        `\\b${tok.value}\\s*${tok.unit}\\b`,
+        "i"
+      );
+    }
+
+    if (pattern.test(text)) {
+      // Exact spec match — huge positive signal.
+      score += 1000;
+    } else {
+      // Check if a DIFFERENT numeric value with the same unit appears
+      // in the text (e.g. user asked for 60mm, this product shows 5mm).
+      // That's an active mismatch → heavy negative score so the wrong
+      // size never ranks above the right size.
+      let mismatchRe;
+      if (tok.unit === "m_thread") {
+        mismatchRe = /\bm(\d{1,2})\b/gi;
+      } else if (tok.unit === "ip") {
+        mismatchRe = /\bip(\d{2})\b/gi;
+      } else {
+        mismatchRe = new RegExp(
+          `\\b(\\d+(?:\\.\\d+)?)\\s*${tok.unit}\\b`,
+          "gi"
+        );
+      }
+      let mm;
+      let foundDifferent = false;
+      while ((mm = mismatchRe.exec(text)) !== null) {
+        if (parseFloat(mm[1]) !== tok.value) {
+          foundDifferent = true;
+          break;
+        }
+      }
+      if (foundDifferent) score -= 800;
+    }
+  }
+  return score;
+}
+
 export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
   if (!query || typeof query !== 'string') return null;
   const trimmed = query.trim();
@@ -133,6 +257,14 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
 
   const indexName = process.env.ALGOLIA_INDEX_NAME || 'shopify_products';
   console.log(`[Algolia] Searching: "${trimmed}" in "${indexName}"`);
+
+  // Single audit line so the exact outgoing query + typo policy are greppable.
+  const _specTokensForLog = extractSpecTokens(trimmed);
+  console.log(
+    `[Algolia] OUTGOING query="${trimmed}" first=${first} typoTolerance=${
+      looksLikeSku ? "off (sku)" : _specTokensForLog.length > 0 ? "off (numeric)" : "on"
+    }`
+  );
 
   let client;
   try {
@@ -156,12 +288,20 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
           'product_image', 'image', 'featured_image', 'images',
           'variants', 'sku', 'named_tags',
         ],
-        ...(looksLikeSku ? {
-          optionalWords: [],
-          typoTolerance: false,
-        } : {
-          typoTolerance: true,
-        }),
+        ...(looksLikeSku
+          ? { optionalWords: [], typoTolerance: false }
+          : extractSpecTokens(trimmed).length > 0
+            ? {
+                // Disable numeric-token typo substitution so "60" can't be
+                // typo-matched to "50"/"65"/etc.
+                // https://www.algolia.com/doc/api-reference/api-parameters/typoTolerance/
+                typoTolerance: {
+                  allowTyposOnNumericTokens: false,
+                  minWordSizefor1Typo: 5,
+                  minWordSizefor2Typos: 9,
+                },
+              }
+            : { typoTolerance: true }),
       }],
     });
     hits = response.results?.[0]?.hits || [];
@@ -182,6 +322,36 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
     return null;
   }
 
+  // Post-Algolia spec-aware re-rank. EXACT numeric matches float; products
+  // with a DIFFERENT numeric value of the same unit (60mm asked, 5mm seen)
+  // are pushed down hard so the wrong-size product never ranks at position 1.
+  const specTokens = extractSpecTokens(trimmed);
+  if (hits.length > 0 && specTokens.length > 0) {
+    console.log(
+      `[Algolia] spec tokens detected: ${JSON.stringify(specTokens)}`
+    );
+
+    const scored = hits.map((h, idx) => ({
+      hit: h,
+      idx, // preserve Algolia tiebreak order
+      score: scoreHitBySpec(h, specTokens),
+    }));
+
+    scored.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.idx - b.idx; // Algolia's order as tiebreak
+    });
+
+    hits = scored.map((s) => s.hit);
+
+    console.log(`[Algolia] post-spec re-rank top 5:`);
+    scored.slice(0, 5).forEach((s, i) => {
+      console.log(
+        `  ${i + 1}. score=${s.score} sku=${s.hit.sku} title="${(s.hit.title || "").slice(0, 80)}"`
+      );
+    });
+  }
+
   if (hits.length === 0) {
     console.log(`[Algolia] 0 results for "${trimmed}"`);
     return null;
@@ -189,14 +359,19 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
 
   console.log(`[Algolia] ${hits.length} results for "${trimmed}"`);
 
-  // Diagnostic log for first hit
+  // Full ranked top-N log so future ranking bugs are diagnosable from logs alone.
   if (hits.length > 0) {
+    console.log(`[AlgoliaDiag] full ranked list (${hits.length} hits) for query="${trimmed}":`);
+    hits.forEach((h, i) => {
+      const price = h.variants_min_price ?? h.price ?? "?";
+      console.log(
+        `  ${i + 1}. sku=${h.sku || "?"} price=${price} title="${(h.title || "").slice(0, 90)}"`
+      );
+    });
+    // Keep first-hit detail diagnostics for image/variant debugging:
     const h = hits[0];
-    console.log(`[AlgoliaDiag] title="${h.title}" sku="${h.sku}" handle="${h.handle}"`);
-    console.log(`[AlgoliaDiag] product_image="${h.product_image?.substring(0, 80)}"`);
-    console.log(`[AlgoliaDiag] price=${h.price} variants_min_price=${h.variants_min_price}`);
-    console.log(`[AlgoliaDiag] has variants=${Array.isArray(h.variants) ? h.variants.length : 'none'}`);
-    console.log(`[AlgoliaDiag] objectID=${h.objectID} id=${h.id}`);
+    console.log(`[AlgoliaDiag] hit[0] product_image="${(h.product_image || "").substring(0, 80)}"`);
+    console.log(`[AlgoliaDiag] hit[0] objectID=${h.objectID} id=${h.id} has_variants=${Array.isArray(h.variants) ? h.variants.length : "none"}`);
   }
 
   const handles = hits.map((h) => h.handle).filter(Boolean);

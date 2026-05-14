@@ -1,11 +1,13 @@
 /**
- * Tool Service — v5.0 (NO GATES)
+ * Tool Service — v5.1
  *
- * Processes MCP tool responses (product search, cart updates).
+ * CHANGES (v5.1 — May 2026):
+ *   - MAX_PRODUCTS_TO_DISPLAY reduced from 12 → 10. Algolia now returns
+ *     a maximum of 10, so capping display at 10 keeps the pipeline consistent.
  *
  * v5.0 — May 9, 2026 — REMOVED ALL GATES
  *   - Removed distinctive-token strict gate
- *   - Removed brand coherence gate (KNOWN_BRANDS, detectBrandQuery, etc.)
+ *   - Removed brand coherence gate
  *   - Removed voltage filter
  *   - Removed category coherence scoring
  *   - Removed inch-dimension gate
@@ -17,9 +19,6 @@
  *   - Product URL resolution (resolveProductUrl)
  *   - SKU spec scoring for re-ranking (scoreProductBySpecs)
  *   - Cart processing (processCartUpdateResult)
- *
- * Trust the search engine: Storefront `search` already ranks by relevance.
- * Re-rank only when the user typed a SKU (so the exact match floats to top).
  */
 
 function extractAmount(val) {
@@ -97,7 +96,6 @@ function extractQuerySpecs(query) {
     if (!/\d/.test(token) || !/[A-Z]/i.test(token)) continue;
     const hasSeparator = /[-\.\/]/.test(token);
     if (token.length < 5 && !hasSeparator) continue;
-    // Skip pure measurements (24V, 18MM, IP67, etc.)
     if (/^\d+(?:MM|CM|VDC|VAC|V|A|W|KW|HP|INCH|IN|FT)$/i.test(token)) continue;
     if (/^IP\d{2}$/i.test(token)) continue;
     skuPatterns.push(token);
@@ -128,10 +126,6 @@ function scoreProductBySpecs(product, specs) {
   return score;
 }
 
-/**
- * Generic relevance score (independent of SKU). Used to re-rank text-search
- * results so exact / starts-with title matches float above loose matches.
- */
 function scoreProductByRelevance(product, query) {
   if (!query || typeof query !== "string") return 0;
   const q = query.toLowerCase().trim();
@@ -150,7 +144,6 @@ function scoreProductByRelevance(product, query) {
     score += matches * 50;
   }
 
-  // Small bonuses to break ties — prefer in-stock and image-bearing products
   const variants = Array.isArray(product.variants) ? product.variants : [];
   const anyAvailable = variants.some((v) => v?.available || v?.availableForSale);
   if (anyAvailable) score += 20;
@@ -159,9 +152,6 @@ function scoreProductByRelevance(product, query) {
   return score;
 }
 
-/**
- * Extract a clean plain-text description from a product object.
- */
 function extractDescription(product) {
   const raw = product.description;
 
@@ -184,12 +174,6 @@ function extractDescription(product) {
   return "";
 }
 
-/**
- * Extract a valid image URL from a product object.
- *
- * Tries every known shape — MCP, Storefront GraphQL (edges/nodes), Admin REST,
- * legacy formats. Returns the first URL that starts with "http".
- */
 function extractImageUrl(product) {
   if (!product) return null;
 
@@ -198,44 +182,36 @@ function extractImageUrl(product) {
     // media[0] = { type: "image", url: "...", alt_text: "..." }
     () => product.media?.[0]?.url,
     () => product.media?.[0]?.src,
-    // Also check nested .image in case MCP version changes
     () => product.media?.[0]?.image?.url,
     () => product.media?.[0]?.image?.src,
     () => product.media?.[0]?.preview_image?.src,
     () => product.media?.[0]?.preview_image?.url,
-    // Iterate all media items (not just [0]) as a fallback
     () => product.media?.find(m => m?.url?.startsWith('http'))?.url,
     () => product.media?.find(m => m?.image?.url)?.image?.url,
 
-    // featured_media variants
     () => product.featured_media?.image?.url,
     () => product.featured_media?.preview_image?.src,
     () => product.featured_media?.preview_image?.url,
     () => product.featured_media?.url,
     () => product.featured_media?.src,
 
-    // Flat URL fields
-    () => (typeof product.image_url === "string" ? product.image_url : null),
+    () => (typeof product.image_url === "string" && product.image_url !== 'undefined' ? product.image_url : null),
     () => (typeof product.thumbnail_url === "string" ? product.thumbnail_url : null),
     () => (typeof product.thumbnail === "string" ? product.thumbnail : null),
 
-    // featured_image (REST / snake_case)
-    () => (typeof product.featured_image === "string" ? product.featured_image : null),
+    () => (typeof product.featured_image === "string" && product.featured_image !== 'undefined' ? product.featured_image : null),
     () => product.featured_image?.url,
     () => product.featured_image?.src,
 
-    // featuredImage (GraphQL camelCase)
     () => product.featuredImage?.url,
     () => product.featuredImage?.src,
     () => product.featuredImage?.image?.url,
     () => (typeof product.featuredImage === "string" ? product.featuredImage : null),
 
-    // image (single object or string)
     () => (typeof product.image === "string" ? product.image : null),
     () => product.image?.url,
     () => product.image?.src,
 
-    // images array (multiple shapes)
     () => product.images?.[0]?.url,
     () => product.images?.[0]?.src,
     () => (typeof product.images?.[0] === "string" ? product.images[0] : null),
@@ -245,7 +221,6 @@ function extractImageUrl(product) {
     () => product.images?.nodes?.[0]?.src,
     () => product.images?.image?.url,
 
-    // variant images (last resort)
     () => product.variants?.[0]?.image?.url,
     () => product.variants?.[0]?.image?.src,
     () => (typeof product.variants?.[0]?.image === "string" ? product.variants[0].image : null),
@@ -256,7 +231,7 @@ function extractImageUrl(product) {
   for (const get of paths) {
     try {
       const url = get();
-      if (typeof url === "string" && url.startsWith("http")) return url;
+      if (typeof url === "string" && url !== 'undefined' && url !== 'null' && url.startsWith("http")) return url;
     } catch (_e) {
       // path doesn't exist on this product shape, continue
     }
@@ -269,7 +244,8 @@ function extractImageUrl(product) {
 }
 
 export function createToolService() {
-  const MAX_PRODUCTS_TO_DISPLAY = 12;
+  // v5.1: Reduced from 12 to 10 to match Algolia limit and avoid UI overload
+  const MAX_PRODUCTS_TO_DISPLAY = 10;
 
   function resolveProductUrl(product, shopDomain) {
     if (product.handle) return `https://${shopDomain}/products/${product.handle}`;
@@ -305,7 +281,6 @@ export function createToolService() {
 
       console.log(`[ToolService] Search returned ${rawProducts.length} products`);
 
-      // Map products into the frontend card shape.
       const mappedProducts = rawProducts.map((p) => {
         const firstVariant =
           Array.isArray(p.variants) && p.variants.length > 0 ? p.variants[0] : null;
@@ -322,14 +297,10 @@ export function createToolService() {
           variant_id: variantId,
           merchandise_id: variantId,
           sku: p.sku || firstVariant?.sku || null,
-          // Carry through fields needed for SKU re-ranking, then strip.
           _variants: Array.isArray(p.variants) ? p.variants : [],
         };
       });
 
-      // Re-rank: exact SKU > title-equality > title-starts-with > word-overlap
-      //          > availability > has-image. Always relevance-rank; add SKU
-      //          score on top when the user typed a SKU-like token.
       const userSpecs = extractQuerySpecs(userQuery || "");
       const searchSpecs = extractQuerySpecs(searchQuery || "");
       const skuPatterns = [...new Set([...userSpecs.skuPatterns, ...searchSpecs.skuPatterns])];

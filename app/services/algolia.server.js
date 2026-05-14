@@ -1,8 +1,18 @@
 /**
- * Algolia Search Service — v3.0
+ * Algolia Search Service — v3.1 (Production Fix)
+ *
+ * CHANGES (v3.1 — May 2026):
+ *
+ * FIX 1: "undefined" string image — some Algolia records have the literal
+ *   string "undefined" (not null) as product_image. Added explicit check:
+ *   `hit.product_image !== 'undefined'` to reject this invalid value.
+ *
+ * FIX 2: Result count — changed default `first` from 20 to 10. Sending 20
+ *   product cards overwhelms the chat UI. 10 is sufficient for the user to
+ *   browse and ask follow-up questions.
  *
  * CONFIRMED field shapes from Algolia dashboard (May 2026):
- *   product_image  → string URL (the image field)
+ *   product_image  → string URL (the image field) — may be "undefined" string for some records
  *   price          → integer in AED (e.g. 4437)
  *   sku            → string at top level
  *   id / objectID  → numeric Shopify product ID
@@ -58,6 +68,29 @@ async function fetchVariantIdsByHandles(handles, shopDomain) {
   const { shopifyStorefrontQuery } = await import('../shopify-storefront.js');
   const variantMap = new Map();
 
+  const batchSize = 15;
+  const BATCH_QUERY = `
+    query GetVariantsByHandles($queryStr: String!, $count: Int!) {
+      products(first: $count, query: $queryStr) {
+        edges {
+          node {
+            handle
+            variants(first: 1) {
+              edges {
+                node {
+                  id
+                  sku
+                  availableForSale
+                  price { amount currencyCode }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
   const SINGLE_QUERY = `
     query GetVariantByHandle($handle: String!) {
       productByHandle(handle: $handle) {
@@ -88,20 +121,70 @@ async function fetchVariantIdsByHandles(handles, shopDomain) {
       } catch (err) {
         console.warn(`[Algolia] variant lookup failed for "${handle}": ${err.message}`);
       }
-    })
-  );
+    } catch (err) {
+      console.warn(`[Algolia] Batch variant fetch failed: ${err.message}`);
+    }
+  }
+
+  // Step 2: per-handle fallback for anything the batch missed
+  const missing = handles.filter(h => h && !variantMap.has(h));
+
+  if (missing.length > 0) {
+    console.log(`[Algolia] Per-handle fallback for ${missing.length} missed: ${missing.join(', ')}`);
+    await Promise.allSettled(
+      missing.map(async (handle) => {
+        try {
+          const data = await shopifyStorefrontQuery({
+            query: SINGLE_QUERY,
+            variables: { handle },
+            shopDomain,
+          });
+          const product = data?.productByHandle;
+          if (product) {
+            const firstVariant = product.variants?.edges?.[0]?.node;
+            if (firstVariant) {
+              variantMap.set(handle, {
+                variantId: firstVariant.id,
+                variantSku: firstVariant.sku || null,
+              });
+            }
+          }
+        } catch (err) {
+          console.warn(`[Algolia] Single handle fetch failed for "${handle}": ${err.message}`);
+        }
+      })
+    );
+  }
+
+  const stillMissing = handles.filter(h => h && !variantMap.has(h));
+  if (stillMissing.length > 0) {
+    console.warn(`[Algolia] Variant IDs unresolvable: ${stillMissing.join(', ')}`);
+  }
+  console.log(`[Algolia] Variant IDs resolved: ${variantMap.size}/${handles.length}`);
 
   console.log(`[Algolia] variant IDs resolved: ${variantMap.size}/${handles.length}`);
   return variantMap;
 }
 
-export async function algoliaSearch(query, { first = 20, shopDomain } = {}) {
+/**
+ * Helper: determine if a product_image field value is a valid URL.
+ *
+ * Some Algolia records store the literal string "undefined" instead of null
+ * when the image was missing at sync time. We must reject this value.
+ */
+function isValidImageUrl(value) {
+  if (!value) return false;
+  if (typeof value !== 'string') return false;
+  if (value === 'undefined' || value === 'null') return false; // literal strings
+  return value.startsWith('http');
+}
+
+export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
   if (!query || typeof query !== 'string') return null;
   const trimmed = query.trim();
   if (!trimmed) return null;
 
   // Detect if this looks like a SKU/part code — if so, search EXACTLY as-is
-  // SKUs in Algolia are indexed in the 'sku' field; exact match is critical
   const looksLikeSku = /^[A-Z0-9]{2,}[-\.][A-Z0-9][-A-Z0-9\.\/]{2,}$/i.test(trimmed) ||
     (/^[A-Z]{2,}\d{2,}/.test(trimmed) && trimmed.length >= 5 && trimmed.length <= 20);
 
@@ -126,7 +209,7 @@ export async function algoliaSearch(query, { first = 20, shopDomain } = {}) {
       requests: [{
         indexName,
         query: trimmed,
-        hitsPerPage: first,
+        hitsPerPage: first,  // v3.1: was hardcoded 20, now uses param (default 10)
         attributesToRetrieve: [
           'objectID', 'id', 'title', 'handle', 'vendor',
           'product_type', 'tags', 'body_html', 'body_html_safe',
@@ -134,11 +217,9 @@ export async function algoliaSearch(query, { first = 20, shopDomain } = {}) {
           'product_image', 'image', 'featured_image', 'images',
           'variants', 'sku', 'named_tags',
         ],
-        // For SKU queries: require all tokens to match (exact SKU search)
-        // For text queries: allow some words to be optional for broader matching
         ...(looksLikeSku ? {
-          optionalWords: [],  // all words required for SKU search
-          typoTolerance: false, // no typos for SKU
+          optionalWords: [],
+          typoTolerance: false,
         } : {
           typoTolerance: true,
         }),
@@ -169,7 +250,7 @@ export async function algoliaSearch(query, { first = 20, shopDomain } = {}) {
 
   console.log(`[Algolia] ${hits.length} results for "${trimmed}"`);
 
-  // Diagnostic log for first hit to verify field shapes
+  // Diagnostic log for first hit
   if (hits.length > 0) {
     const h = hits[0];
     console.log(`[AlgoliaDiag] title="${h.title}" sku="${h.sku}" handle="${h.handle}"`);
@@ -179,11 +260,7 @@ export async function algoliaSearch(query, { first = 20, shopDomain } = {}) {
     console.log(`[AlgoliaDiag] objectID=${h.objectID} id=${h.id}`);
   }
 
-  // Collect handles that need variant ID lookup
   const handles = hits.map((h) => h.handle).filter(Boolean);
-
-  // Fetch variant IDs from Storefront (needed for Add to Cart)
-  // Pass shopDomain so the right store is queried
   const variantMap = await fetchVariantIdsByHandles(handles, shopDomain);
 
   const STOREFRONT_HOST = 'www.creativeautomation.ae';
@@ -194,19 +271,15 @@ export async function algoliaSearch(query, { first = 20, shopDomain } = {}) {
       ? rawId
       : `gid://shopify/Product/${rawId}`;
 
-    // IMAGE: confirmed field is product_image (plain string URL)
+    // IMAGE (v3.1 FIX): Reject literal string "undefined" or "null" in addition to
+    // falsy values. Some Algolia records have product_image = "undefined" (string).
     const imageUrl =
-      (typeof hit.product_image === 'string' && hit.product_image.startsWith('http')
-        ? hit.product_image : null) ||
-      // Fallback: check other possible image fields just in case
-      (hit.image && typeof hit.image === 'object' && typeof hit.image.src === 'string'
+      (isValidImageUrl(hit.product_image) ? hit.product_image : null) ||
+      (hit.image && typeof hit.image === 'object' && isValidImageUrl(hit.image.src)
         ? hit.image.src : null) ||
-      (typeof hit.image === 'string' && hit.image.startsWith('http')
-        ? hit.image : null) ||
-      (typeof hit.featured_image === 'string' && hit.featured_image.startsWith('http')
-        ? hit.featured_image : null) ||
-      (typeof hit.images?.[0] === 'string' && hit.images[0].startsWith('http')
-        ? hit.images[0] : null) ||
+      (isValidImageUrl(hit.image) ? hit.image : null) ||
+      (isValidImageUrl(hit.featured_image) ? hit.featured_image : null) ||
+      (Array.isArray(hit.images) && isValidImageUrl(hit.images[0]) ? hit.images[0] : null) ||
       null;
 
     // PRICE: integer in AED (e.g. 4437), NOT cents
@@ -216,12 +289,12 @@ export async function algoliaSearch(query, { first = 20, shopDomain } = {}) {
       ? `${parseFloat(String(rawPrice)).toFixed(2)} ${currency}`
       : null;
 
-    // VARIANT ID: from Storefront lookup (Algolia index is product-level)
+    // VARIANT ID: from Storefront lookup
     const variantInfo = hit.handle ? variantMap.get(hit.handle) : null;
     const variantId = variantInfo?.variantId || null;
     const variantSku = variantInfo?.variantSku || hit.sku || null;
 
-    // DESCRIPTION: from body_html_safe (already sanitized) or body_html
+    // DESCRIPTION
     const rawDesc = hit.body_html_safe || hit.body_html || '';
     const description = typeof rawDesc === 'string'
       ? rawDesc.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500)
@@ -243,7 +316,6 @@ export async function algoliaSearch(query, { first = 20, shopDomain } = {}) {
       sku: variantSku,
     };
 
-    // Log if image or variant is still missing after fix
     if (!imageUrl) {
       console.warn(`[Algolia] No image for "${hit.title}" — product_image=${hit.product_image}`);
     }

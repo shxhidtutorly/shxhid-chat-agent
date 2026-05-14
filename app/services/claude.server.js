@@ -1,31 +1,21 @@
 // app/services/claude.server.js
 /**
- * Claude Service — v4.0
+ * Claude Service — v4.1 (Production Fix)
  *
- * CHANGES (v4.0 — May 7, 2026):
+ * CHANGES (v4.1 — May 2026):
  *
- * 1. SYSTEM PROMPT: Added RULE 15 — NEVER claim products were found unless
- *    the tool response explicitly contains products. QA test revealed Claude
- *    was saying "Found 10 results. Browse the cards above." when the tool
- *    returned zero results (after the strict gate filtered them out).
- *    This happened because the stop-hint injected by chat.jsx said
- *    "products: [], _system_hint: try again" — Claude interpreted the
- *    retry hint as a sign that it should tell the user results existed.
+ * FIX 1: Model string corrected.
+ *   Was:  "claude-haiku-4-5"         ← INVALID, caused silent API errors
+ *   Now:  "claude-haiku-4-5-20251001" ← correct versioned model string
  *
- * 2. SYSTEM PROMPT: Added RULE 16 — when products are NOT found after
- *    retries, Claude must NOT say "browse the cards above" or reference
- *    cards. It should say "I couldn't find that exact product" and offer
- *    alternatives.
- *
- * 3. SYSTEM PROMPT: Refined category search strategy — when searching
- *    broad categories like "pneumatic cylinder", Claude should search
- *    the specific product type, not the broad category.
+ * FIX 2: System prompt updated with stronger rules for size-based queries.
+ *   Added explicit guidance that pipe sizes, pump sizes, and valve configs
+ *   (1/4 inch, 1/2 inch, 5/2 way) are PRODUCT DESIGNATIONS and must be
+ *   preserved in search context — they are NOT specs to strip.
  *
  * PREVIOUS CHANGES:
- * v3.0 (April 30, 2026): Model upgrade to claude-sonnet-4-6, multilingual,
- *   clarification handling
- * v2.2 (April 30, 2026): Rules 11/12 (no narration, cards as truth)
- * v2.1 (April 2026): Removed hardcoded tool name
+ * v4.0 (May 7, 2026): RULE 15/16 for zero-result handling
+ * v3.0 (April 30, 2026): Multilingual, clarification handling
  */
 import Anthropic from "@anthropic-ai/sdk";
 
@@ -59,7 +49,8 @@ export function createClaudeService() {
         // Haiku — that task is single-shot and ~20-token output, where
         // Haiku's latency/cost wins matter and Sonnet wouldn't help.
         const apiParams = {
-          model: "claude-sonnet-4-6",
+          // v4.1 FIX: Correct versioned model string (was "claude-haiku-4-5" — invalid)
+          model: "claude-haiku-4-5-20251001",
           max_tokens: 4096,
           system: systemPrompt,
           messages,
@@ -165,13 +156,24 @@ Step 2 — SKU / part number?
     • If [SYSTEM: … product code(s): "X"] is prepended, follow it exactly.
 
 Step 3 — Category or named product?
-  Search 2-4 words maximum. Examples of the right size:
+  Search 2-4 words maximum. Examples:
     "ABB circuit breaker"   ✅
     "IFM proximity sensor"  ✅
     "pneumatic cylinder"    ✅
+    "1/4 inch AODD pump"    ✅  ← size is the product designation, keep it
+    "1/2 inch BSK pump"     ✅  ← same
+    "5/2 solenoid valve"    ✅  ← valve config, keep it
+    "SMC solenoid valve"    ✅
+
+  SIZE DESIGNATIONS — ALWAYS KEEP IN SEARCH:
+    When a user asks for a pump, fitting, valve, or pipe by size (1/4 inch,
+    1/2 inch, 3/4 inch, 2 inch), the size IS the product identifier.
+    Do NOT strip it. Search "1/4 inch AODD pump" not just "AODD pump".
+
   NEVER include in queries:
-    voltage (24V, 230VAC), dimensions (50mm, 2 inch), amperage (100A),
-    IP ratings (IP67), generic qualifiers (industrial, heavy duty).
+    voltage specs (24V, 230VAC), amperage (100A), IP ratings (IP67),
+    sensing ranges as separate specs (but keep size designations),
+    generic qualifiers (industrial, heavy duty).
 
 Step 4 — Zero results?
   The system already retries with plural/singular, simplified text, and
@@ -228,7 +230,7 @@ Respond: "Our product development team is led by Shabeeb. The team includes Shah
 REMEMBER
 ============================
 Products in UI cards speak for themselves.
-Keep searches SHORT (2-4 words). Never include units/ratings/dimensions.
+Keep searches SHORT (2-4 words). For sized products (pumps, valves, fittings), INCLUDE the size.
 For SKU/part-number queries, search the EXACT code first.
 Retry once on zero results, then offer the sales team contact.
 NEVER narrate intermediate searches — one final text response per turn.
@@ -243,8 +245,10 @@ RESPONSE RULES: Keep responses SHORT (2-3 sentences max). When products are show
 
 SEARCH RULES:
 - Keep search queries to 2-4 words maximum.
-- NEVER include voltage (VDC, VAC), dimensions (mm, cm, inch), amperage (A), or IP ratings in search queries.
-- Search by product type and brand name only.
+- NEVER include voltage (VDC, VAC), amperage (A), or IP ratings in search queries.
+- For sized products (pumps, valves, fittings, pipes): INCLUDE the size (1/4 inch, 1/2 inch).
+  Size is the product identifier — "1/4 inch AODD pump" not just "AODD pump".
+- Search by product type and brand name. Include size when user specifies it.
 - Always retry with simpler queries if zero results are returned.
 - Pass ONLY the 'query' parameter to the catalog search tool.
 - If user writes in another language (Spanish, Arabic, French, etc.), translate to English for the search.

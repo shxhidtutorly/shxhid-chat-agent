@@ -13,11 +13,10 @@ export default async function handleRequest(
   responseHeaders,
   reactRouterContext,
 ) {
-  // Quick healthcheck & static routes: respond immediately to avoid stack traces
   try {
     const reqUrl = new URL(request.url);
 
-    // Health check for Railway
+    // ─── Health check for Railway ───────────────────────────────────────────
     if (reqUrl.pathname === "/health") {
       return new Response("ok", {
         status: 200,
@@ -25,15 +24,41 @@ export default async function handleRequest(
       });
     }
 
-    // Silence /robots.txt — prevents 404 stack trace spam in logs
+    // ─── robots.txt ─────────────────────────────────────────────────────────
+    // Handled here to prevent React Router "No route matches" error spam.
     if (reqUrl.pathname === "/robots.txt") {
-      return new Response("User-agent: *\nDisallow: /apps/\nDisallow: /chat\nDisallow: /api/\n", {
-        status: 200,
-        headers: { "Content-Type": "text/plain" },
-      });
+      return new Response(
+        "User-agent: *\nDisallow: /apps/\nDisallow: /chat\nDisallow: /api/\n",
+        {
+          status: 200,
+          headers: { "Content-Type": "text/plain" },
+        }
+      );
     }
 
-    // Silence /favicon.ico if no favicon exists
+    // ─── Sitemap variants ────────────────────────────────────────────────────
+    // Bots and SEO crawlers probe these URLs. This app does not serve its own
+    // sitemap (the Shopify storefront handles it). Return 204 No Content to
+    // silence the React Router "No route matches" error without a redirect cost.
+    //
+    // URLs silenced:
+    //   /sitemap.xml       — standard sitemap
+    //   /sitemap.xml.gz    — compressed sitemap
+    //   /sitemaps.xml      — alternate name used by some crawlers
+    //   /sitemap.txt       — text sitemap variant
+    //   /sitemap_index.xml — sitemap index
+    const sitemapPaths = new Set([
+      "/sitemap.xml",
+      "/sitemap.xml.gz",
+      "/sitemaps.xml",
+      "/sitemap.txt",
+      "/sitemap_index.xml",
+    ]);
+    if (sitemapPaths.has(reqUrl.pathname)) {
+      return new Response(null, { status: 204 });
+    }
+
+    // ─── Silence /favicon.ico if no favicon exists ──────────────────────────
     if (reqUrl.pathname === "/favicon.ico") {
       return new Response(null, { status: 204 });
     }
@@ -42,7 +67,7 @@ export default async function handleRequest(
     console.warn("URL parse warning:", err?.message || err);
   }
 
-  // Normal rendering code follows
+  // ─── Normal React Router rendering ────────────────────────────────────────
   addDocumentResponseHeaders(request, responseHeaders);
   const userAgent = request.headers.get("user-agent");
   const callbackName = isbot(userAgent ?? "") ? "onAllReady" : "onShellReady";

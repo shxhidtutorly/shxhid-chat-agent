@@ -47,6 +47,17 @@ export function createClaudeService() {
       try {
         const systemPrompt = getSystemPrompt(promptType);
 
+        // Model: claude-sonnet-4-6.
+        // Sonnet (not Haiku) is intentional here. The chat orchestrates
+        // multi-step tool use (MCP catalog search, cart updates) and must
+        // recover from low-confidence search results (e.g. wrong-category
+        // hits) by deciding whether to re-search or apologise. Haiku
+        // shipped briefly and regressed on tool-call accuracy and on
+        // following the multi-section system prompt — do NOT downgrade
+        // without re-running the search QA suite.
+        // Query-rewriting (query-intelligence.server.js) deliberately uses
+        // Haiku — that task is single-shot and ~20-token output, where
+        // Haiku's latency/cost wins matter and Sonnet wouldn't help.
         const apiParams = {
           model: "claude-sonnet-4-6",
           max_tokens: 4096,

@@ -53,6 +53,31 @@ const ALL_VENDORS_QUERY = `
   }
 `;
 
+const ADMIN_TEXT_SEARCH_QUERY = `
+  query adminTextSearch($q: String!, $first: Int!) {
+    products(first: $first, query: $q) {
+      nodes {
+        id
+        title
+        handle
+        vendor
+        productType
+        tags
+        descriptionHtml
+        featuredMedia { preview { image { url altText } } }
+        images(first: 1) { nodes { url altText } }
+        priceRangeV2 {
+          minVariantPrice { amount currencyCode }
+          maxVariantPrice { amount currencyCode }
+        }
+        variants(first: 1) {
+          nodes { id sku availableForSale price }
+        }
+      }
+    }
+  }
+`;
+
 export async function searchBySku(shopDomain, sku) {
   const skuTrim = String(sku).trim();
   console.log(`[AdminProducts] SKU search: sku:${skuTrim}`);
@@ -96,6 +121,68 @@ export async function searchBySku(shopDomain, sku) {
     return { type: "none", variants: [], originalSku: skuTrim };
   } catch (err) {
     console.error(`[AdminProducts] SKU search failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Tier-2 text search via Admin GraphQL `products(query: ...)`.
+ * Uses Shopify's saved-search syntax (title:* / vendor:*), which is more
+ * precise than Storefront `search` (broad full-text). Returns the same
+ * shape the Storefront result mapper consumes, so the router can pass
+ * the products through storefrontProductToCardShape unchanged.
+ *
+ * Docs: https://shopify.dev/docs/api/usage/search-syntax
+ */
+export async function adminTextSearch(query, shopDomain) {
+  if (!query || typeof query !== "string") return null;
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+
+  const searchQuery = `title:*${trimmed}* OR vendor:*${trimmed}*`;
+  console.log(`[AdminProducts] text search: "${searchQuery}"`);
+
+  try {
+    const data = await shopifyAdminGraphqlQuery({
+      query: ADMIN_TEXT_SEARCH_QUERY,
+      variables: { q: searchQuery, first: 10 },
+      shopDomain,
+    });
+    const nodes = data?.products?.nodes || [];
+    console.log(`[AdminProducts] text search returned ${nodes.length} products`);
+    if (nodes.length === 0) return null;
+
+    const products = nodes.map((p) => ({
+      id: p.id,
+      title: p.title,
+      handle: p.handle,
+      vendor: p.vendor,
+      product_type: p.productType,
+      tags: p.tags,
+      description: (p.descriptionHtml || "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 500),
+      image_url:
+        p.featuredMedia?.preview?.image?.url ||
+        p.images?.nodes?.[0]?.url ||
+        null,
+      featuredImage:
+        p.featuredMedia?.preview?.image || p.images?.nodes?.[0] || null,
+      priceRange: p.priceRangeV2,
+      variants: (p.variants?.nodes || []).map((v) => ({
+        id: v.id,
+        sku: v.sku,
+        available: v.availableForSale,
+        price: v.price,
+      })),
+      sku: p.variants?.nodes?.[0]?.sku || null,
+    }));
+
+    return { products };
+  } catch (err) {
+    console.warn(`[AdminProducts] text search failed: ${err.message}`);
     return null;
   }
 }

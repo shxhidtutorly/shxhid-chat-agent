@@ -15,6 +15,7 @@
 
 import { isAlgoliaConfigured, algoliaSearch } from './algolia.server.js';
 import { rewriteQueryForSearch } from './query-intelligence.server.js';
+import { adminTextSearch } from './admin-products.server.js';
 
 const STOREFRONT_HOST = "creativeautomation.ae"; // public storefront for product URLs
 
@@ -152,13 +153,19 @@ function matchSkuToken(token) {
     return token;
   }
 
-  // Pattern 2: Thread/metric (e.g. M12-1.5, G1/2, M8x1.25, 3/4NPT)
-  if (/^[A-Z]*\d+[xX\-\/\.]\d+(?:[\.\d]*)?[A-Z]*$/i.test(token)) {
+  // Pattern 2 (FIXED): Thread/metric codes — REQUIRE leading letter(s).
+  // Matches: M12-1.5, G1/2, M8x1.25, R1/4
+  // Rejects: 1/2, 3/4, 5/2, 1.5, 2.5 (no leading letter)
+  // Bare-fraction + thread suffix (3/4NPT, 1/2BSP) is handled by Pattern 4.
+  if (/^[A-Z]+\d+[xX\-\/\.]\d+(?:[\.\d]*)?[A-Z]*$/i.test(token)) {
     return token;
   }
 
-  // Pattern 4: Fraction-based part codes (1/2, 3/4NPT)
-  if (/^\d+\/\d+[A-Z]*$/i.test(token)) {
+  // Pattern 4: Fraction-based part codes WITH a thread suffix (3/4NPT, 1/2BSP).
+  // The trailing letters are required — a bare "1/2" / "3/4" is a dimension,
+  // not a SKU, and previously matched here, sending dimension queries to the
+  // SKU lookup path and back to a broad Storefront fallback. Reject those.
+  if (/^\d+\/\d+[A-Z]+$/i.test(token)) {
     return token;
   }
 
@@ -170,6 +177,38 @@ function matchSkuToken(token) {
 
   return null;
 }
+
+// Self-test (runs once on import; fails loudly in dev/prod logs).
+(function selfTestSkuDetector() {
+  const cases = [
+    // Should NOT match (bare fractions, decimals, valve configs):
+    { input: "1/2",   expect: null,    note: "bare fraction" },
+    { input: "1/4",   expect: null,    note: "bare fraction" },
+    { input: "3/4",   expect: null,    note: "bare fraction" },
+    { input: "5/2",   expect: null,    note: "valve config" },
+    { input: "1.5",   expect: null,    note: "bare decimal" },
+    { input: "2.5",   expect: null,    note: "bare decimal" },
+    { input: "inch",  expect: null,    note: "dimension word" },
+    // Should match (real SKUs / thread specs):
+    { input: "M12-1.5",     expect: "M12-1.5",     note: "metric thread" },
+    { input: "M8x1.25",     expect: "M8x1.25",     note: "metric thread" },
+    { input: "G1/2",        expect: "G1/2",        note: "BSP thread" },
+    { input: "3/4NPT",      expect: "3/4NPT",      note: "thread suffix" },
+    { input: "BA25SS-STT3-A", expect: "BA25SS-STT3-A", note: "AODD pump SKU" },
+    { input: "BP06PP-PTT4-B", expect: "BP06PP-PTT4-B", note: "AODD pump SKU" },
+    { input: "ACS580",      expect: "ACS580",      note: "short SKU" },
+  ];
+  const failures = [];
+  for (const c of cases) {
+    const got = matchSkuToken(c.input);
+    if (got !== c.expect) failures.push(`  FAIL ${c.input} (${c.note}): got ${JSON.stringify(got)}, expected ${JSON.stringify(c.expect)}`);
+  }
+  if (failures.length) {
+    console.error(`[SearchRouter] SKU self-test FAILED:\n${failures.join("\n")}`);
+  } else {
+    console.log("[SearchRouter] SKU self-test passed (15 cases)");
+  }
+})();
 
 function isConversationalMessage(msg) {
   if (!msg || typeof msg !== 'string') return true;
@@ -248,6 +287,18 @@ async function handleSkuSearch(sku, originalMessage, shopDomain) {
     console.warn(`[SearchRouter] Admin SKU search failed: ${err.message}`);
   }
 
+  // Guard against short numeric tokens reaching the broad-match Storefront
+  // search. A 3-char fraction matches tens of thousands of products and
+  // returns garbage. Real SKUs always have letters + digits and >=5 chars.
+  const tokenIsRichEnough = sku.length >= 5
+    && /[A-Za-z]/.test(sku)
+    && /\d/.test(sku);
+
+  if (!tokenIsRichEnough) {
+    console.log(`[SearchRouter] SKU "${sku}" too short/numeric for Storefront fallback — returning null so caller can try text search`);
+    return null;
+  }
+
   // Step 2: Storefront search fallback (indexes variant.sku too)
   try {
     const { searchWithStorefront } = await import("../storefront-service.js");
@@ -280,87 +331,103 @@ async function handleSkuSearch(sku, originalMessage, shopDomain) {
 }
 
 /**
- * 4-tier fallback strategy:
- *   1. Original query
- *   2. Plural/singular variation of the last word
- *   3. Simplified (drop fillers and generic modifiers)
- *   4. Main noun only (last 3+ char word)
+ * Three-tier search hierarchy, explicit and auditable:
+ *   TIER 1 — Algolia (primary)        single request, hitsPerPage=10
+ *   TIER 2 — Admin productByQuery     same data, tighter index, max 10
+ *   TIER 3 — Storefront search        last resort, max 10, rejects if
+ *                                     totalCount > 1000 (too broad → noise)
  *
- * Stops on the first attempt that returns ≥1 product.
+ * Algolia wins outright when it returns ≥1 product — tiers 2 and 3 are
+ * never consulted in that case. QueryIntel.skip → early null (no search).
  */
 async function handleTextSearch(query, shopDomain, conversationHistory = []) {
-  console.log(`[SearchRouter] text search: "${query}"`);
+  console.log(`[SearchRouter] ─── text search start: "${query}" ───`);
 
-  // ── Query Intelligence: rewrite query for best Algolia results ──
-  // Run query rewriter BEFORE Algolia. Uses conversation context to
-  // understand follow-up questions like "which ones have 4mm range?"
+  // Run QueryIntel for the rewritten query that Algolia performs best on.
   let algoliaQuery = query;
-  let skipAlgolia = false;
+  let skipSearch = false;
 
   if (isAlgoliaConfigured()) {
     try {
       const intel = await rewriteQueryForSearch(query, conversationHistory);
-      skipAlgolia = intel.skip;
+      skipSearch = intel.skip;
       algoliaQuery = intel.query || query;
+      console.log(`[SearchRouter] QueryIntel: "${query}" → "${algoliaQuery}" (skip=${skipSearch}, reason=${intel.reason})`);
     } catch (err) {
-      console.warn(`[SearchRouter] Query intelligence failed: ${err.message}`);
-      algoliaQuery = query; // fall back to original
+      console.warn(`[SearchRouter] QueryIntel error: ${err.message} — using original query`);
     }
   }
 
-  // TIER 1: Algolia — best relevance for brand/product-type queries
-  if (isAlgoliaConfigured() && !skipAlgolia && algoliaQuery) {
+  // ─── EARLY EXIT: conversational input, NO product search at all ────
+  // This fixes Bug B: previously Storefront ran on "hi how are you" etc.
+  if (skipSearch) {
+    console.log(`[SearchRouter] Conversational input detected — skipping ALL search tiers`);
+    return null;
+  }
+
+  // ─── TIER 1: ALGOLIA (PRIMARY) ─────────────────────────────────────
+  // Single request, max 10 results, no pagination.
+  if (isAlgoliaConfigured() && algoliaQuery) {
+    console.log(`[SearchRouter] TIER 1 (Algolia): querying "${algoliaQuery}"`);
     try {
-      const result = await algoliaSearch(algoliaQuery, { first: 20, shopDomain });
-      if (result?.products?.length > 0) {
-        console.log(
-          `[SearchRouter] Algolia: ${result.products.length} results for "${algoliaQuery}"`
-        );
+      const result = await algoliaSearch(algoliaQuery, { first: 10, shopDomain });
+      const count = result?.products?.length || 0;
+      console.log(`[SearchRouter] TIER 1 (Algolia): ${count} results`);
+      if (count > 0) {
+        console.log(`[SearchRouter] ✓ Returning Algolia results — tiers 2/3 NOT consulted`);
         return formatStorefrontResult(result.products, 'algolia_search', algoliaQuery);
       }
-      console.log(`[SearchRouter] Algolia: 0 results for "${algoliaQuery}" — trying Storefront`);
     } catch (err) {
-      console.warn(`[SearchRouter] Algolia failed (${err.message}) — falling back`);
+      console.warn(`[SearchRouter] TIER 1 (Algolia) ERROR: ${err.message}`);
     }
+  } else {
+    console.warn(`[SearchRouter] TIER 1 (Algolia) SKIPPED — not configured. Set ALGOLIA_APP_ID, ALGOLIA_SEARCH_KEY, ALGOLIA_INDEX_NAME.`);
   }
 
-  // TIER 2: Storefront search — better for spec/attribute queries
-  // Also used when Algolia returns 0 results or was skipped
-  const { searchWithStorefront } = await import('../storefront-service.js');
-  const tried = new Set();
-  const attempts = [];
-
-  const tryQuery = async (q, strategy) => {
-    if (!q || typeof q !== 'string') return null;
-    const t = q.trim();
-    if (!t || tried.has(t.toLowerCase())) return null;
-    tried.add(t.toLowerCase());
-    try {
-      const r = await searchWithStorefront(t, { first: 20, shopDomain });
-      const count = r?.products?.length || 0;
-      attempts.push({ strategy, query: t, count });
-      return count > 0 ? { result: r, strategy, query: t } : null;
-    } catch (err) {
-      console.warn(`[SearchRouter] ${strategy} failed: ${err.message}`);
-      return null;
+  // ─── TIER 2: SHOPIFY ADMIN (first fallback for stale Algolia index) ─
+  // Use Admin productVariants search rather than Storefront — same data,
+  // but indexed fields are tighter (vendor, sku, title), so noise is lower.
+  console.log(`[SearchRouter] TIER 2 (Admin): falling back for "${algoliaQuery}"`);
+  try {
+    const adminResult = await adminTextSearch(algoliaQuery, shopDomain);
+    if (adminResult?.products?.length > 0) {
+      console.log(`[SearchRouter] TIER 2 (Admin): ${adminResult.products.length} results`);
+      console.log(`[SearchRouter] ✓ Returning Admin results — tier 3 NOT consulted`);
+      const products = adminResult.products.map(storefrontProductToCardShape);
+      return formatStorefrontResult(products, 'admin_text_search', algoliaQuery);
     }
-  };
+    console.log(`[SearchRouter] TIER 2 (Admin): 0 results`);
+  } catch (err) {
+    console.warn(`[SearchRouter] TIER 2 (Admin) ERROR: ${err.message}`);
+  }
 
-  // Try original query, then the rewritten query if different, then simplifications
-  let hit = await tryQuery(query, 'original');
-  if (!hit && algoliaQuery !== query) hit = await tryQuery(algoliaQuery, 'rewritten');
-  if (!hit) hit = await tryQuery(pluralSingularVariant(query), 'plural_singular');
-  if (!hit) hit = await tryQuery(simplifyQuery(query), 'simplified');
-  if (!hit) hit = await tryQuery(mainNoun(query), 'main_noun');
+  // ─── TIER 3: STOREFRONT search_catalog (ABSOLUTE LAST RESORT) ──────
+  // Only reached when Algolia AND Admin both returned nothing.
+  console.log(`[SearchRouter] TIER 3 (Storefront): last-resort fallback`);
+  const { searchWithStorefront } = await import('../storefront-service.js');
+  try {
+    const r = await searchWithStorefront(algoliaQuery, { first: 10, shopDomain });
+    const count = r?.products?.length || 0;
+    console.log(`[SearchRouter] TIER 3 (Storefront): ${count} results`);
+    if (count > 0) {
+      // Accuracy guard: reject Storefront result if total match count is
+      // suspiciously high (likely irrelevant — common substring match).
+      if (r.totalCount && r.totalCount > 1000) {
+        console.warn(`[SearchRouter] TIER 3 REJECTED: totalCount=${r.totalCount} (>1000) — query too broad, results would be irrelevant`);
+        return null;
+      }
+      return formatStorefrontResult(
+        r.products.map(storefrontProductToCardShape),
+        'storefront_search_last_resort',
+        algoliaQuery
+      );
+    }
+  } catch (err) {
+    console.warn(`[SearchRouter] TIER 3 (Storefront) ERROR: ${err.message}`);
+  }
 
-  console.log(`[SearchRouter] Storefront attempts: ${JSON.stringify(attempts)}`);
-  if (!hit) return null;
-
-  const products = hit.result.products.map(storefrontProductToCardShape);
-  const searchType = hit.strategy === 'original'
-    ? 'storefront_search'
-    : `storefront_search_${hit.strategy}`;
-  return formatStorefrontResult(products, searchType, hit.query);
+  console.log(`[SearchRouter] ─── all tiers exhausted: 0 results for "${query}" ───`);
+  return null;
 }
 
 export async function smartSearch(userMessage, shopDomain, conversationHistory = []) {

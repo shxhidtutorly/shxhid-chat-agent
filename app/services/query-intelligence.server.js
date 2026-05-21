@@ -187,12 +187,20 @@ export async function rewriteQueryForSearch(userMessage, conversationContext = [
     return { query: trimmed, skip: true, reason: 'too_short' };
   }
 
-  // Build a context summary from the last 2 turns
+  // Build a context summary from the last turn. We ONLY feed prior context
+  // when the current message is plainly a clarifier of the previous turn
+  // (e.g. "show me only", "with", "the first one"). Treating every message
+  // as a follow-up bleeds the previous brand/category into unrelated
+  // searches — "do you have circuit breakers" after a SICK sensor question
+  // would otherwise be rewritten as "SICK circuit breaker".
+  const CLARIFIER = /^(show me only|filter by|with |the first one|which one|only the|and the|in stock|cheaper|more expensive|larger|smaller|same but|like the (first|second|last|one|previous))\b/i;
+  const isClarifier = CLARIFIER.test(trimmed);
+
   let contextSummary = '';
-  if (conversationContext && conversationContext.length > 0) {
+  if (isClarifier && conversationContext && conversationContext.length > 0) {
     const recentTurns = conversationContext
       .filter(m => m.role === 'user' || m.role === 'assistant')
-      .slice(-4) // last 2 user+assistant pairs
+      .slice(-2) // last user+assistant pair only
       .map(m => {
         const content = typeof m.content === 'string'
           ? m.content

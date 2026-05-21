@@ -17,6 +17,7 @@
     "db:migrate:dev": "prisma migrate dev",
     "db:studio": "prisma studio",
     "db:seed": "node prisma/seed.js",
+    "test": "node --test tests/",
     "postinstall": "prisma generate"
   },
   "dependencies": {

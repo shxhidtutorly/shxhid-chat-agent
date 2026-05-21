@@ -25,6 +25,41 @@
 
 let _client = null;
 
+// -------- In-process result cache (Improvement 1) ------------------------
+// Map preserves insertion order; we evict the oldest key when full.
+// Keys are JSON({q, filters}) lowercased. TTL 5 min. Empty-result
+// responses are NOT cached.
+const RESULT_CACHE_MAX = 200;
+const RESULT_CACHE_TTL_MS = 5 * 60 * 1000;
+const _resultCache = new Map();
+
+function _cacheGet(key) {
+  const v = _resultCache.get(key);
+  if (!v) return null;
+  if (Date.now() - v.at > RESULT_CACHE_TTL_MS) {
+    _resultCache.delete(key);
+    return null;
+  }
+  // refresh LRU order
+  _resultCache.delete(key);
+  _resultCache.set(key, v);
+  return v.products;
+}
+
+function _cacheSet(key, products) {
+  if (!products || products.length === 0) return;
+  if (_resultCache.size >= RESULT_CACHE_MAX) {
+    const oldest = _resultCache.keys().next().value;
+    if (oldest) _resultCache.delete(oldest);
+  }
+  _resultCache.set(key, { products, at: Date.now() });
+}
+
+const _DEBUG_SEARCH = process.env.DEBUG_SEARCH === '1';
+function _vlog(...args) {
+  if (_DEBUG_SEARCH) console.log(...args);
+}
+
 async function getClient() {
   if (_client) return _client;
 
@@ -51,6 +86,105 @@ async function getClient() {
 
 export function isAlgoliaConfigured() {
   return !!(process.env.ALGOLIA_APP_ID && process.env.ALGOLIA_SEARCH_KEY);
+}
+
+// -------- Vendor list cache (Bug 3 — brand-aware routing) -----------------
+// Fetched once via Algolia searchForFacetValues on `vendor`, cached 24h.
+// https://www.algolia.com/doc/api-reference/api-methods/search-for-facet-values/
+//
+// Note: `vendor` must be declared as a facetable attribute in the index
+// configuration (Configuration → Facets → vendor as filterOnly). If the
+// facet call returns nothing, we fall back to letting the vendor name
+// remain in the free-text query.
+const VENDOR_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+let _vendorCache = null; // { vendors: Set<string lowercase>, vendorMap: Map<string lowercase, string original>, fetchedAt: number }
+let _vendorInflight = null;
+
+async function getVendorSet(client, indexName) {
+  const now = Date.now();
+  if (_vendorCache && now - _vendorCache.fetchedAt < VENDOR_CACHE_TTL_MS) {
+    return _vendorCache;
+  }
+  if (_vendorInflight) return _vendorInflight;
+
+  _vendorInflight = (async () => {
+    try {
+      // Algolia v5 client: searchForFacetValues on a single facet.
+      const res = await client.searchForFacetValues({
+        indexName,
+        facetName: 'vendor',
+        searchForFacetValuesRequest: { facetQuery: '', maxFacetHits: 100 },
+      });
+      const facetHits = res?.facetHits || res?.results?.[0]?.facetHits || [];
+      const vendors = new Set();
+      const vendorMap = new Map();
+      for (const f of facetHits) {
+        const v = f.value;
+        if (typeof v === 'string' && v.trim()) {
+          const lower = v.toLowerCase();
+          vendors.add(lower);
+          if (!vendorMap.has(lower)) vendorMap.set(lower, v);
+        }
+      }
+      _vendorCache = { vendors, vendorMap, fetchedAt: now };
+      console.log(`[Algolia] vendor cache populated: ${vendors.size} vendors`);
+      return _vendorCache;
+    } catch (err) {
+      console.warn(`[Algolia] vendor facet fetch failed: ${err.message} — vendor routing disabled this request`);
+      // Cache an empty result for 5 minutes so we don't hammer Algolia
+      // on every search when the facet isn't configured.
+      _vendorCache = { vendors: new Set(), vendorMap: new Map(), fetchedAt: now - VENDOR_CACHE_TTL_MS + 5 * 60 * 1000 };
+      return _vendorCache;
+    } finally {
+      _vendorInflight = null;
+    }
+  })();
+  return _vendorInflight;
+}
+
+/**
+ * Detect vendor tokens in the query and lift them into a `filters`
+ * clause. Removes the vendor word(s) from the free-text query so
+ * Algolia ranks on the remaining product-type words.
+ *
+ * Greedy multi-word match (longest first) so "TE Connectivity" wins
+ * over "TE" alone.
+ */
+async function applyVendorRouting(query, client, indexName) {
+  if (!query || typeof query !== 'string') return { algoliaQuery: query, filters: null };
+  const { vendors, vendorMap } = await getVendorSet(client, indexName);
+  if (!vendors || vendors.size === 0) return { algoliaQuery: query, filters: null };
+
+  const lower = query.toLowerCase();
+  // Try to match each vendor (longest first) against the query as a
+  // whole-word substring. Multiple vendors can match (OR them).
+  const sorted = [...vendors].sort((a, b) => b.length - a.length);
+  const matched = [];
+  let stripped = ` ${lower} `;
+  for (const v of sorted) {
+    const re = new RegExp(`\\s${v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s`, 'g');
+    if (re.test(stripped)) {
+      matched.push(vendorMap.get(v) || v);
+      stripped = stripped.replace(re, ' ');
+    }
+  }
+  if (matched.length === 0) return { algoliaQuery: query, filters: null };
+
+  // Escape double quotes inside vendor names for the Algolia filter expr.
+  const filters = matched
+    .map((v) => `vendor:"${v.replace(/"/g, '\\"')}"`)
+    .join(' OR ');
+
+  // Rebuild the query string by mapping the stripped lower-case copy back
+  // through the original (preserve user casing for the remainder).
+  const remainder = stripped.trim().replace(/\s+/g, ' ');
+  // If the user typed brand-only ("ABB"), remainder is empty — pass "" so
+  // Algolia returns all vendor-matching products ranked by tiebreakers.
+  const algoliaQuery = remainder;
+  console.log(
+    `[Algolia] vendor routing: matched=[${matched.join(', ')}] query="${query}" → query="${algoliaQuery}" filters=${filters}`
+  );
+  return { algoliaQuery, filters };
 }
 
 /**
@@ -189,6 +323,30 @@ function flattenHitText(hit) {
  * the product text — critical because the catalog uses the spaced
  * form ("60 mm") and QueryIntel emits the unspaced form ("60mm").
  */
+/**
+ * Inventory + accessory-aware rerank. Applied AFTER scoreHitBySpec so a
+ * spec-correct product still beats an in-stock-but-wrong-size one.
+ *
+ * Magnitudes are tuned smaller than the spec scorer (+1000 / -800)
+ * so business signals act as a tiebreaker, not an override.
+ */
+function scoreHitByBusinessSignal(hit) {
+  let s = 0;
+  if (hit.inventory_available === true) s += 200;
+  if (typeof hit.inventory_quantity === 'number' && hit.inventory_quantity > 0) s += 50;
+
+  const titleLow = (hit.title || '').toLowerCase();
+  const ptLow = (hit.product_type || '').toLowerCase();
+  if (
+    titleLow.includes('accessory') ||
+    titleLow.includes('mounting bracket') ||
+    ptLow.includes('accessory')
+  ) {
+    s -= 300;
+  }
+  return s;
+}
+
 function scoreHitBySpec(hit, specTokens) {
   if (!specTokens.length) return 0;
   const text = flattenHitText(hit);
@@ -242,6 +400,46 @@ function scoreHitBySpec(hit, specTokens) {
   return score;
 }
 
+/**
+ * Build the typo-policy fields for a single Algolia request.
+ *
+ * Per https://www.algolia.com/doc/api-reference/api-parameters/typoTolerance/
+ * `typoTolerance` is a SCALAR — boolean | "min" | "strict". The
+ * `allowTyposOnNumericTokens`, `minWordSizefor1Typo`, and
+ * `minWordSizefor2Typos` parameters are SEPARATE top-level request
+ * params. Sending them nested under `typoTolerance` produces the
+ * `Invalid value for "typoTolerance" parameter, expected min, strict
+ * or boolean value` error that was silently emptying Tier 1 results.
+ */
+function buildTypoPolicy({ looksLikeSku, hasNumericSpec }) {
+  // SKU paths: turn typo tolerance off entirely.
+  if (looksLikeSku) {
+    return {
+      typoTolerance: false,
+      allowTyposOnNumericTokens: false,
+      // Even when typoTolerance flips to true elsewhere, SKUs and vendor
+      // names must never be typo-matched. "PS4607" can't become "PS4608"
+      // and "SICK" can't become "SIEMENS" by edit distance.
+      disableTypoToleranceOnAttributes: ['sku', 'vendor'],
+    };
+  }
+  // Numeric-spec queries: keep typoTolerance for words but lock numbers.
+  if (hasNumericSpec) {
+    return {
+      typoTolerance: true,
+      allowTyposOnNumericTokens: false,
+      minWordSizefor1Typo: 5,
+      minWordSizefor2Typos: 9,
+      disableTypoToleranceOnAttributes: ['sku', 'vendor'],
+    };
+  }
+  // Plain text queries: default typoTolerance, still protect sku/vendor.
+  return {
+    typoTolerance: true,
+    disableTypoToleranceOnAttributes: ['sku', 'vendor'],
+  };
+}
+
 export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
   if (!query || typeof query !== 'string') return null;
   const trimmed = query.trim();
@@ -252,17 +450,17 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
     (/^[A-Z]{2,}\d{2,}/.test(trimmed) && trimmed.length >= 5 && trimmed.length <= 20);
 
   if (looksLikeSku) {
-    console.log(`[Algolia] SKU query detected — searching exact: "${trimmed}"`);
+    _vlog(`[Algolia] SKU query detected — searching exact: "${trimmed}"`);
   }
 
   const indexName = process.env.ALGOLIA_INDEX_NAME || 'shopify_products';
-  console.log(`[Algolia] Searching: "${trimmed}" in "${indexName}"`);
+  _vlog(`[Algolia] Searching: "${trimmed}" in "${indexName}"`);
 
-  // Single audit line so the exact outgoing query + typo policy are greppable.
+  const _t0 = Date.now();
   const _specTokensForLog = extractSpecTokens(trimmed);
-  console.log(
+  _vlog(
     `[Algolia] OUTGOING query="${trimmed}" first=${first} typoTolerance=${
-      looksLikeSku ? "off (sku)" : _specTokensForLog.length > 0 ? "off (numeric)" : "on"
+      looksLikeSku ? "off (sku)" : _specTokensForLog.length > 0 ? "numeric-locked" : "on"
     }`
   );
 
@@ -274,34 +472,58 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
     return null;
   }
 
+  // Build the Algolia request. typoTolerance must be a SCALAR — see
+  // buildTypoPolicy() for the previous-nested-object bug history.
+  const hasNumericSpec = _specTokensForLog.length > 0;
+  const typoFields = buildTypoPolicy({ looksLikeSku, hasNumericSpec });
+
+  // Vendor filter routing (Bug 3): if the query contains a known vendor
+  // token, lift it out into `filters` and strip from the free-text query.
+  const { algoliaQuery: queryForAlgolia, filters } = await applyVendorRouting(
+    trimmed,
+    client,
+    indexName
+  );
+
+  // Result cache lookup keyed on the final outgoing query + filters.
+  const cacheKey = JSON.stringify({
+    q: queryForAlgolia.toLowerCase().replace(/\s+/g, ' '),
+    f: filters || '',
+    first,
+  });
+  const cached = _cacheGet(cacheKey);
+  if (cached) {
+    console.log(
+      `[SearchAudit] q=${JSON.stringify(trimmed)} tier=algolia_cache filters=${JSON.stringify(filters || '')} n=${cached.length} latency_ms=${Date.now() - _t0} top_sku=${JSON.stringify(cached[0]?.sku || '')} top_vendor=${JSON.stringify(cached[0]?.vendor || '')} reranked=false`
+    );
+    return { products: cached };
+  }
+
+  // For non-SKU, non-numeric queries, let Algolia broaden by trimming
+  // tail words when zero hits — safer than the home-grown plural/main-noun
+  // retry loop. https://www.algolia.com/doc/api-reference/api-parameters/removeWordsIfNoResults/
+  const removeWordsPolicy =
+    !looksLikeSku && !hasNumericSpec ? { removeWordsIfNoResults: 'lastWords' } : {};
+
   let hits = [];
   try {
     const response = await client.search({
       requests: [{
         indexName,
-        query: trimmed,
-        hitsPerPage: first,  // v3.1: was hardcoded 20, now uses param (default 10)
+        query: queryForAlgolia,
+        hitsPerPage: first,
         attributesToRetrieve: [
           'objectID', 'id', 'title', 'handle', 'vendor',
           'product_type', 'tags', 'body_html', 'body_html_safe',
           'price', 'variants_min_price', 'variants_max_price', 'currency_code',
           'product_image', 'image', 'featured_image', 'images',
           'variants', 'sku', 'named_tags',
+          'inventory_available', 'inventory_quantity',
         ],
-        ...(looksLikeSku
-          ? { optionalWords: [], typoTolerance: false }
-          : extractSpecTokens(trimmed).length > 0
-            ? {
-                // Disable numeric-token typo substitution so "60" can't be
-                // typo-matched to "50"/"65"/etc.
-                // https://www.algolia.com/doc/api-reference/api-parameters/typoTolerance/
-                typoTolerance: {
-                  allowTyposOnNumericTokens: false,
-                  minWordSizefor1Typo: 5,
-                  minWordSizefor2Typos: 9,
-                },
-              }
-            : { typoTolerance: true }),
+        ...(looksLikeSku ? { optionalWords: [] } : {}),
+        ...(filters ? { filters } : {}),
+        ...typoFields,
+        ...removeWordsPolicy,
       }],
     });
     hits = response.results?.[0]?.hits || [];
@@ -322,20 +544,18 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
     return null;
   }
 
-  // Post-Algolia spec-aware re-rank. EXACT numeric matches float; products
-  // with a DIFFERENT numeric value of the same unit (60mm asked, 5mm seen)
-  // are pushed down hard so the wrong-size product never ranks at position 1.
+  // Post-Algolia re-rank. Spec score floats EXACT numeric matches and sinks
+  // numeric mismatches; business-signal score is a smaller tiebreaker for
+  // in-stock products and a penalty for accessory/mounting-bracket records.
   const specTokens = extractSpecTokens(trimmed);
-  if (hits.length > 0 && specTokens.length > 0) {
-    console.log(
-      `[Algolia] spec tokens detected: ${JSON.stringify(specTokens)}`
-    );
-
-    const scored = hits.map((h, idx) => ({
-      hit: h,
-      idx, // preserve Algolia tiebreak order
-      score: scoreHitBySpec(h, specTokens),
-    }));
+  let _reranked = false;
+  if (hits.length > 0) {
+    const originalTop3 = hits.slice(0, 3).map((h) => h.sku);
+    const scored = hits.map((h, idx) => {
+      const spec = specTokens.length ? scoreHitBySpec(h, specTokens) : 0;
+      const biz = scoreHitByBusinessSignal(h);
+      return { hit: h, idx, spec, biz, score: spec + biz };
+    });
 
     scored.sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
@@ -343,24 +563,46 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
     });
 
     hits = scored.map((s) => s.hit);
+    const newTop3 = hits.slice(0, 3).map((h) => h.sku);
+    _reranked = JSON.stringify(originalTop3) !== JSON.stringify(newTop3);
 
-    console.log(`[Algolia] post-spec re-rank top 5:`);
-    scored.slice(0, 5).forEach((s, i) => {
-      console.log(
-        `  ${i + 1}. score=${s.score} sku=${s.hit.sku} title="${(s.hit.title || "").slice(0, 80)}"`
-      );
-    });
+    if (specTokens.length > 0) {
+      console.log(`[Algolia] spec tokens detected: ${JSON.stringify(specTokens)}`);
+    }
+    if (_reranked) {
+      // Track each top-3 movement explicitly so audits can confirm WHY a
+      // demoted product is no longer rank 1.
+      for (let i = 0; i < newTop3.length; i++) {
+        const sku = newTop3[i];
+        const prev = originalTop3.indexOf(sku);
+        if (prev !== -1 && prev !== i) {
+          console.log(
+            `[Algolia] Business-signal rerank moved sku=${sku} from pos=${prev + 1} → pos=${i + 1}`
+          );
+        }
+      }
+    }
+    if (specTokens.length > 0 || _reranked) {
+      console.log(`[Algolia] post-rerank top 5:`);
+      scored.slice(0, 5).forEach((s, i) => {
+        console.log(
+          `  ${i + 1}. score=${s.score} (spec=${s.spec} biz=${s.biz}) sku=${s.hit.sku} title="${(s.hit.title || "").slice(0, 80)}"`
+        );
+      });
+    }
   }
 
   if (hits.length === 0) {
-    console.log(`[Algolia] 0 results for "${trimmed}"`);
+    console.log(
+      `[SearchAudit] q=${JSON.stringify(trimmed)} tier=algolia filters=${JSON.stringify(filters || '')} n=0 latency_ms=${Date.now() - _t0} top_sku="" top_vendor="" reranked=false`
+    );
     return null;
   }
 
-  console.log(`[Algolia] ${hits.length} results for "${trimmed}"`);
+  _vlog(`[Algolia] ${hits.length} results for "${trimmed}"`);
 
-  // Full ranked top-N log so future ranking bugs are diagnosable from logs alone.
-  if (hits.length > 0) {
+  // Verbose ranked list is opt-in via DEBUG_SEARCH=1 to keep production logs lean.
+  if (_DEBUG_SEARCH && hits.length > 0) {
     console.log(`[AlgoliaDiag] full ranked list (${hits.length} hits) for query="${trimmed}":`);
     hits.forEach((h, i) => {
       const price = h.variants_min_price ?? h.price ?? "?";
@@ -368,14 +610,22 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
         `  ${i + 1}. sku=${h.sku || "?"} price=${price} title="${(h.title || "").slice(0, 90)}"`
       );
     });
-    // Keep first-hit detail diagnostics for image/variant debugging:
     const h = hits[0];
     console.log(`[AlgoliaDiag] hit[0] product_image="${(h.product_image || "").substring(0, 80)}"`);
     console.log(`[AlgoliaDiag] hit[0] objectID=${h.objectID} id=${h.id} has_variants=${Array.isArray(h.variants) ? h.variants.length : "none"}`);
   }
 
-  const handles = hits.map((h) => h.handle).filter(Boolean);
-  const variantMap = await fetchVariantIdsByHandles(handles, shopDomain);
+  // Short-circuit: only call Storefront for hits that don't already carry
+  // a usable variant id from Algolia. Most hits in this index are
+  // product-level (no variants[]), but some have it — skip the round trip
+  // when we can. Skipping the lookup entirely also avoids the 10x token
+  // mint storm that motivated Bug 2.
+  const needsLookup = hits
+    .filter((h) => h.handle && !(Array.isArray(h.variants) && h.variants[0]?.id))
+    .map((h) => h.handle);
+  const variantMap = needsLookup.length > 0
+    ? await fetchVariantIdsByHandles(needsLookup, shopDomain)
+    : new Map();
 
   const STOREFRONT_HOST = 'www.creativeautomation.ae';
 
@@ -403,10 +653,18 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
       ? `${parseFloat(String(rawPrice)).toFixed(2)} ${currency}`
       : null;
 
-    // VARIANT ID: from Storefront lookup
+    // VARIANT ID: prefer Algolia's own variant if present, else Storefront lookup.
+    const algoliaVariant = Array.isArray(hit.variants) ? hit.variants[0] : null;
+    const algoliaVariantRawId = algoliaVariant?.id;
+    const algoliaVariantId = algoliaVariantRawId != null
+      ? (String(algoliaVariantRawId).startsWith('gid://')
+          ? String(algoliaVariantRawId)
+          : `gid://shopify/ProductVariant/${algoliaVariantRawId}`)
+      : null;
     const variantInfo = hit.handle ? variantMap.get(hit.handle) : null;
-    const variantId = variantInfo?.variantId || null;
-    const variantSku = variantInfo?.variantSku || hit.sku || null;
+    const variantId = algoliaVariantId || variantInfo?.variantId || null;
+    const variantSku =
+      algoliaVariant?.sku || variantInfo?.variantSku || hit.sku || null;
 
     // DESCRIPTION
     const rawDesc = hit.body_html_safe || hit.body_html || '';
@@ -439,6 +697,12 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
 
     return result;
   });
+
+  _cacheSet(cacheKey, products);
+
+  console.log(
+    `[SearchAudit] q=${JSON.stringify(trimmed)} tier=algolia filters=${JSON.stringify(filters || '')} n=${products.length} latency_ms=${Date.now() - _t0} top_sku=${JSON.stringify(products[0]?.sku || '')} top_vendor=${JSON.stringify(products[0]?.vendor || '')} reranked=${_reranked}`
+  );
 
   return { products };
 }

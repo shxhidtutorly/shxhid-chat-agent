@@ -16,12 +16,14 @@
 const API_VERSION = process.env.SHOPIFY_API_VERSION || '2025-01';
 const STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || '';
 
-// In-memory cache (per process). Initialized ONCE from env var.
-// After that, only the cache is used — env var is NEVER re-read at call time.
-// Do not read SHOPIFY_STOREFRONT_TOKEN at startup.
-// Token is always auto-created fresh via Admin REST API to avoid
-// stale token 401s on deploy. Remove this env var from Railway.
+// In-memory cache (per process). Token is always auto-created fresh via
+// Admin REST API to avoid stale-token 401s on deploy.
+//
+// `inFlight` dedupes concurrent callers (Bug 2): without it, the 10
+// parallel productByHandle queries fired by Algolia's variant lookup all
+// race past the `cachedToken === null` check and each mints a new token.
 let cachedToken = null;
+let inFlight = null;
 let envTokenDiscarded = true; // env var path permanently disabled
 
 // Startup diagnostics
@@ -48,8 +50,19 @@ if (!STORE_DOMAIN) {
  */
 async function getStorefrontToken() {
   if (cachedToken) return cachedToken;
+  // Dedupe concurrent callers so we mint exactly ONE token even when
+  // 10 parallel productByHandle queries race past the cache check.
+  if (inFlight) return inFlight;
   console.log('[Storefront] No cached token — creating via Admin REST API...');
-  return await createStorefrontTokenViaAdminRest();
+  inFlight = createStorefrontTokenViaAdminRest()
+    .then((t) => {
+      cachedToken = t;
+      return t;
+    })
+    .finally(() => {
+      inFlight = null;
+    });
+  return inFlight;
 }
 
 /**

@@ -144,9 +144,14 @@ function detectSku(message) {
 function matchSkuToken(token) {
   if (!token) return null;
 
-  // Skip pure measurement tokens: 24VDC, 18MM, 100A, IP67, 2INCH
-  if (/^\d+(?:MM|CM|VDC|VAC|V|A|W|KW|HP|INCH|IN|FT|FEET|FOOT)$/i.test(token)) return null;
+  // Skip pure measurement tokens. Expanded list now includes pressure
+  // (BAR/PSI/MPA/KPA), rotational (RPM), and frequency units that were
+  // slipping into Pattern 5.
+  if (/^\d+(?:BAR|PSI|MPA|KPA|MM|CM|VDC|VAC|V|A|W|KW|HP|INCH|IN|FT|FEET|FOOT|HZ|KHZ|RPM)$/i.test(token)) return null;
   if (/^IP\d{2}$/i.test(token)) return null;
+
+  // Skip cable category tokens: Cat5, Cat5e, Cat6, Cat6a.
+  if (/^CAT\d+[A-Z]?$/i.test(token)) return null;
 
   // Pattern 1: Standard alphanumeric SKUs (>=6 chars, contains digit+letter)
   if (/^[A-Z0-9][A-Z0-9\-_]{5,}$/i.test(token) && /[A-Za-z]/.test(token) && /\d/.test(token)) {
@@ -162,16 +167,29 @@ function matchSkuToken(token) {
   }
 
   // Pattern 4: Fraction-based part codes WITH a thread suffix (3/4NPT, 1/2BSP).
-  // The trailing letters are required -- a bare "1/2" / "3/4" is a dimension,
-  // not a SKU, and previously matched here, sending dimension queries to the
-  // SKU lookup path and back to a broad Storefront fallback. Reject those.
+  // The trailing letters are required -- a bare "1/2" / "3/4" is a dimension.
   if (/^\d+\/\d+[A-Z]+$/i.test(token)) {
     return token;
   }
 
-  // Pattern 5: Short mixed alphanumeric codes (>=5 chars, has letter+digit)
-  // Catches ACS580, MGPM12, 6SL3220
+  // Pattern 5: Short mixed alphanumeric codes (>=5 chars, has letter+digit).
+  // 5-6 char tokens with no separator must contain >=2 letter-digit
+  // transitions to qualify — "100bar" already rejected above, this rule
+  // also rejects "ABC12" (one transition) while accepting "DFS60S" (3).
   if (token.length >= 5 && /[A-Za-z]/.test(token) && /\d/.test(token) && /^[A-Z0-9\-\.\/]+$/i.test(token)) {
+    const hasSeparator = /[\-\.\/]/.test(token);
+    if (!hasSeparator && token.length <= 6) {
+      // Count letter→digit and digit→letter transitions.
+      let transitions = 0;
+      for (let i = 1; i < token.length; i++) {
+        const a = token[i - 1];
+        const b = token[i];
+        const aIsAlpha = /[A-Za-z]/.test(a);
+        const bIsAlpha = /[A-Za-z]/.test(b);
+        if (aIsAlpha !== bIsAlpha) transitions++;
+      }
+      if (transitions < 2) return null;
+    }
     return token;
   }
 
@@ -189,6 +207,10 @@ function matchSkuToken(token) {
     { input: "1.5",   expect: null,    note: "bare decimal" },
     { input: "2.5",   expect: null,    note: "bare decimal" },
     { input: "inch",  expect: null,    note: "dimension word" },
+    // Bug 6 additions:
+    { input: "100bar", expect: null,   note: "pressure unit" },
+    { input: "Cat5e",  expect: null,   note: "cable category" },
+    { input: "Cat6a",  expect: null,   note: "cable category" },
     // Should match (real SKUs / thread specs):
     { input: "M12-1.5",     expect: "M12-1.5",     note: "metric thread" },
     { input: "M8x1.25",     expect: "M8x1.25",     note: "metric thread" },
@@ -197,6 +219,7 @@ function matchSkuToken(token) {
     { input: "BA25SS-STT3-A", expect: "BA25SS-STT3-A", note: "AODD pump SKU" },
     { input: "BP06PP-PTT4-B", expect: "BP06PP-PTT4-B", note: "AODD pump SKU" },
     { input: "ACS580",      expect: "ACS580",      note: "short SKU" },
+    { input: "DFS60S",      expect: "DFS60S",      note: "SICK encoder family" },
   ];
   const failures = [];
   for (const c of cases) {

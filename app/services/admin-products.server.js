@@ -134,22 +134,60 @@ export async function searchBySku(shopDomain, sku) {
  *
  * Docs: https://shopify.dev/docs/api/usage/search-syntax
  */
+// Tokens shorter than this are noise in 200k-row substring searches.
+const MIN_ADMIN_TOKEN_LEN = 3;
+// Cap to avoid Shopify rejecting a giant query string.
+const MAX_ADMIN_TOKENS = 5;
+
+function _adminTokenize(s) {
+  return String(s)
+    .toLowerCase()
+    .replace(/[^a-z0-9\-]/g, ' ')
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= MIN_ADMIN_TOKEN_LEN)
+    .slice(0, MAX_ADMIN_TOKENS);
+}
+
+async function _runAdminSearch(searchQuery, shopDomain) {
+  console.log(`[AdminProducts] text search: "${searchQuery}"`);
+  const data = await shopifyAdminGraphqlQuery({
+    query: ADMIN_TEXT_SEARCH_QUERY,
+    variables: { q: searchQuery, first: 10 },
+    shopDomain,
+  });
+  const nodes = data?.products?.nodes || [];
+  console.log(`[AdminProducts] text search returned ${nodes.length} products`);
+  return nodes;
+}
+
 export async function adminTextSearch(query, shopDomain) {
   if (!query || typeof query !== "string") return null;
   const trimmed = query.trim();
   if (!trimmed) return null;
 
-  const searchQuery = `title:*${trimmed}* OR vendor:*${trimmed}*`;
-  console.log(`[AdminProducts] text search: "${searchQuery}"`);
-
+  // Pass 1: token-AND on title for multi-word queries. This is dramatically
+  // tighter than `title:*phrase*` at 200k scale (Shopify search-syntax docs:
+  // https://shopify.dev/docs/api/usage/search-syntax).
+  const tokens = _adminTokenize(trimmed);
+  let nodes = [];
   try {
-    const data = await shopifyAdminGraphqlQuery({
-      query: ADMIN_TEXT_SEARCH_QUERY,
-      variables: { q: searchQuery, first: 10 },
-      shopDomain,
-    });
-    const nodes = data?.products?.nodes || [];
-    console.log(`[AdminProducts] text search returned ${nodes.length} products`);
+    if (tokens.length === 0) {
+      // Fallback to the legacy phrase search for very short queries.
+      nodes = await _runAdminSearch(
+        `title:*${trimmed}* OR vendor:*${trimmed}*`,
+        shopDomain
+      );
+    } else {
+      const andClause = tokens.map((t) => `title:*${t}*`).join(' AND ');
+      nodes = await _runAdminSearch(andClause, shopDomain);
+
+      // Pass 2: if zero hits, retry with just the first token, preferring vendor.
+      if (nodes.length === 0) {
+        const t = tokens[0];
+        nodes = await _runAdminSearch(`title:*${t}* OR vendor:*${t}*`, shopDomain);
+      }
+    }
     if (nodes.length === 0) return null;
 
     const products = nodes.map((p) => ({

@@ -2,9 +2,40 @@
 /**
  * Database Server Module - PostgreSQL with Railway
  * Handles all database operations for chat, leads, and analytics
+ *
+ * DATABASE_URL pooling: append `?connection_limit=10&pool_timeout=20&connect_timeout=10`
+ * in the Railway env var. Prisma reads this from the URL — no code change needed.
+ * https://www.prisma.io/docs/orm/overview/databases/postgresql
  */
 
 import { PrismaClient } from "@prisma/client";
+
+/**
+ * Retry a Prisma call once on transient connection errors. Catches the
+ * common Railway-Postgres failure modes (connection reset, ECONNREFUSED,
+ * P1001 server unreachable). Logical errors (P2002 unique, etc.) are NOT
+ * retried — they're surfaced unchanged.
+ */
+async function _withDbRetry(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    const msg = String(err?.message || '');
+    const code = err?.code;
+    const transient =
+      code === 'P1001' ||
+      code === 'P1002' ||
+      code === 'P1017' ||
+      msg.includes('ECONNRESET') ||
+      msg.includes('ECONNREFUSED') ||
+      msg.includes('Connection terminated') ||
+      msg.includes('socket hang up');
+    if (!transient) throw err;
+    console.warn(`[DB] transient error (${code || 'no-code'}): ${msg.slice(0, 200)} — retrying once`);
+    await new Promise((r) => setTimeout(r, 250));
+    return await fn();
+  }
+}
 
 // Singleton pattern for Prisma client
 const globalForPrisma = globalThis;
@@ -284,8 +315,8 @@ export async function saveMessage(conversationId, role, content, {
     // Ensure conversation exists
     await createOrUpdateConversation(conversationId, { shopDomain, visitorId });
 
-    // Create message
-    const message = await prisma.message.create({
+    // Create message (with transient-error retry)
+    const message = await _withDbRetry(() => prisma.message.create({
       data: {
         conversationId,
         role,
@@ -295,17 +326,17 @@ export async function saveMessage(conversationId, role, content, {
         tokenCount,
         responseTimeMs,
       }
-    });
+    }));
 
     // Update stats
-    await prisma.conversation.update({
+    await _withDbRetry(() => prisma.conversation.update({
       where: { id: conversationId },
       data: {
         messageCount: { increment: 1 },
         ...(toolName && { toolCallCount: { increment: 1 } }),
         updatedAt: new Date(),
       }
-    });
+    }));
 
     return message;
   } catch (error) {
@@ -316,7 +347,7 @@ export async function saveMessage(conversationId, role, content, {
 
 export async function getConversationHistory(conversationId) {
   try {
-    return await prisma.message.findMany({
+    return await _withDbRetry(() => prisma.message.findMany({
       where: { conversationId },
       orderBy: { createdAt: 'asc' },
       select: {
@@ -327,7 +358,7 @@ export async function getConversationHistory(conversationId) {
         toolName: true,
         createdAt: true,
       }
-    });
+    }));
   } catch (error) {
     console.error('Error retrieving conversation history:', error);
     return [];

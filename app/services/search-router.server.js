@@ -342,6 +342,16 @@ function mainNoun(query) {
   return words[words.length - 1];
 }
 
+// C1 fix: one structured audit line per tier attempt, with outcome=hit|empty|error
+// so production logs can distinguish "search failed" from "search found nothing".
+// Extends the existing [SearchAudit] pattern from algolia.server.js.
+function auditTier(tier, query, { outcome, n = 0, ms = 0, detail = "" }) {
+  console.log(
+    `[SearchAudit] q=${JSON.stringify(query)} tier=${tier} outcome=${outcome} n=${n} latency_ms=${ms}` +
+    (detail ? ` detail=${JSON.stringify(String(detail).slice(0, 200))}` : "")
+  );
+}
+
 function formatStorefrontResult(products, searchType, query) {
   return {
     products,
@@ -456,18 +466,24 @@ async function handleTextSearch(query, shopDomain, conversationHistory = []) {
   // Single request, max 10 results, no pagination.
   if (isAlgoliaConfigured() && algoliaQuery) {
     console.log(`[SearchRouter] TIER 1 (Algolia): querying "${algoliaQuery}"`);
+    const t1 = Date.now();
     try {
       const result = await algoliaSearch(algoliaQuery, { first: 10, shopDomain });
       const count = result?.products?.length || 0;
-      console.log(`[SearchRouter] TIER 1 (Algolia): ${count} results`);
+      if (result?.error) {
+        auditTier('algolia', algoliaQuery, { outcome: 'error', ms: Date.now() - t1, detail: result.error });
+      } else {
+        auditTier('algolia', algoliaQuery, { outcome: count > 0 ? 'hit' : 'empty', n: count, ms: Date.now() - t1 });
+      }
       if (count > 0) {
         console.log(`[SearchRouter] OK Returning Algolia results -- tiers 2/3 NOT consulted`);
         return formatStorefrontResult(result.products, 'algolia_search', algoliaQuery);
       }
     } catch (err) {
-      console.warn(`[SearchRouter] TIER 1 (Algolia) ERROR: ${err.message}`);
+      auditTier('algolia', algoliaQuery, { outcome: 'error', ms: Date.now() - t1, detail: err.message });
     }
   } else {
+    auditTier('algolia', algoliaQuery || query, { outcome: 'skipped_not_configured' });
     console.warn(`[SearchRouter] TIER 1 (Algolia) SKIPPED -- not configured. Set ALGOLIA_APP_ID, ALGOLIA_SEARCH_KEY, ALGOLIA_INDEX_NAME.`);
   }
 
@@ -475,42 +491,45 @@ async function handleTextSearch(query, shopDomain, conversationHistory = []) {
   // Use Admin productVariants search rather than Storefront -- same data,
   // but indexed fields are tighter (vendor, sku, title), so noise is lower.
   console.log(`[SearchRouter] TIER 2 (Admin): falling back for "${algoliaQuery}"`);
+  const t2 = Date.now();
   try {
     const adminResult = await adminTextSearch(algoliaQuery, shopDomain);
-    if (adminResult?.products?.length > 0) {
-      console.log(`[SearchRouter] TIER 2 (Admin): ${adminResult.products.length} results`);
+    const count = adminResult?.products?.length || 0;
+    auditTier('admin', algoliaQuery, { outcome: count > 0 ? 'hit' : 'empty', n: count, ms: Date.now() - t2 });
+    if (count > 0) {
       console.log(`[SearchRouter] OK Returning Admin results -- tier 3 NOT consulted`);
       const products = adminResult.products.map(storefrontProductToCardShape);
       return formatStorefrontResult(products, 'admin_text_search', algoliaQuery);
     }
-    console.log(`[SearchRouter] TIER 2 (Admin): 0 results`);
   } catch (err) {
-    console.warn(`[SearchRouter] TIER 2 (Admin) ERROR: ${err.message}`);
+    auditTier('admin', algoliaQuery, { outcome: 'error', ms: Date.now() - t2, detail: err.message });
   }
 
   // --- TIER 3: STOREFRONT search_catalog (ABSOLUTE LAST RESORT) ------
   // Only reached when Algolia AND Admin both returned nothing.
   console.log(`[SearchRouter] TIER 3 (Storefront): last-resort fallback`);
   const { searchWithStorefront } = await import('../storefront-service.js');
+  const t3 = Date.now();
   try {
     const r = await searchWithStorefront(algoliaQuery, { first: 10, shopDomain });
     const count = r?.products?.length || 0;
-    console.log(`[SearchRouter] TIER 3 (Storefront): ${count} results`);
     if (count > 0) {
       // Accuracy guard: reject Storefront result if total match count is
       // suspiciously high (likely irrelevant -- common substring match).
       if (r.totalCount && r.totalCount > 1000) {
-        console.warn(`[SearchRouter] TIER 3 REJECTED: totalCount=${r.totalCount} (>1000) -- query too broad, results would be irrelevant`);
+        auditTier('storefront', algoliaQuery, { outcome: 'rejected_too_broad', n: count, ms: Date.now() - t3, detail: `totalCount=${r.totalCount}` });
         return null;
       }
+      auditTier('storefront', algoliaQuery, { outcome: 'hit', n: count, ms: Date.now() - t3 });
       return formatStorefrontResult(
         r.products.map(storefrontProductToCardShape),
         'storefront_search_last_resort',
         algoliaQuery
       );
     }
+    auditTier('storefront', algoliaQuery, { outcome: 'empty', ms: Date.now() - t3 });
   } catch (err) {
-    console.warn(`[SearchRouter] TIER 3 (Storefront) ERROR: ${err.message}`);
+    auditTier('storefront', algoliaQuery, { outcome: 'error', ms: Date.now() - t3, detail: err.message });
   }
 
   console.log(`[SearchRouter] --- all tiers exhausted: 0 results for "${query}" ---`);

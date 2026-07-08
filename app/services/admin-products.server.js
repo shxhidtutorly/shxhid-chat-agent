@@ -205,32 +205,39 @@ async function _runAdminSearch(searchQuery, shopDomain) {
   return nodes;
 }
 
+/**
+ * B3 fix: Shopify search syntax supports PREFIX wildcards only ("norm*"
+ * matches "norman"); a leading `*` (`title:*token*`) is not part of the
+ * documented syntax and gave unreliable recall on this fallback tier.
+ * Verified against https://shopify.dev/docs/api/usage/search-syntax
+ * (2026-07-08). Queries now use `token*` prefix form, and the broadening
+ * pass searches vendor/product_type/sku explicitly instead of title-only.
+ * Rollback: restore the previous `title:*t*` clauses.
+ */
+export function buildAdminSearchQueries(trimmed, tokens) {
+  if (tokens.length === 0) {
+    return [`title:${trimmed}* OR vendor:${trimmed}*`];
+  }
+  const pass1 = tokens.map((t) => `title:${t}*`).join(" AND ");
+  const t = tokens[0];
+  const pass2 = `title:${t}* OR vendor:${t}* OR product_type:${t}* OR sku:${t}*`;
+  return [pass1, pass2];
+}
+
 export async function adminTextSearch(query, shopDomain) {
   if (!query || typeof query !== "string") return null;
   const trimmed = query.trim();
   if (!trimmed) return null;
 
-  // Pass 1: token-AND on title for multi-word queries. This is dramatically
-  // tighter than `title:*phrase*` at 200k scale (Shopify search-syntax docs:
-  // https://shopify.dev/docs/api/usage/search-syntax).
+  // Pass 1: token-AND prefix search on title. Pass 2 (zero hits): first token
+  // broadened across title/vendor/product_type/sku.
   const tokens = _adminTokenize(trimmed);
+  const passes = buildAdminSearchQueries(trimmed, tokens);
   let nodes = [];
   try {
-    if (tokens.length === 0) {
-      // Fallback to the legacy phrase search for very short queries.
-      nodes = await _runAdminSearch(
-        `title:*${trimmed}* OR vendor:*${trimmed}*`,
-        shopDomain
-      );
-    } else {
-      const andClause = tokens.map((t) => `title:*${t}*`).join(' AND ');
-      nodes = await _runAdminSearch(andClause, shopDomain);
-
-      // Pass 2: if zero hits, retry with just the first token, preferring vendor.
-      if (nodes.length === 0) {
-        const t = tokens[0];
-        nodes = await _runAdminSearch(`title:*${t}* OR vendor:*${t}*`, shopDomain);
-      }
+    for (const q of passes) {
+      nodes = await _runAdminSearch(q, shopDomain);
+      if (nodes.length > 0) break;
     }
     if (nodes.length === 0) return null;
 

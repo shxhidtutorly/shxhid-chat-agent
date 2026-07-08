@@ -24,7 +24,7 @@ Shopify Edge  ──[app_proxy]──>  Railway Backend
                          ┌─────────┼──────────┐
                          v         v          v
                      Claude    Shopify MCP   PostgreSQL
-                   (Haiku 4.5) (storefront   (Prisma)
+               (CLAUDE_CHAT_MODEL) (storefront  (Prisma)
                                + customer)
 ```
 
@@ -174,6 +174,8 @@ The `REDIRECT_URL` env var controls the callback URL. If not set, it derives fro
 
 ## Environment Variables
 
+Copy `.env.example` to `.env` and fill in values. A production audit and remediation log lives in `AUDIT.md`; proposed features in `docs/feature-proposals.md`.
+
 ### Required
 
 | Variable | Purpose |
@@ -185,11 +187,18 @@ The `REDIRECT_URL` env var controls the callback URL. If not set, it derives fro
 | `SHOPIFY_APP_URL` | Deployed app URL (e.g., `https://your-app.up.railway.app`) |
 | `SHOPIFY_STORE_DOMAIN` | Store's myshopify.com domain (e.g., `store.myshopify.com`) |
 | `SCOPES` | Shopify OAuth scopes (comma-separated) |
+| `ALGOLIA_APP_ID` | Algolia application ID (Tier-1 search) |
+| `ALGOLIA_SEARCH_KEY` | Algolia search-only API key |
+| `ALGOLIA_INDEX_NAME` | Algolia index name — **required**; production index is `shopify_shxhidproducts` (see `docs/algolia-config.md`). If any of the three Algolia vars is missing, Tier-1 search is disabled and a loud startup error is logged. |
 
 ### Optional
 
 | Variable | Purpose |
 |---|---|
+| `CLAUDE_CHAT_MODEL` | Main chat model override (default `claude-sonnet-4-6`; rollback lever: `claude-haiku-4-5-20251001`) |
+| `CLAUDE_QUERYINTEL_MODEL` | Query-rewriter model override (default `claude-haiku-4-5-20251001`) |
+| `DIAG_TOKEN` | Gates `GET /api/diag` incl. the `?health=1` readiness check (Algolia reachability + resolved index, DB ping, env presence) |
+| `DEBUG_SEARCH` | `1` enables verbose search-pipeline logging |
 | `SHOPIFY_STOREFRONT_ENDPOINT` | Full Storefront API GraphQL URL (defaults to `https://{SHOPIFY_STORE_DOMAIN}/api/2025-10/graphql.json`) |
 | `SHOPIFY_STOREFRONT_TOKEN` | Storefront API access token (for direct `/api/cart` endpoint) |
 | `SHOP_CUSTOM_DOMAIN` | Custom domain for Shopify auth |

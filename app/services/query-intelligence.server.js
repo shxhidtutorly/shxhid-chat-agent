@@ -243,7 +243,9 @@ export async function rewriteQueryForSearch(userMessage, conversationContext = [
       : `User message: "${trimmed}"`;
 
     const response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      // Haiku is deliberate here (single-shot, ~20-token output — latency and
+      // cost dominate). Env-overridable for A/B without a deploy.
+      model: process.env.CLAUDE_QUERYINTEL_MODEL || 'claude-haiku-4-5-20251001',
       max_tokens: 100,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userContent }],

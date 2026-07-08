@@ -37,7 +37,8 @@ export function createClaudeService() {
       try {
         const systemPrompt = getSystemPrompt(promptType);
 
-        // Model: claude-sonnet-4-6.
+        // Model: env-configurable via CLAUDE_CHAT_MODEL; defaults to Sonnet.
+        //
         // Sonnet (not Haiku) is intentional here. The chat orchestrates
         // multi-step tool use (MCP catalog search, cart updates) and must
         // recover from low-confidence search results (e.g. wrong-category
@@ -45,12 +46,18 @@ export function createClaudeService() {
         // shipped briefly and regressed on tool-call accuracy and on
         // following the multi-section system prompt — do NOT downgrade
         // without re-running the search QA suite.
+        //
+        // History (audit 2026-07-08, finding A1): the live string had
+        // drifted to "claude-haiku-4-5-20251001" — v4.1 only corrected an
+        // invalid Haiku string rather than restoring the documented Sonnet
+        // decision above. Restored to Sonnet; instant rollback without a
+        // deploy: set CLAUDE_CHAT_MODEL=claude-haiku-4-5-20251001.
+        //
         // Query-rewriting (query-intelligence.server.js) deliberately uses
         // Haiku — that task is single-shot and ~20-token output, where
         // Haiku's latency/cost wins matter and Sonnet wouldn't help.
         const apiParams = {
-          // v4.1 FIX: Correct versioned model string (was "claude-haiku-4-5" — invalid)
-          model: "claude-haiku-4-5-20251001",
+          model: process.env.CLAUDE_CHAT_MODEL || "claude-sonnet-4-6",
           max_tokens: 4096,
           system: systemPrompt,
           messages,
@@ -269,5 +276,15 @@ B2B behavior:
 Escalation: High-value orders (>AED 10,000): Recommend direct contact with sales engineer.`
   };
 
+  // A4 fix: unknown prompt types still fall back, but loudly — a typo'd
+  // prompt_type used to silently serve the default prompt.
+  if (!prompts[promptType]) {
+    console.warn(
+      `[Claude] Unknown promptType "${promptType}" — falling back to creativeAutomationAssistant. ` +
+      `Valid types: ${Object.keys(prompts).join(", ")}`
+    );
+  }
   return prompts[promptType] || prompts.creativeAutomationAssistant;
 }
+
+export { getSystemPrompt };

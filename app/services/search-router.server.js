@@ -233,6 +233,70 @@ function matchSkuToken(token) {
   }
 })();
 
+// ---------------------------------------------------------------------------
+// B4 fix — always-on exact-SKU probe.
+//
+// detectSku() is a regex heuristic and GATES the Admin sku: lookup: any real
+// part number its patterns miss never reaches the exact lookup and falls into
+// text search (QueryIntel rewrite + Algolia typo tolerance can then mangle
+// it). Industrial SKUs are too irregular to classify reliably, so instead of
+// widening the regexes, every letter+digit token is probed against the Admin
+// `sku:` EXACT lookup regardless of classification. The regex path still runs
+// first (it prioritizes and enables partial/wildcard recovery); the probe is
+// the exact-match safety net behind it. Exact-only ⇒ a false-candidate token
+// simply misses and costs one cached Admin query, never wrong results.
+// Rollback: remove the exactSkuProbe call in smartSearch().
+// ---------------------------------------------------------------------------
+const MEASUREMENT_TOKEN_RE = /^\d+(?:\.\d+)?(?:BAR|PSI|MPA|KPA|MM|CM|VDC|VAC|V|A|W|KW|HP|INCH|IN|FT|FEET|FOOT|HZ|KHZ|RPM)$/i;
+
+export function skuCandidateTokens(message, { max = 3 } = {}) {
+  if (!message || typeof message !== "string") return [];
+  const seen = new Set();
+  return message
+    .split(/\s+/)
+    .map((w) => w.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, ""))
+    .filter((t) => t.length >= 4 && /[A-Za-z]/.test(t) && /\d/.test(t))
+    .filter((t) => !MEASUREMENT_TOKEN_RE.test(t))
+    .filter((t) => !/^IP\d{2}$/i.test(t) && !/^CAT\d+[A-Z]?$/i.test(t))
+    .filter((t) => {
+      const key = t.toUpperCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, max);
+}
+
+async function exactSkuProbe(message, shopDomain, alreadyTriedSku = null) {
+  const tried = (alreadyTriedSku || "").toUpperCase();
+  const tokens = skuCandidateTokens(message).filter((t) => t.toUpperCase() !== tried);
+  if (tokens.length === 0) return null;
+
+  try {
+    const { searchBySku } = await import("./admin-products.server.js");
+    const results = await Promise.all(
+      tokens.map((t) => searchBySku(shopDomain, t, { exactOnly: true }).catch(() => null))
+    );
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (r && r.type === "exact" && r.variants.length > 0) {
+        const products = dedupeById(r.variants.map(skuVariantToCardShape));
+        if (products.length > 0) {
+          console.log(`[SearchRouter] exact-SKU probe HIT: "${tokens[i]}" (regex classifier missed it)`);
+          return {
+            products,
+            searchType: "sku_exact",
+            systemHint: `Found exact SKU match for "${tokens[i]}". Acknowledge briefly -- the product card is already shown.`,
+          };
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[SearchRouter] exact-SKU probe failed: ${err.message}`);
+  }
+  return null;
+}
+
 function isConversationalMessage(msg) {
   if (!msg || typeof msg !== 'string') return true;
   const lower = msg.toLowerCase().trim();
@@ -276,6 +340,16 @@ function mainNoun(query) {
   if (words.length <= 1) return null;
   // Heuristic: the last token is usually the noun ("ABB relay" → "relay")
   return words[words.length - 1];
+}
+
+// C1 fix: one structured audit line per tier attempt, with outcome=hit|empty|error
+// so production logs can distinguish "search failed" from "search found nothing".
+// Extends the existing [SearchAudit] pattern from algolia.server.js.
+function auditTier(tier, query, { outcome, n = 0, ms = 0, detail = "" }) {
+  console.log(
+    `[SearchAudit] q=${JSON.stringify(query)} tier=${tier} outcome=${outcome} n=${n} latency_ms=${ms}` +
+    (detail ? ` detail=${JSON.stringify(String(detail).slice(0, 200))}` : "")
+  );
 }
 
 function formatStorefrontResult(products, searchType, query) {
@@ -392,18 +466,24 @@ async function handleTextSearch(query, shopDomain, conversationHistory = []) {
   // Single request, max 10 results, no pagination.
   if (isAlgoliaConfigured() && algoliaQuery) {
     console.log(`[SearchRouter] TIER 1 (Algolia): querying "${algoliaQuery}"`);
+    const t1 = Date.now();
     try {
       const result = await algoliaSearch(algoliaQuery, { first: 10, shopDomain });
       const count = result?.products?.length || 0;
-      console.log(`[SearchRouter] TIER 1 (Algolia): ${count} results`);
+      if (result?.error) {
+        auditTier('algolia', algoliaQuery, { outcome: 'error', ms: Date.now() - t1, detail: result.error });
+      } else {
+        auditTier('algolia', algoliaQuery, { outcome: count > 0 ? 'hit' : 'empty', n: count, ms: Date.now() - t1 });
+      }
       if (count > 0) {
         console.log(`[SearchRouter] OK Returning Algolia results -- tiers 2/3 NOT consulted`);
         return formatStorefrontResult(result.products, 'algolia_search', algoliaQuery);
       }
     } catch (err) {
-      console.warn(`[SearchRouter] TIER 1 (Algolia) ERROR: ${err.message}`);
+      auditTier('algolia', algoliaQuery, { outcome: 'error', ms: Date.now() - t1, detail: err.message });
     }
   } else {
+    auditTier('algolia', algoliaQuery || query, { outcome: 'skipped_not_configured' });
     console.warn(`[SearchRouter] TIER 1 (Algolia) SKIPPED -- not configured. Set ALGOLIA_APP_ID, ALGOLIA_SEARCH_KEY, ALGOLIA_INDEX_NAME.`);
   }
 
@@ -411,42 +491,45 @@ async function handleTextSearch(query, shopDomain, conversationHistory = []) {
   // Use Admin productVariants search rather than Storefront -- same data,
   // but indexed fields are tighter (vendor, sku, title), so noise is lower.
   console.log(`[SearchRouter] TIER 2 (Admin): falling back for "${algoliaQuery}"`);
+  const t2 = Date.now();
   try {
     const adminResult = await adminTextSearch(algoliaQuery, shopDomain);
-    if (adminResult?.products?.length > 0) {
-      console.log(`[SearchRouter] TIER 2 (Admin): ${adminResult.products.length} results`);
+    const count = adminResult?.products?.length || 0;
+    auditTier('admin', algoliaQuery, { outcome: count > 0 ? 'hit' : 'empty', n: count, ms: Date.now() - t2 });
+    if (count > 0) {
       console.log(`[SearchRouter] OK Returning Admin results -- tier 3 NOT consulted`);
       const products = adminResult.products.map(storefrontProductToCardShape);
       return formatStorefrontResult(products, 'admin_text_search', algoliaQuery);
     }
-    console.log(`[SearchRouter] TIER 2 (Admin): 0 results`);
   } catch (err) {
-    console.warn(`[SearchRouter] TIER 2 (Admin) ERROR: ${err.message}`);
+    auditTier('admin', algoliaQuery, { outcome: 'error', ms: Date.now() - t2, detail: err.message });
   }
 
   // --- TIER 3: STOREFRONT search_catalog (ABSOLUTE LAST RESORT) ------
   // Only reached when Algolia AND Admin both returned nothing.
   console.log(`[SearchRouter] TIER 3 (Storefront): last-resort fallback`);
   const { searchWithStorefront } = await import('../storefront-service.js');
+  const t3 = Date.now();
   try {
     const r = await searchWithStorefront(algoliaQuery, { first: 10, shopDomain });
     const count = r?.products?.length || 0;
-    console.log(`[SearchRouter] TIER 3 (Storefront): ${count} results`);
     if (count > 0) {
       // Accuracy guard: reject Storefront result if total match count is
       // suspiciously high (likely irrelevant -- common substring match).
       if (r.totalCount && r.totalCount > 1000) {
-        console.warn(`[SearchRouter] TIER 3 REJECTED: totalCount=${r.totalCount} (>1000) -- query too broad, results would be irrelevant`);
+        auditTier('storefront', algoliaQuery, { outcome: 'rejected_too_broad', n: count, ms: Date.now() - t3, detail: `totalCount=${r.totalCount}` });
         return null;
       }
+      auditTier('storefront', algoliaQuery, { outcome: 'hit', n: count, ms: Date.now() - t3 });
       return formatStorefrontResult(
         r.products.map(storefrontProductToCardShape),
         'storefront_search_last_resort',
         algoliaQuery
       );
     }
+    auditTier('storefront', algoliaQuery, { outcome: 'empty', ms: Date.now() - t3 });
   } catch (err) {
-    console.warn(`[SearchRouter] TIER 3 (Storefront) ERROR: ${err.message}`);
+    auditTier('storefront', algoliaQuery, { outcome: 'error', ms: Date.now() - t3, detail: err.message });
   }
 
   console.log(`[SearchRouter] --- all tiers exhausted: 0 results for "${query}" ---`);
@@ -468,6 +551,12 @@ export async function smartSearch(userMessage, shopDomain, conversationHistory =
     // original message, so the user gets *something* rather than a dead end.
     console.log(`[SearchRouter] SKU "${skuToken}" not found -- falling back to text search`);
   }
+
+  // B4: always-on exact-SKU probe. Catches real part numbers the regex
+  // classifier missed (and skips the token the classifier already tried).
+  // Exact matches only -- a miss falls through to the normal flow.
+  const probeResult = await exactSkuProbe(trimmed, shopDomain, skuToken);
+  if (probeResult) return probeResult;
 
   if (isConversationalMessage(trimmed)) {
     return null;

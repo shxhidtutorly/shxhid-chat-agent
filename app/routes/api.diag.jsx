@@ -27,6 +27,42 @@ export async function loader({ request }) {
   const sku = url.searchParams.get('sku');
   const shopDomain = url.searchParams.get('shop') || process.env.SHOPIFY_STORE_DOMAIN || null;
 
+  // Health/readiness mode (B1/C1 remediation):
+  //   GET /api/diag?token=...&health=1
+  // Reports env-var presence, Algolia reachability + RESOLVED index name +
+  // vendor-routing count, and a DB ping. Safe: no secrets are echoed.
+  if (url.searchParams.has('health')) {
+    const health = {
+      time: new Date().toISOString(),
+      env: {
+        ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
+        ALGOLIA_APP_ID: !!process.env.ALGOLIA_APP_ID,
+        ALGOLIA_SEARCH_KEY: !!process.env.ALGOLIA_SEARCH_KEY,
+        ALGOLIA_INDEX_NAME: process.env.ALGOLIA_INDEX_NAME || null,
+        SHOPIFY_STORE_DOMAIN: process.env.SHOPIFY_STORE_DOMAIN || null,
+        DATABASE_URL: !!process.env.DATABASE_URL,
+      },
+      algolia: null,
+      db: { ok: false },
+    };
+    try {
+      const { algoliaHealthCheck } = await import('../services/algolia.server.js');
+      health.algolia = await algoliaHealthCheck(shopDomain);
+    } catch (err) {
+      health.algolia = { error: err.message };
+    }
+    try {
+      const { default: prisma } = await import('../db.server.js');
+      await prisma.$queryRaw`SELECT 1`;
+      health.db.ok = true;
+    } catch (err) {
+      health.db.error = err.message;
+    }
+    const ok = health.env.ANTHROPIC_API_KEY && health.db.ok &&
+      (health.algolia?.configured ? health.algolia?.reachable : true);
+    return jsonResponse({ status: ok ? 'ok' : 'degraded', ...health }, ok ? 200 : 503);
+  }
+
   try {
     const mod = await import('../storefront-service.js');
 

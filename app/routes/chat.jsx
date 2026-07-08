@@ -141,7 +141,10 @@ async function handleChatRequest(request) {
     }
 
     const conversationId = body.conversation_id || `conv_${Date.now()}`;
-    const promptType = body.prompt_type || "standardAssistant";
+    // A4 fix: the old default "standardAssistant" is not a defined prompt and
+    // only worked via getSystemPrompt's silent fallback. Default explicitly to
+    // the prompt that actually runs.
+    const promptType = body.prompt_type || "creativeAutomationAssistant";
 
     const dbMod = await import("../db.server");
     const { saveMessage, getConversationHistory, storeCustomerAccountUrls, getCustomerAccountUrls: getCustomerAccountUrlsFromDb } = dbMod;

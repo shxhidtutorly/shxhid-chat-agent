@@ -16,6 +16,26 @@
 const API_VERSION = process.env.SHOPIFY_API_VERSION || '2025-01';
 const STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || '';
 
+// X3 fix (audit 2026-07-08): all Shopify HTTP calls get a hard timeout so a
+// hung Admin/Storefront request can't stall the chat SSE stream until the
+// platform kills it. 15s is generous for a single GraphQL round trip.
+const FETCH_TIMEOUT_MS = 15000;
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Request timed out after ${timeoutMs}ms: ${url.split('?')[0]}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // In-memory cache (per process). Token is always auto-created fresh via
 // Admin REST API to avoid stale-token 401s on deploy.
 //
@@ -98,7 +118,7 @@ async function createStorefrontTokenViaAdminRest() {
 
   console.log('[Storefront] Creating Storefront token via Admin REST API...');
 
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `https://${STORE_DOMAIN}/admin/api/${API_VERSION}/storefront_access_tokens.json`,
     {
       method: 'POST',
@@ -177,7 +197,7 @@ export async function shopifyAdminGraphqlQuery({ query, variables = {}, shopDoma
   }
 
   const endpoint = `https://${domain}/admin/api/${API_VERSION}/graphql.json`;
-  const response = await fetch(endpoint, {
+  const response = await fetchWithTimeout(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -225,7 +245,7 @@ export async function shopifyStorefrontQuery({
   // CRITICAL: Always use the cached token system. NEVER re-read env var at call time.
   const token = await getStorefrontToken();
 
-  const response = await fetch(endpoint, {
+  const response = await fetchWithTimeout(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

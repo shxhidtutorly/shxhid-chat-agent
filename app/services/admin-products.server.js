@@ -53,6 +53,44 @@ const ALL_VENDORS_QUERY = `
   }
 `;
 
+// B2 fix: Admin GraphQL exposes the full distinct-vendor list directly.
+// Docs: https://shopify.dev/docs/api/admin-graphql/latest/queries/productVendors
+// (paginated StringConnection, max 1000 per page, requires read_products).
+// Used as the source of truth when Algolia's searchForFacetValues is capped
+// at 100 facet hits (its API maximum) or fails (e.g. `vendor` declared
+// filterOnly, which searchForFacetValues cannot query).
+const PRODUCT_VENDORS_QUERY = `
+  query productVendors($first: Int!, $after: String) {
+    productVendors(first: $first, after: $after) {
+      nodes
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+/**
+ * Fetch ALL distinct product vendors for the shop via `productVendors`.
+ * Paginated; capped at maxPages * 1000 vendors as a runaway guard.
+ * Returns string[] (may be empty), or throws on API failure.
+ */
+export async function getAllProductVendors(shopDomain, { maxPages = 5 } = {}) {
+  const vendors = [];
+  let after = null;
+  for (let page = 0; page < maxPages; page++) {
+    const data = await shopifyAdminGraphqlQuery({
+      query: PRODUCT_VENDORS_QUERY,
+      variables: { first: 1000, after },
+      shopDomain,
+    });
+    const conn = data?.productVendors;
+    vendors.push(...(conn?.nodes || []).filter((v) => typeof v === "string" && v.trim()));
+    if (!conn?.pageInfo?.hasNextPage) break;
+    after = conn.pageInfo.endCursor;
+  }
+  console.log(`[AdminProducts] productVendors: ${vendors.length} distinct vendors`);
+  return vendors;
+}
+
 const ADMIN_TEXT_SEARCH_QUERY = `
   query adminTextSearch($q: String!, $first: Int!) {
     products(first: $first, query: $q) {
@@ -78,9 +116,12 @@ const ADMIN_TEXT_SEARCH_QUERY = `
   }
 `;
 
-export async function searchBySku(shopDomain, sku) {
+// opts.exactOnly (B4 probe): skip the partial/wildcard fallbacks and return
+// only case-insensitive exact SKU matches — used by the router's always-on
+// exact-SKU probe where near-matches would be noise.
+export async function searchBySku(shopDomain, sku, { exactOnly = false } = {}) {
   const skuTrim = String(sku).trim();
-  console.log(`[AdminProducts] SKU search: sku:${skuTrim}`);
+  console.log(`[AdminProducts] SKU search: sku:${skuTrim}${exactOnly ? ' (exact-only)' : ''}`);
 
   try {
     let data = await shopifyAdminGraphqlQuery({
@@ -96,6 +137,9 @@ export async function searchBySku(shopDomain, sku) {
     if (exact.length > 0) {
       console.log(`[AdminProducts] exact SKU match: ${exact.length} variants`);
       return { type: "exact", variants: exact, originalSku: skuTrim };
+    }
+    if (exactOnly) {
+      return { type: "none", variants: [], originalSku: skuTrim };
     }
     if (variants.length > 0) {
       console.log(`[AdminProducts] partial SKU matches: ${variants.length} variants`);

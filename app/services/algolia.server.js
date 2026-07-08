@@ -84,8 +84,69 @@ async function getClient() {
   return _client;
 }
 
+// B1 fix: the index name is REQUIRED. Without it the previous code silently
+// searched a hardcoded default index ('shopify_products') that does not match
+// the production index (see docs/algolia-config.md — 'shopify_shxhidproducts'),
+// got "index not found", returned null, and degraded every search to the weak
+// Admin/Storefront fallbacks with no visible error.
+// Rollback: if production actually uses an index literally named
+// 'shopify_products', set ALGOLIA_INDEX_NAME=shopify_products.
+const REQUIRED_ALGOLIA_ENV = ['ALGOLIA_APP_ID', 'ALGOLIA_SEARCH_KEY', 'ALGOLIA_INDEX_NAME'];
+
 export function isAlgoliaConfigured() {
-  return !!(process.env.ALGOLIA_APP_ID && process.env.ALGOLIA_SEARCH_KEY);
+  return REQUIRED_ALGOLIA_ENV.every((k) => !!process.env[k]);
+}
+
+// Fail loudly (once, at module load) when Algolia is PARTIALLY configured —
+// that is almost always a deployment mistake, not an intentional opt-out.
+(function warnPartialAlgoliaConfig() {
+  const missing = REQUIRED_ALGOLIA_ENV.filter((k) => !process.env[k]);
+  if (missing.length > 0 && missing.length < REQUIRED_ALGOLIA_ENV.length) {
+    console.error(
+      `[Algolia] MISCONFIGURED — missing ${missing.join(', ')}. ` +
+      `Tier-1 (Algolia) search is DISABLED and all queries will fall back to ` +
+      `Admin/Storefront search (significantly worse relevance at catalog scale). ` +
+      `Set the missing variable(s) or unset all of ${REQUIRED_ALGOLIA_ENV.join(', ')} to silence this.`
+    );
+  }
+})();
+
+/**
+ * Health check for /api/diag — reports config completeness, the RESOLVED
+ * index name, live reachability (1 cheap empty-query search), and the
+ * vendor-routing source/count. Never throws.
+ */
+export async function algoliaHealthCheck(shopDomain) {
+  const missing = REQUIRED_ALGOLIA_ENV.filter((k) => !process.env[k]);
+  const out = {
+    configured: missing.length === 0,
+    missingEnv: missing,
+    indexName: process.env.ALGOLIA_INDEX_NAME || null,
+    reachable: false,
+    nbHits: null,
+    vendorCount: null,
+    error: null,
+  };
+  if (!out.configured) return out;
+  try {
+    const client = await getClient();
+    const t0 = Date.now();
+    const res = await client.search({
+      requests: [{ indexName: out.indexName, query: '', hitsPerPage: 1 }],
+    });
+    out.reachable = true;
+    out.nbHits = res?.results?.[0]?.nbHits ?? null;
+    out.latencyMs = Date.now() - t0;
+    try {
+      const { vendors } = await getVendorSet(client, out.indexName, shopDomain);
+      out.vendorCount = vendors.size;
+    } catch (vErr) {
+      out.vendorError = vErr.message;
+    }
+  } catch (err) {
+    out.error = err.message;
+  }
+  return out;
 }
 
 // -------- Vendor list cache (Bug 3 — brand-aware routing) -----------------
@@ -100,7 +161,7 @@ const VENDOR_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 let _vendorCache = null; // { vendors: Set<string lowercase>, vendorMap: Map<string lowercase, string original>, fetchedAt: number }
 let _vendorInflight = null;
 
-async function getVendorSet(client, indexName) {
+async function getVendorSet(client, indexName, shopDomain) {
   const now = Date.now();
   if (_vendorCache && now - _vendorCache.fetchedAt < VENDOR_CACHE_TTL_MS) {
     return _vendorCache;
@@ -109,32 +170,65 @@ async function getVendorSet(client, indexName) {
 
   _vendorInflight = (async () => {
     try {
+    const vendors = new Set();
+    const vendorMap = new Map();
+    const addVendor = (v) => {
+      if (typeof v === 'string' && v.trim()) {
+        const lower = v.toLowerCase();
+        vendors.add(lower);
+        if (!vendorMap.has(lower)) vendorMap.set(lower, v);
+      }
+    };
+
+    let facetHitCount = 0;
+    let facetFailed = false;
+    try {
       // Algolia v5 client: searchForFacetValues on a single facet.
+      // NOTE: maxFacetHits is hard-capped at 100 by the Algolia API, and this
+      // call requires `vendor` to be a *searchable* facet (a filterOnly facet
+      // — which docs/algolia-config.md prescribes — returns nothing here).
       const res = await client.searchForFacetValues({
         indexName,
         facetName: 'vendor',
         searchForFacetValuesRequest: { facetQuery: '', maxFacetHits: 100 },
       });
       const facetHits = res?.facetHits || res?.results?.[0]?.facetHits || [];
-      const vendors = new Set();
-      const vendorMap = new Map();
-      for (const f of facetHits) {
-        const v = f.value;
-        if (typeof v === 'string' && v.trim()) {
-          const lower = v.toLowerCase();
-          vendors.add(lower);
-          if (!vendorMap.has(lower)) vendorMap.set(lower, v);
-        }
+      facetHitCount = facetHits.length;
+      for (const f of facetHits) addVendor(f.value);
+    } catch (err) {
+      facetFailed = true;
+      console.warn(`[Algolia] vendor facet fetch failed: ${err.message} — trying Admin productVendors`);
+    }
+
+    // B2 fix: the facet API caps at 100 vendors and silently truncates larger
+    // catalogs (brands past the cap never got a vendor: filter and fell into
+    // noisy free-text search). When the cap is plausibly hit — or the facet
+    // call failed/returned nothing — merge the FULL vendor list from the
+    // Shopify Admin `productVendors` query (paginated, complete).
+    // Rollback: remove this block; behavior reverts to facet-only routing.
+    if (facetFailed || facetHitCount === 0 || facetHitCount >= 100) {
+      try {
+        const { getAllProductVendors } = await import('./admin-products.server.js');
+        const adminVendors = await getAllProductVendors(shopDomain);
+        for (const v of adminVendors) addVendor(v);
+        console.log(
+          `[Algolia] vendor cache merged Admin productVendors (facet=${facetFailed ? 'error' : facetHitCount}, total=${vendors.size})`
+        );
+      } catch (adminErr) {
+        console.warn(`[Algolia] Admin productVendors fetch failed: ${adminErr.message}`);
       }
+    }
+
+    if (vendors.size === 0) {
+      // Both sources failed — cache the empty result for only 5 minutes so we
+      // don't hammer Algolia/Admin on every search, then retry.
+      console.warn('[Algolia] vendor routing disabled — no vendor list available from any source');
+      _vendorCache = { vendors, vendorMap, fetchedAt: now - VENDOR_CACHE_TTL_MS + 5 * 60 * 1000 };
+    } else {
       _vendorCache = { vendors, vendorMap, fetchedAt: now };
       console.log(`[Algolia] vendor cache populated: ${vendors.size} vendors`);
-      return _vendorCache;
-    } catch (err) {
-      console.warn(`[Algolia] vendor facet fetch failed: ${err.message} — vendor routing disabled this request`);
-      // Cache an empty result for 5 minutes so we don't hammer Algolia
-      // on every search when the facet isn't configured.
-      _vendorCache = { vendors: new Set(), vendorMap: new Map(), fetchedAt: now - VENDOR_CACHE_TTL_MS + 5 * 60 * 1000 };
-      return _vendorCache;
+    }
+    return _vendorCache;
     } finally {
       _vendorInflight = null;
     }
@@ -150,9 +244,9 @@ async function getVendorSet(client, indexName) {
  * Greedy multi-word match (longest first) so "TE Connectivity" wins
  * over "TE" alone.
  */
-async function applyVendorRouting(query, client, indexName) {
+async function applyVendorRouting(query, client, indexName, shopDomain) {
   if (!query || typeof query !== 'string') return { algoliaQuery: query, filters: null };
-  const { vendors, vendorMap } = await getVendorSet(client, indexName);
+  const { vendors, vendorMap } = await getVendorSet(client, indexName, shopDomain);
   if (!vendors || vendors.size === 0) return { algoliaQuery: query, filters: null };
 
   const lower = query.toLowerCase();
@@ -453,7 +547,13 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
     _vlog(`[Algolia] SKU query detected — searching exact: "${trimmed}"`);
   }
 
-  const indexName = process.env.ALGOLIA_INDEX_NAME || 'shopify_products';
+  // B1 fix: no silent fallback index name. isAlgoliaConfigured() guards the
+  // router, so this branch only fires if algoliaSearch is called directly.
+  const indexName = process.env.ALGOLIA_INDEX_NAME;
+  if (!indexName) {
+    console.error('[Algolia] ALGOLIA_INDEX_NAME not set — refusing to search a guessed index');
+    return { products: [], error: 'not_configured: ALGOLIA_INDEX_NAME missing' };
+  }
   _vlog(`[Algolia] Searching: "${trimmed}" in "${indexName}"`);
 
   const _t0 = Date.now();
@@ -464,12 +564,16 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
     }`
   );
 
+  // C1 fix: errors now return { products: [], error } so the router can tell
+  // "search failed" apart from "search ran and found nothing" ({ products: [] }).
+  // The only caller (search-router) reads result?.products?.length, so the
+  // count-based behavior is unchanged.
   let client;
   try {
     client = await getClient();
   } catch (err) {
     console.error(`[Algolia] Client init failed: ${err.message}`);
-    return null;
+    return { products: [], error: `client_init: ${err.message}` };
   }
 
   // Build the Algolia request. typoTolerance must be a SCALAR — see
@@ -482,7 +586,8 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
   const { algoliaQuery: queryForAlgolia, filters } = await applyVendorRouting(
     trimmed,
     client,
-    indexName
+    indexName,
+    shopDomain
   );
 
   // Result cache lookup keyed on the final outgoing query + filters.
@@ -534,14 +639,15 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
       msg.includes('Index not found') ||
       searchErr.status === 404
     ) {
-      console.warn(
-        `[Algolia] Index "${indexName}" not found. ` +
+      console.error(
+        `[Algolia] Index "${indexName}" NOT FOUND — check ALGOLIA_INDEX_NAME ` +
+        `(expected per docs/algolia-config.md: shopify_shxhidproducts). ` +
         `Sync at dashboard.algolia.com → Data Sources → Integrations → Shopify`
       );
-      return null;
+      return { products: [], error: `index_not_found: ${indexName}` };
     }
     console.error(`[Algolia] Search error: ${msg}`);
-    return null;
+    return { products: [], error: `search: ${msg}` };
   }
 
   // Post-Algolia re-rank. Spec score floats EXACT numeric matches and sinks
@@ -596,7 +702,8 @@ export async function algoliaSearch(query, { first = 10, shopDomain } = {}) {
     console.log(
       `[SearchAudit] q=${JSON.stringify(trimmed)} tier=algolia filters=${JSON.stringify(filters || '')} n=0 latency_ms=${Date.now() - _t0} top_sku="" top_vendor="" reranked=false`
     );
-    return null;
+    // Genuinely empty (search succeeded) — distinct from the error returns above.
+    return { products: [] };
   }
 
   _vlog(`[Algolia] ${hits.length} results for "${trimmed}"`);

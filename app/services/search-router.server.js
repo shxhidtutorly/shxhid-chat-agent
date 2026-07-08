@@ -233,6 +233,70 @@ function matchSkuToken(token) {
   }
 })();
 
+// ---------------------------------------------------------------------------
+// B4 fix — always-on exact-SKU probe.
+//
+// detectSku() is a regex heuristic and GATES the Admin sku: lookup: any real
+// part number its patterns miss never reaches the exact lookup and falls into
+// text search (QueryIntel rewrite + Algolia typo tolerance can then mangle
+// it). Industrial SKUs are too irregular to classify reliably, so instead of
+// widening the regexes, every letter+digit token is probed against the Admin
+// `sku:` EXACT lookup regardless of classification. The regex path still runs
+// first (it prioritizes and enables partial/wildcard recovery); the probe is
+// the exact-match safety net behind it. Exact-only ⇒ a false-candidate token
+// simply misses and costs one cached Admin query, never wrong results.
+// Rollback: remove the exactSkuProbe call in smartSearch().
+// ---------------------------------------------------------------------------
+const MEASUREMENT_TOKEN_RE = /^\d+(?:\.\d+)?(?:BAR|PSI|MPA|KPA|MM|CM|VDC|VAC|V|A|W|KW|HP|INCH|IN|FT|FEET|FOOT|HZ|KHZ|RPM)$/i;
+
+export function skuCandidateTokens(message, { max = 3 } = {}) {
+  if (!message || typeof message !== "string") return [];
+  const seen = new Set();
+  return message
+    .split(/\s+/)
+    .map((w) => w.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, ""))
+    .filter((t) => t.length >= 4 && /[A-Za-z]/.test(t) && /\d/.test(t))
+    .filter((t) => !MEASUREMENT_TOKEN_RE.test(t))
+    .filter((t) => !/^IP\d{2}$/i.test(t) && !/^CAT\d+[A-Z]?$/i.test(t))
+    .filter((t) => {
+      const key = t.toUpperCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, max);
+}
+
+async function exactSkuProbe(message, shopDomain, alreadyTriedSku = null) {
+  const tried = (alreadyTriedSku || "").toUpperCase();
+  const tokens = skuCandidateTokens(message).filter((t) => t.toUpperCase() !== tried);
+  if (tokens.length === 0) return null;
+
+  try {
+    const { searchBySku } = await import("./admin-products.server.js");
+    const results = await Promise.all(
+      tokens.map((t) => searchBySku(shopDomain, t, { exactOnly: true }).catch(() => null))
+    );
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (r && r.type === "exact" && r.variants.length > 0) {
+        const products = dedupeById(r.variants.map(skuVariantToCardShape));
+        if (products.length > 0) {
+          console.log(`[SearchRouter] exact-SKU probe HIT: "${tokens[i]}" (regex classifier missed it)`);
+          return {
+            products,
+            searchType: "sku_exact",
+            systemHint: `Found exact SKU match for "${tokens[i]}". Acknowledge briefly -- the product card is already shown.`,
+          };
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[SearchRouter] exact-SKU probe failed: ${err.message}`);
+  }
+  return null;
+}
+
 function isConversationalMessage(msg) {
   if (!msg || typeof msg !== 'string') return true;
   const lower = msg.toLowerCase().trim();
@@ -468,6 +532,12 @@ export async function smartSearch(userMessage, shopDomain, conversationHistory =
     // original message, so the user gets *something* rather than a dead end.
     console.log(`[SearchRouter] SKU "${skuToken}" not found -- falling back to text search`);
   }
+
+  // B4: always-on exact-SKU probe. Catches real part numbers the regex
+  // classifier missed (and skips the token the classifier already tried).
+  // Exact matches only -- a miss falls through to the normal flow.
+  const probeResult = await exactSkuProbe(trimmed, shopDomain, skuToken);
+  if (probeResult) return probeResult;
 
   if (isConversationalMessage(trimmed)) {
     return null;
